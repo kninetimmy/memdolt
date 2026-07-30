@@ -149,13 +149,15 @@ CLI and MCP server both route through `Store` — the r2 §7.5 lesson (CLI silen
 
 ### 5.2 Embedded-driver concurrency — the #1 design constraint
 
-Research findings **[V]**: `github.com/dolthub/driver` opens a Dolt data dir in-process ("akin to SQLite") with full version-control via SQL procedures (`dolt_commit`, `dolt_checkout`, `dolt_merge`, `dolt_push`, `dolt_pull` — all usable embedded). But the storage layer takes a filesystem `LOCK` file; two **OS processes** on the same repo dir hit "database is locked"; stale LOCK files can survive unclean shutdown; DDL is not concurrency-atomic. The driver ships retry-with-backoff (~30s max default). Field reports from other embedders (beads/gastown) confirm these are production sharp edges, not theory.
+Research findings **[V]**: `github.com/dolthub/driver` opens a Dolt data dir in-process ("akin to SQLite") with full version-control via SQL procedures (`dolt_commit`, `dolt_checkout`, `dolt_merge`, `dolt_push`, `dolt_pull` — all usable embedded). But the storage layer takes a filesystem `LOCK` file; stale LOCK files can survive unclean shutdown; DDL is not concurrency-atomic. The driver ships retry-with-backoff (~30s max default). Field reports from other embedders (beads/gastown) confirm these are production sharp edges, not theory.
+
+**Corrected in M0 [V]:** this section first said two OS processes on the same repo dir "hit `database is locked`". They do not. The second process opens successfully, answers a ping, and reads normally; it has been silently downgraded to read-only, and finds out only at its first write, which fails with `cannot update manifest: database is read only`. That is a worse failure than the one anticipated — no health check can see it, and a writer believes it is writing until it commits. Dolt's own `LOCK` file also records no pid, so §5.2.3's recovery cannot be implemented against it. Both are why memdolt takes a lock of its own before the driver touches the data directory. See §17 R1 and `docs/spikes/m0-rig1.md`.
 
 **Design response [design]:**
 
 1. **Single-owner rule:** when the MCP server is running, it is the sole process holding the embedded store. CLI invocations detect a live server (pidfile + liveness probe in `.memdolt/`) and route through it over a local IPC endpoint (localhost HTTP on an ephemeral port with a per-run token — same pattern as memhub's viz auth). No live server → CLI opens the store directly.
 2. Rely on the driver's built-in retry for the residual races (two CLIs at once); keep every transaction short.
-3. Startup recovery: on open, if a LOCK file exists and its owning pid is dead, remove it and log loudly. **[verify]** exact stale-lock detection ergonomics — M0 spike item.
+3. Startup recovery: on open, if a lock file carries an ownership record and its **advisory lock is free**, the process that wrote it is gone: clear the record in place and log loudly with the stale pid. **[V]** (M0 rig 1) — the ergonomics marked [verify] here resolve as *the lock decides, the pid describes*. The kernel releases an advisory lock however a process exits, including a kill, so a free lock is proof; a pid cannot tell a live owner from an unrelated process that inherited a recycled pid, and rig 1 measured a correct recovery against a record naming a pid that was demonstrably alive. The record is cleared in place rather than unlinked, because unlinking a file while holding a lock on it lets two processes lock two inodes under one name. Numbers and method: `docs/spikes/m0-rig1.md`.
 4. `doctor` checks: stale LOCK, orphaned pidfile, IPC reachability.
 
 This is more machinery than memhub needed (SQLite WAL handles multi-process natively). It is the honest price of Dolt embedded, paid once, in one module.
@@ -428,8 +430,9 @@ Topology is a routing decision, never a data-format decision: the same Dolt data
 
 | Concern | Choice | Notes |
 |---|---|---|
-| Language | **Go**, latest stable (≥1.24), modules | gofmt + golangci-lint gate in CI; idiomatic Go, no framework soup |
+| Language | **Go**, latest stable; module `go` directive **1.26.2**, modules | Not a preference: `github.com/dolthub/driver` v1.88.1's own `go.mod` forces this floor, so the "≥1.24" this table first carried was never achievable **[V]** (M0). gofmt + golangci-lint gate in CI; idiomatic Go, no framework soup |
 | Storage | Dolt via `github.com/dolthub/driver` (embedded) + `database/sql` MySQL driver (topology B) | Apache-2.0 **[V]** |
+| Build settings (embedded driver) | **`CGO_ENABLED=1`** and a C compiler on every build host, **plus the `gms_pure_go` build tag** | Both are required, not tuning **[V]** (M0). `dolt/go/store/nbs` imports `github.com/dolthub/gozstd` unconditionally, so there is no pure-Go build. Without the tag, `go-mysql-server/internal/regex` needs cgo *and* system ICU development headers; with `CGO_ENABLED=0` neither implementation file is selected and the build fails outright. The tag swaps ICU-backed `REGEXP`/`RLIKE` for Go's `regexp` (RE2) — a real semantic change in a corner of the SQL dialect, accepted because M0–M2 use neither **[design]**. A command-line `-tags` replaces the one in `GOFLAGS` rather than adding to it, so any invocation that passes its own tags must repeat `gms_pure_go` **[V]** (M0) |
 | MCP | `github.com/modelcontextprotocol/go-sdk` ≥ v1.7.0 | 2026-07-28 + elicitation shim **[V]** |
 | CLI | `spf13/cobra` | `--json` on everything, memhub convention |
 | Inference | `yalue/onnxruntime_go` (pinned to its supported onnxruntime version) + Go WordPiece tokenizer (`sugarme/tokenizer` candidate **[verify]**) | CPU-only by design |
@@ -437,7 +440,7 @@ Topology is a routing decision, never a data-format decision: the same Dolt data
 | Chunking | tree-sitter Go bindings, 7 grammars | port memhub chunker rules |
 | Compression | `klauspost/compress` (zstd) | transcript archives |
 | IDs | ULID (`oklog/ulid`) | merge-safe PKs |
-| CI | GitHub Actions: lint, test (linux/windows/macos), ARM64 cross-build lane | branch protection once green; model files cached, never committed |
+| CI | GitHub Actions: lint, test (linux/windows/macos), ARM64 cross-build lane | branch protection once green; model files cached, never committed. The ARM64 lane needs a **cross C toolchain**, not just `GOARCH=arm64`: cgo is mandatory (row above), so a cgo-less cross-build is not available **[V]** (M0) |
 | License | Apache-2.0 | matches Dolt |
 
 **Repo layout:**
@@ -445,7 +448,10 @@ Topology is a routing decision, never a data-format decision: the same Dolt data
 ```
 memdolt/
   cmd/memdolt/            main
+  internal/layout/        per-repository path resolution: .memdolt/ and everything under it (§5.3)
+  internal/singleowner/   the advisory lock files behind the single-owner rule (§5.2)
   internal/store/         Store interface; localdolt/, remotesql/
+  internal/storeipc/      store operations carried over the owner's loopback endpoint (§5.2.1)
   internal/schema/        DDL + migration runner
   internal/review/        proposal branches, accept/reject, contradiction probe
   internal/retrieval/     gather, fuse, rerank, eval
@@ -455,7 +461,9 @@ memdolt/
   internal/render/  internal/docs/  internal/hub/  internal/cli/
   models/manifest.json    SHA-256 pins + upstream URLs (no binaries in git)
   tests/golden/           retrieval_golden.json, code_locate_golden.json (ported)
+  tests/soak/             §16 rig-1 concurrency soak, behind the `soak` build tag
   docs/prd/memdolt-prd.md this document, checked in verbatim as product authority
+  docs/spikes/            M0 rig findings, one file per rig
 ```
 
 **Project conventions for agents** (seed CLAUDE.md from these): PRD is authority, don't silently diverge; agents are untrusted writers — the review gate is non-negotiable; fail loudly; no scope creep beyond the parity matrix; feature-branch + PR always; flag new deps before adding.
@@ -486,7 +494,7 @@ memdolt/
 
 | # | Risk | Sev | Mitigation |
 |---|---|---|---|
-| R1 | Embedded-driver cross-process locking (stale LOCK, "database is locked") **[V]** | **High** | Single-owner + IPC routing (§5.2); driver retry; M0 soak is the gate |
+| R1 | Embedded-driver cross-process access. **Measured in M0 [V]:** a second OS process is not refused — it opens, pings and reads normally, having been **silently downgraded to read-only**, and fails only at its first write with `cannot update manifest: database is read only`. Materially worse than the "database is locked" this register first anticipated: no health check detects it, and a writer believes it is writing right up to its first commit. Stale LOCK files survive unclean shutdown | **High** | memdolt takes its own advisory lock before the driver touches the data dir, so a second **memdolt** process is refused in ~0.1 s with a distinct error (§5.2). Residual and not removable by that lock: it binds only processes that take it, so a foreign `dolt` CLI or `dolt sql-server` on the same directory still gets the silent downgrade — `doctor` must report it and the docs must forbid it. M0 rig 1 was the gate; see `docs/spikes/m0-rig1.md` |
 | R2 | Dolt FULLTEXT (tf-idf, NL-mode-only) drags Recall@K below baseline **[V]** | High | Golden gate in M0; in-process BM25 contingency (§8.1) |
 | R3 | Go tokenizer mismatch vs fastembed → silently different embeddings | High | M0 byte-identical token-id check; probe-corpus score comparison |
 | R4 | History growth from high-churn rows | Med | Embeddings out of repo (§8.2); note batching; retention + `gc --deep` (§13.3) |
