@@ -63,17 +63,23 @@ func newVersionCommand() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("encode version info as json: %w", err)
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), string(encoded))
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), string(encoded)); err != nil {
+					return fmt.Errorf("write version json: %w", err)
+				}
 				return nil
 			}
 
 			if info.Commit != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "memdolt version %s (%s, commit %s)\n",
-					info.Version, info.GoVersion, info.Commit)
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "memdolt version %s (%s, commit %s)\n",
+					info.Version, info.GoVersion, info.Commit); err != nil {
+					return fmt.Errorf("write version line: %w", err)
+				}
 				return nil
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "memdolt version %s (%s)\n", info.Version, info.GoVersion)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "memdolt version %s (%s)\n", info.Version, info.GoVersion); err != nil {
+				return fmt.Errorf("write version line: %w", err)
+			}
 			return nil
 		},
 	}
