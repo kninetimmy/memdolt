@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -25,17 +26,15 @@ type Platform struct {
 	GoVersion     string            `json:"goVersion"`
 	Compiler      string            `json:"compiler"`
 	Modules       map[string]string `json:"modules"`
+	ModulesSource string            `json:"modulesSource"`
 	BuildSettings map[string]string `json:"buildSettings"`
 }
 
-// interestingModules are the dependencies whose versions change what this
-// rig measures.
-var interestingModules = []string{
-	"github.com/dolthub/driver",
-	"github.com/dolthub/go-mysql-server",
-	"github.com/dolthub/dolt/go",
-	"github.com/dolthub/gozstd",
-}
+// doltModulePrefix selects the dependencies whose versions change what this
+// rig measures. Every one of them is a Dolt module, and matching on the
+// prefix rather than on a list means a rename cannot silently empty the
+// provenance.
+const doltModulePrefix = "github.com/dolthub/"
 
 // interestingBuildSettings are the build settings that decide whether the
 // binary under measurement is the one the project ships.
@@ -55,16 +54,11 @@ func describePlatform() Platform {
 		BuildSettings: map[string]string{},
 	}
 
+	p.Modules, p.ModulesSource = moduleVersions()
+
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return p
-	}
-	for _, dep := range info.Deps {
-		for _, wanted := range interestingModules {
-			if dep.Path == wanted {
-				p.Modules[dep.Path] = dep.Version
-			}
-		}
 	}
 	for _, setting := range info.Settings {
 		for _, wanted := range interestingBuildSettings {
@@ -74,6 +68,52 @@ func describePlatform() Platform {
 		}
 	}
 	return p
+}
+
+// moduleVersions reads the dependency versions this rig was built against.
+//
+// It does not use debug.ReadBuildInfo, which reports the build settings
+// above but no dependencies at all inside a `go test` binary — measured as
+// len(Deps) == 0 on go1.26.5. Since `go test` runs a test binary with its
+// working directory set to the package's source directory, the module file
+// is a bounded walk up from there.
+//
+// A version this cannot find is reported as missing rather than left as an
+// empty map, so that a summary never quietly claims to have no provenance
+// when it merely failed to read it.
+func moduleVersions() (map[string]string, string) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return map[string]string{}, "unavailable: " + err.Error()
+	}
+	for depth := 0; depth < 8; depth++ {
+		path := filepath.Join(dir, "go.mod")
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			return parseDoltModules(string(raw)), path
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return map[string]string{}, "unavailable: no go.mod above the test's working directory"
+}
+
+func parseDoltModules(gomod string) map[string]string {
+	versions := map[string]string{}
+	for _, line := range strings.Split(gomod, "\n") {
+		if comment := strings.Index(line, "//"); comment >= 0 {
+			line = line[:comment]
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.HasPrefix(fields[0], doltModulePrefix) || !strings.HasPrefix(fields[1], "v") {
+			continue
+		}
+		versions[fields[0]] = fields[1]
+	}
+	return versions
 }
 
 // ScenarioConfig is the shape of the load, echoed into the summary so that
