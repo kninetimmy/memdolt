@@ -25,12 +25,15 @@ type embedRunner struct {
 	session *ort.DynamicAdvancedSession
 }
 
-func newEmbedRunner(modelPath string) (*embedRunner, error) {
-	session, err := ort.NewDynamicAdvancedSession(modelPath,
+// newEmbedRunner takes the model's already SHA-256-verified bytes (rather
+// than re-opening it by path) so the bytes onnxruntime loads are exactly
+// the ones stagedModelFiles hashed — no re-read in between to trust.
+func newEmbedRunner(onnxData []byte) (*embedRunner, error) {
+	session, err := ort.NewDynamicAdvancedSessionWithONNXData(onnxData,
 		[]string{"input_ids", "attention_mask", "token_type_ids"},
 		[]string{"last_hidden_state"}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("loading embedding model %s: %w", modelPath, err)
+		return nil, fmt.Errorf("loading embedding model: %w", err)
 	}
 	return &embedRunner{session: session}, nil
 }
@@ -49,24 +52,24 @@ func (r *embedRunner) Embed(enc encodedInput) ([]float32, error) {
 	if err != nil {
 		return nil, fmt.Errorf("input_ids tensor: %w", err)
 	}
-	defer idsTensor.Destroy()
+	defer func() { _ = idsTensor.Destroy() }()
 	maskTensor, err := ort.NewTensor(inputShape, toInt64(enc.AttentionIDs))
 	if err != nil {
 		return nil, fmt.Errorf("attention_mask tensor: %w", err)
 	}
-	defer maskTensor.Destroy()
+	defer func() { _ = maskTensor.Destroy() }()
 	typeTensor, err := ort.NewTensor(inputShape, toInt64(enc.TypeIDs))
 	if err != nil {
 		return nil, fmt.Errorf("token_type_ids tensor: %w", err)
 	}
-	defer typeTensor.Destroy()
+	defer func() { _ = typeTensor.Destroy() }()
 
 	outputShape := ort.NewShape(1, seqLen, embeddingDim)
 	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
 	if err != nil {
 		return nil, fmt.Errorf("output tensor: %w", err)
 	}
-	defer outputTensor.Destroy()
+	defer func() { _ = outputTensor.Destroy() }()
 
 	if err := r.session.Run(
 		[]ort.Value{idsTensor, maskTensor, typeTensor},
@@ -95,12 +98,14 @@ type rerankRunner struct {
 	session *ort.DynamicAdvancedSession
 }
 
-func newRerankRunner(modelPath string) (*rerankRunner, error) {
-	session, err := ort.NewDynamicAdvancedSession(modelPath,
+// newRerankRunner takes the model's already SHA-256-verified bytes (rather
+// than re-opening it by path); see newEmbedRunner.
+func newRerankRunner(onnxData []byte) (*rerankRunner, error) {
+	session, err := ort.NewDynamicAdvancedSessionWithONNXData(onnxData,
 		[]string{"input_ids", "attention_mask", "token_type_ids"},
 		[]string{"logits"}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("loading reranker model %s: %w", modelPath, err)
+		return nil, fmt.Errorf("loading reranker model: %w", err)
 	}
 	return &rerankRunner{session: session}, nil
 }
@@ -119,24 +124,24 @@ func (r *rerankRunner) Score(enc encodedInput) (float32, error) {
 	if err != nil {
 		return 0, fmt.Errorf("input_ids tensor: %w", err)
 	}
-	defer idsTensor.Destroy()
+	defer func() { _ = idsTensor.Destroy() }()
 	maskTensor, err := ort.NewTensor(inputShape, toInt64(enc.AttentionIDs))
 	if err != nil {
 		return 0, fmt.Errorf("attention_mask tensor: %w", err)
 	}
-	defer maskTensor.Destroy()
+	defer func() { _ = maskTensor.Destroy() }()
 	typeTensor, err := ort.NewTensor(inputShape, toInt64(enc.TypeIDs))
 	if err != nil {
 		return 0, fmt.Errorf("token_type_ids tensor: %w", err)
 	}
-	defer typeTensor.Destroy()
+	defer func() { _ = typeTensor.Destroy() }()
 
 	outputShape := ort.NewShape(1, 1)
 	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
 	if err != nil {
 		return 0, fmt.Errorf("output tensor: %w", err)
 	}
-	defer outputTensor.Destroy()
+	defer func() { _ = outputTensor.Destroy() }()
 
 	if err := r.session.Run(
 		[]ort.Value{idsTensor, maskTensor, typeTensor},

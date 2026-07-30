@@ -10,6 +10,10 @@ run:
     # has to see it, or the one package in the tree with no CI coverage
     # would be the one that decides whether the project proceeds.
     - soak
+    # tests/parity is behind this one for the same reason (PRD §16's rig 2
+    # needs staged model files and an onnxruntime shared library). Same
+    # rationale: it must stay visible to the linter.
+    - parity
 
 linters:
   default: none

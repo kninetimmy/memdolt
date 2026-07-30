@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"math"
 	"os"
-	"path/filepath"
 	"testing"
 
 	sgtokenizer "github.com/sugarme/tokenizer"
@@ -140,16 +139,13 @@ func setupHarness(t *testing.T) *harness {
 		t.Fatalf("building reranker tokenizer: %v", err)
 	}
 
-	bgeModelPath := filepath.Join(modelDir, "bge-small-en-v1.5", "model.onnx")
-	rrModelPath := filepath.Join(modelDir, "ms-marco-MiniLM-L-6-v2", "model.onnx")
-
-	embed, err := newEmbedRunner(bgeModelPath)
+	embed, err := newEmbedRunner(bgeFiles["model.onnx"])
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 	t.Cleanup(func() { _ = embed.Destroy() })
 
-	rerank, err := newRerankRunner(rrModelPath)
+	rerank, err := newRerankRunner(rrFiles["model.onnx"])
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -214,7 +210,7 @@ func TestTokenIDsByteIdentical(t *testing.T) {
 func TestEmbeddingParity(t *testing.T) {
 	h := setupHarness(t)
 
-	var maxDev float64
+	maxDev := -1.0
 	var maxDevID string
 	for _, c := range h.corpus.Texts {
 		want, ok := h.embeddings[c.ID]
@@ -234,7 +230,7 @@ func TestEmbeddingParity(t *testing.T) {
 		}
 		dev := maxAbsDiff(got, want)
 		t.Logf("%s: |deviation| %g", c.ID, dev)
-		if dev >= maxDev {
+		if dev > maxDev {
 			maxDev = dev
 			maxDevID = c.ID
 		}
@@ -257,7 +253,7 @@ func TestRerankParity(t *testing.T) {
 		goldByID[g.ID] = g
 	}
 
-	var maxDev float64
+	maxDev := -1.0
 	var maxDevID string
 	for _, p := range h.rerankPairs.Pairs {
 		gold, ok := goldByID[p.ID]
@@ -278,7 +274,7 @@ func TestRerankParity(t *testing.T) {
 		}
 		dev := math.Abs(float64(got) - float64(gold.Score))
 		t.Logf("%s: got %g want %g |deviation| %g", p.ID, got, gold.Score, dev)
-		if dev >= maxDev {
+		if dev > maxDev {
 			maxDev = dev
 			maxDevID = p.ID
 		}

@@ -17,9 +17,11 @@ question, and their mirrors in §14's tech-stack table.
 | Rerank scores match within tolerance | max \|deviation\| **0** (bit-identical) across 14 query/passage pairs (tolerance 1×10⁻²) |
 
 Embedding and rerank parity are not close calls — the measured deviations
-are four to five orders of magnitude inside their tolerances, consistent
-with "the same onnxruntime computation reached through two different
-language bindings" rather than any meaningful behavioral difference.
+are four to five orders of magnitude inside their tolerances, and they are
+that tight despite the Rust and Go sides linking two different onnxruntime
+minor releases (1.24.2 vs. 1.26.0; §2, §7) over the same model bytes —
+evidence of an equivalent computation reached two ways, not a coincidence
+of identical binaries.
 Tokenizer parity is a closer call: it is only byte-identical because this
 harness NFD-normalizes text before handing it to
 `github.com/sugarme/tokenizer`, compensating for that library's own
@@ -54,7 +56,7 @@ what 14 pairs exercise, or long-input truncation behavior (§5).
 | | |
 |---|---|
 | Date | 2026-07-30 |
-| Repository commit | `d931c24` on `orch/issue-13-build-the-m0-rig-2-onnx-in-go-parity-har` |
+| Worktree base | `d931c24` on `main`, measured on the then-uncommitted working tree of `orch/issue-13-build-the-m0-rig-2-onnx-in-go-parity-har` before this rig's own work was committed on top of it |
 | memhub commit measured against | `github.com/kninetimmy/memhub` v0.2.0, local checkout at `C:\Users\Kninetimmy\memhub` |
 | OS | Windows 11 Pro, build 10.0.26200, amd64 |
 | Go | go1.26.5 windows/amd64 |
@@ -63,11 +65,17 @@ what 14 pairs exercise, or long-input truncation behavior (§5).
 | `github.com/sugarme/tokenizer` | v0.3.0 |
 | `github.com/yalue/onnxruntime_go` | v1.31.0 |
 | `golang.org/x/text` (NFD compensation) | v0.35.0 |
-| onnxruntime shared library (Go side) | `onnxruntime.dll` bundled as test data inside the `yalue/onnxruntime_go@v1.31.0` module itself, version-coupled to onnxruntime 1.26.0 per that module's README |
+| onnxruntime shared library (Go side) | `onnxruntime.dll` bundled as test data inside the `yalue/onnxruntime_go@v1.31.0` module itself, **onnxruntime 1.26.0** per that module's README |
 | Rust toolchain (fixture generator) | cargo/rustc 1.95.0 |
-| `fastembed` (Rust side, memhub's exact pin) | 5.13.4 |
+| `fastembed` (Rust side, memhub's exact pin) | 5.13.4, pinning `ort = "=2.0.0-rc.12"` |
+| onnxruntime shared library (Rust side) | **onnxruntime 1.24.2** — `ort-sys-2.0.0-rc.12/build/download/dist.txt` maps `x86_64-pc-windows-msvc` (no accelerator) to `pyke:ort-rs/ms@1.24.2`, digest `b685bfc8d336e0ba95c066a7a982c03aa6dedd528a492eb99ca4ccb7f3af9e7a`, matching the cached download at `C:\Users\Kninetimmy\AppData\Local\ort.pyke.io\dfbin\x86_64-pc-windows-msvc\b685bfc8d336e0ba95c066a7a982c03aa6dedd528a492eb99ca4ccb7f3af9e7a\` |
 | BGE-small-en-v1.5 model files | staged copy at memhub's `target/debug/build/memhub-*/out/bge-small-en-v1.5/`, SHA-256-verified against `tests/parity/testdata/model_pins.json` before use |
 | ms-marco-MiniLM-L-6-v2 model files | staged copy at memhub's `target/debug/build/memhub-*/out/ms-marco-MiniLM-L-6-v2/`, SHA-256-verified the same way |
+
+**The Rust and Go sides link two different onnxruntime minor releases —
+1.24.2 and 1.26.0 — not the same build.** This was an open question in an
+earlier draft of this document (§7); §5 folds in what it means for the
+measured deviations.
 
 **One platform only**, same caveat as rig 1: this is a Windows/amd64
 measurement. §6 covers what that means for the Linux-AMD64 bundling
@@ -163,6 +171,19 @@ n := normalizer.NewNormalizedFrom(norm.NFD.String("Größe"))
 With that one call in place, all 31×2 = 62 tokenizations (31 probe texts ×
 2 tokenizers) matched byte-for-byte, including both accented-text probes.
 
+`tests/parity/testdata/tokens_bge.json` and `tokens_reranker.json` are
+byte-identical files: BGE-small-en-v1.5 and ms-marco-MiniLM-L-6-v2 ship the
+same `tokenizer.json` (`model_pins.json`'s two `sha256` entries for it
+match), so "both tokenizers" is one shared BERT WordPiece tokenizer built
+twice from identical bytes and measured once, not two distinct
+vocabularies. What single-sequence encoding alone cannot exercise is
+*pair* encoding — the `[CLS] query [SEP] passage [SEP]` template with
+`token_type_ids` the reranker actually runs on (§5) — and that path is
+covered by the rerank scores' bit-identical result rather than by a
+separate pair-encoding token-id fixture: a wrong offset or type-id in the
+pair template would show up as a wrong logit, and none did across all 14
+pairs.
+
 **What this means for the [verify] marker.** `sugarme/tokenizer` is usable
 for M1 — but *only* alongside this compensation, which is not something the
 library does for its callers. Any M1 code that adopts it must NFD-normalize
@@ -245,9 +266,17 @@ rest, on both language stacks identically.
 
 **Why these tolerances.** Both are chosen as defensible ceilings against
 version and platform drift the actual measurement here doesn't exercise —
-this run is single-platform (§2) and the Go and Rust sides plausibly link
-different onnxruntime builds (§7) even though the bytes they load are
-identical — not as thresholds tuned to make today's numbers pass. 1×10⁻³
+not as thresholds tuned to make today's numbers pass. That drift is not
+hypothetical: the Rust and Go sides measured here link two *different*
+onnxruntime minor releases (§2) — 1.24.2 (Rust, via `ort`'s pyke-hosted
+download) and 1.26.0 (Go, via `yalue/onnxruntime_go`'s bundled test
+binary) — over byte-identical model files, and still landed at 1.79×10⁻⁷
+max embedding deviation and bit-identical rerank scores. That makes the
+parity result *stronger* than "the same binary reached two ways" would
+have shown: two onnxruntime minor versions apart agree to `float32`
+noise-floor precision on both models, on this probe set. This run is also
+still single-platform (§2), so the tolerances stay a deliberate margin
+above what was actually measured rather than a fit to it. 1×10⁻³
 for embeddings is far above `float32` accumulation noise but well below
 anything that would change a cosine-similarity ranking at the precision
 `recall`'s fusion formula (PRD §8.1) actually uses; 1×10⁻² for rerank
@@ -315,18 +344,21 @@ Linux-AMD64 answer in §6 is a documented-artifact-exists claim, not an
 independently re-run parity measurement on that platform — nothing here
 ran an onnxruntime Linux AMD64 shared library end to end.
 
-**Unclear whether the Rust and Go sides link the same onnxruntime patch
-version.** fastembed 5.13.4 pins `ort = "=2.0.0-rc.12"`, whose
-binary-download mechanism resolves to whatever onnxruntime build that `ort`
-release targets; this was not independently pinned down within this issue's
-scope, only observed to already be cached locally from building memhub. The
-Go side used the exact `onnxruntime.dll` bundled in
-`yalue/onnxruntime_go@v1.31.0`'s test data, which that module's README
-states is coupled to onnxruntime 1.26.0. Given how tight the measured
-deviations are (§5), a version mismatch — if there is one — is not
-producing an operationally meaningful difference here, but a next session
-pinning both sides to a verified-identical onnxruntime build would make
-this claim airtight instead of merely well-supported.
+**Resolved: the Rust and Go sides do not link the same onnxruntime
+version, and it doesn't matter at the precision measured here.** fastembed
+5.13.4 pins `ort = "=2.0.0-rc.12"`; that crate's own
+`ort-sys-2.0.0-rc.12/build/download/dist.txt` maps the no-accelerator
+`x86_64-pc-windows-msvc` target to `pyke:ort-rs/ms@1.24.2` (digest
+`b685bfc8d336e0ba95c066a7a982c03aa6dedd528a492eb99ca4ccb7f3af9e7a`,
+matching the copy already cached locally at
+`%LOCALAPPDATA%\ort.pyke.io\dfbin\x86_64-pc-windows-msvc\` from building
+memhub) — **onnxruntime 1.24.2**. The Go side used the `onnxruntime.dll`
+bundled in `yalue/onnxruntime_go@v1.31.0`'s test data, coupled to
+**onnxruntime 1.26.0** per that module's README. Two different minor
+releases, not a hedge — and §5's measured deviations (1.79×10⁻⁷ max on
+embeddings, bit-identical on rerank) are the result *with* that gap in
+place, which makes the parity claim stronger than "same onnxruntime build,
+two bindings" would have been.
 
 **Truncation and very long inputs are untested.** Every probe text in this
 corpus is short enough that `max_length=512` truncation (fastembed's
