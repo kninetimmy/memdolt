@@ -1,0 +1,19 @@
+{
+  "_comment": "M0 rig-2 rerank probe pairs. `passage_id` resolves against corpus.json's `texts[].id`; `query` is inline (queries are not themselves probe texts, so they carry no separate token-id fixture).",
+  "pairs": [
+    { "id": "q1_single_owner_vs_single_owner_fact", "query": "how does memdolt keep a single writer", "passage_id": "fact_value_single_owner" },
+    { "id": "q1_single_owner_vs_ipc_doc", "query": "how does memdolt keep a single writer", "passage_id": "doc_chunk_single_owner_ipc" },
+    { "id": "q1_single_owner_vs_ulid_decision", "query": "how does memdolt keep a single writer", "passage_id": "decision_ulid_pks" },
+    { "id": "q1_single_owner_vs_gate_doc", "query": "how does memdolt keep a single writer", "passage_id": "doc_chunk_m0_gate" },
+    { "id": "q2_reranker_vs_reranker_fact", "query": "what reranker model does memdolt use", "passage_id": "fact_value_rerank_model" },
+    { "id": "q2_reranker_vs_int8_decision", "query": "what reranker model does memdolt use", "passage_id": "decision_int8_reranker" },
+    { "id": "q2_reranker_vs_embedding_fact", "query": "what reranker model does memdolt use", "passage_id": "fact_value_embedding_model" },
+    { "id": "q2_reranker_vs_code_snippet", "query": "what reranker model does memdolt use", "passage_id": "code_snippet_commit_method" },
+    { "id": "q3_fusion_vs_fusion_fact", "query": "explain the fusion scoring formula", "passage_id": "fact_value_fusion_formula" },
+    { "id": "q3_fusion_vs_pipeline_doc", "query": "explain the fusion scoring formula", "passage_id": "doc_chunk_retrieval_pipeline" },
+    { "id": "q3_fusion_vs_cjk_text", "query": "explain the fusion scoring formula", "passage_id": "non_ascii_cjk_emoji" },
+    { "id": "q4_german_vs_german_text", "query": "Wie groß ist das Wörterbuch?", "passage_id": "non_ascii_german" },
+    { "id": "q4_german_vs_french_text", "query": "Wie groß ist das Wörterbuch?", "passage_id": "non_ascii_french" },
+    { "id": "q4_german_vs_side_store_doc", "query": "Wie groß ist das Wörterbuch?", "passage_id": "doc_chunk_embedding_side_store" }
+  ]
+}
