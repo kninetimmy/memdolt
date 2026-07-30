@@ -51,6 +51,18 @@ export GOFLAGS=-tags=gms_pure_go
   in `.github/workflows/ci.yml`)
 - Run the CLI: `go run ./cmd/memdolt version` (add `--json` for a single
   machine-readable JSON object instead of the human-readable line)
+- Run the M0 rig-1 concurrency soak (PRD §16): `go test -tags
+  soak,gms_pure_go ./tests/soak/...`
+
+The soak lives behind the `soak` build tag, so `go test ./...` never starts
+it — it runs real processes and kills one of them. Note that the mandatory
+tag has to be repeated on that command line: a `-tags` there *replaces* the
+one in `GOFLAGS` rather than adding to it, so `go test -tags soak
+./tests/soak/...` silently drops `gms_pure_go` and fails inside
+go-icu-regex. Duration and concurrency are flags (`-soak.duration`,
+`-soak.owner-writers`, `-soak.client-processes`, …), and a long run needs
+`-timeout` raised past the 10-minute default. Findings and measured
+numbers: `docs/spikes/m0-rig1.md`.
 
 ## Conventions for agents (PRD §14)
 

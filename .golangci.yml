@@ -2,9 +2,14 @@ version: "2"
 
 run:
   timeout: 5m
-  # The embedded Dolt driver only builds with this tag; see CLAUDE.md.
   build-tags:
+    # The embedded Dolt driver only builds with this tag; see CLAUDE.md.
     - gms_pure_go
+    # tests/soak is behind this one so that `go test ./...` never runs it
+    # (PRD §16's rig 1 starts processes and kills them). The linter still
+    # has to see it, or the one package in the tree with no CI coverage
+    # would be the one that decides whether the project proceeds.
+    - soak
 
 linters:
   default: none
