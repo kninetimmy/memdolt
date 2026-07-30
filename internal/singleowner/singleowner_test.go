@@ -211,6 +211,81 @@ func TestAcquireRejectsSecondAcquireInThisProcess(t *testing.T) {
 	}
 }
 
+// TestAcquireRejectsConcurrentAcquiresInThisProcess covers the same rule as
+// TestAcquireRejectsSecondAcquireInThisProcess, but with the callers racing.
+// The sequential test can only ever observe a completed registry entry;
+// concurrent callers can also arrive while another goroutine holds the
+// mid-flight reservation, which is a distinct state that must still be
+// reported as ErrLocked rather than panicking (an outcome PRD §5.2.1 rules
+// out as explicitly as blocking does).
+//
+// The reservation is held for as long as the filesystem half of Acquire
+// takes, so the subtest with an external holder is the one that reliably
+// lands in that window: the winner spends the retry budget waiting on a
+// lock it will never get, while everyone else arrives behind it.
+func TestAcquireRejectsConcurrentAcquiresInThisProcess(t *testing.T) {
+	const goroutines = 8
+
+	race := func(t *testing.T, path string) ([]*Lock, []error) {
+		t.Helper()
+		locks := make([]*Lock, goroutines)
+		errs := make([]error, goroutines)
+
+		var release, finished sync.WaitGroup
+		release.Add(1)
+		finished.Add(goroutines)
+		for i := range goroutines {
+			go func() {
+				defer finished.Done()
+				release.Wait()
+				locks[i], errs[i] = Acquire(path, Options{})
+			}()
+		}
+		release.Done()
+		finished.Wait()
+		return locks, errs
+	}
+
+	t.Run("while another process holds the lock", func(t *testing.T) {
+		path := lockPath(t)
+		startLockHelper(t, path)
+
+		locks, errs := race(t, path)
+		for i := range goroutines {
+			if locks[i] != nil {
+				_ = locks[i].Release()
+				t.Errorf("goroutine %d took a lock another process holds", i)
+				continue
+			}
+			if !errors.Is(errs[i], ErrLocked) {
+				t.Errorf("goroutine %d error = %v, want one matching ErrLocked", i, errs[i])
+			}
+		}
+	})
+
+	t.Run("with no other holder", func(t *testing.T) {
+		path := lockPath(t)
+
+		locks, errs := race(t, path)
+		winners := 0
+		for i := range goroutines {
+			switch {
+			case locks[i] != nil:
+				winners++
+				if errs[i] != nil {
+					t.Errorf("goroutine %d returned both a lock and error %v", i, errs[i])
+				}
+				t.Cleanup(func() { _ = locks[i].Release() })
+			case !errors.Is(errs[i], ErrLocked):
+				t.Errorf("goroutine %d error = %v, want one matching ErrLocked", i, errs[i])
+			}
+		}
+		if winners != 1 {
+			t.Errorf("%d goroutines acquired the lock, want exactly 1", winners)
+		}
+	})
+}
+
 // TestAcquireRejectsLockHeldByLiveProcess covers the acceptance criterion
 // that opening a store whose LOCK file is held by a live process fails
 // with an identifiable error instead of blocking, panicking or proceeding.

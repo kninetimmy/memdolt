@@ -239,6 +239,14 @@ func Acquire(path string, opts Options) (*Lock, error) {
 	held.Lock()
 	if existing, ok := held.byPath[abs]; ok {
 		held.Unlock()
+		if existing == nil {
+			// Another Acquire in this process has reserved the path and is
+			// mid-flight. Report it locked; it is about to be. The
+			// reservation lasts as long as the filesystem half of Acquire,
+			// which is the full retry budget when a third process holds the
+			// lock, so this is a window callers really do arrive in.
+			return nil, &LockedError{Path: abs, Owner: Owner{PID: os.Getpid()}}
+		}
 		return nil, &LockedError{Path: abs, Owner: withoutDetail(existing.owner)}
 	}
 	// Reserve the path before touching the filesystem so two goroutines in
