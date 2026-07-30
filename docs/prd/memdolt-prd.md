@@ -94,6 +94,8 @@ Each project's memory is a Dolt database. The commit graph is the write-ahead lo
 
 What the commit graph does **not** replace: `superseded_by` links (supersession is a semantic relationship between two live rows, not a storage-history fact — keep the columns), staleness/verification timestamps, and the review gate itself (branches are the *mechanism*; the gate — human accepts before durable — is policy and stays).
 
+**Narrative history is a product feature, not incidental plumbing** **[design]**: because `project_state`/`project_arch` commit straight to `main` (§3.1), `dolt_log` over those two tables is a full timeline of how the project's own self-description changed over time. "How did our architecture evolve" is a `history` query (§11.1) against `project_arch`, not a manual diff of old PROJECT.md snapshots someone happened to keep.
+
 ---
 
 ## 4. Architecture overview
@@ -186,17 +188,19 @@ This is more machinery than memhub needed (SQLite WAL handles multi-process nati
 
 ### 6.1 Schema (Dolt / MySQL dialect) **[design]**
 
-Faithful port of memhub's final schema (23 migrations collapsed to one initial DDL), with three deliberate changes: ULID string PKs replace AUTO_INCREMENT ids on agent-writable tables (merge-safe: concurrent inserts on two machines can never collide), no FTS shadow tables (Dolt FULLTEXT indexes replace them), and no `writes_log`/`pending_writes` (replaced per §3.2).
+Faithful port of memhub's final schema (23 migrations collapsed to one initial DDL), with three deliberate *structural* changes: ULID string PKs replace AUTO_INCREMENT ids on agent-writable tables (merge-safe: concurrent inserts on two machines can never collide), no FTS shadow tables (Dolt FULLTEXT indexes replace them), and no `writes_log`/`pending_writes` (replaced per §3.2). Column-level departures (added/removed columns on ported tables) are called out in the notes below, not enumerated here.
 
 ```sql
 -- durable memory (reviewed lane)
-facts(id CHAR(26) PK, key VARCHAR(255), value TEXT, confidence DOUBLE DEFAULT 1.0,
+facts(id CHAR(26) PK, key VARCHAR(255), value TEXT,
       source VARCHAR(64) DEFAULT 'user', kind VARCHAR(64) NULL,
+      evidence VARCHAR(1024) NULL,
       verified_at DATETIME NULL, created_at DATETIME,
       superseded_by CHAR(26) NULL,
       UNIQUE KEY uk_fact_key (key),
       FULLTEXT KEY ft_facts (key, value))
 decisions(id CHAR(26) PK, title VARCHAR(512), rationale TEXT, summary TEXT NULL,
+      alternatives_rejected TEXT NULL, evidence VARCHAR(1024) NULL,
       status ENUM('active','superseded','draft'), source VARCHAR(64) NULL,
       decided_at DATETIME, superseded_by CHAR(26) NULL,
       FULLTEXT KEY ft_decisions (title, rationale))
@@ -224,6 +228,10 @@ Notes:
 - `decisions.summary` deliberately not in the FULLTEXT key (memhub parity — summaries are rerank food, not match targets).
 - Git-ingest tables (`commits`/`files`/`commit_files`) are **derived local data** and live in the code-index SQLite, not the versioned repo (each machine's git clone can differ; same §4 principle). This is a placement change from memhub. **[design]**
 - Metrics and transcript-pointer tables also stay out of the versioned repo (machine-local; §12 matrix).
+- `facts.evidence` / `decisions.evidence`: a nullable free-form pointer (file path, `file:line`, commit hash, PR number, or URL) an agent or reviewer can attach when proposing or promoting a row. Its purpose is content-based re-verification — checking whether the pointed-at file/commit/PR still says what the fact or decision claims — extending the same `path`+`content_hash` pattern `documents` already uses for ingested reference docs down to individual facts/decisions. **[design]**
+- `decisions.alternatives_rejected`: nullable TEXT recording what was considered and passed over. `propose_decision` (§11.1) names it directly so the tool schema prompts agents to fill it in, not just the choice made. **[design]**
+- `facts.confidence` is **removed** (memhub carries it). It is asserted once at write time and read by nothing downstream — no query, ranking, or filter consults it. `commands.success_count`/`fail_count` remain the system's only *observed* confidence mechanism (§6.1 `commands` table); an unread, asserted number is vestigial and the review gate (§7) is the trust mechanism this schema actually relies on. **[design]**
+- Fact keys follow a dotted namespace convention — `build.*`, `convention.*`, `env.*`, `gotcha.*`, and similarly-scoped prefixes — so `list_facts`/`recall` filtering and human skimming both work by prefix instead of free text. Referenced from the server-instructions content in §11.1. **[design]**
 
 ### 6.2 Proposal payloads
 
@@ -275,6 +283,7 @@ Port memhub's pipeline with the storage swapped underneath. Same models, same fu
 6. **Scope merge:** repo + global corpora, tagged, one unified pool.
 7. **Rerank:** ms-marco-MiniLM-L-6-v2 int8 cross-encoder over top-20 pool, floors `min_rerank_score = 2.0` / `doc_min_rerank_score = 0.0`, truncate to `max_results = 6`.
 8. Response shape mirrors memhub's (`results[], warnings[], candidate_count, elapsed_ms, available_docs`), plus a memdolt addition: each hit may carry `last_changed` commit metadata (hash, author, date) from `dolt_blame` when `--provenance` is requested. **[design]**
+9. **Empty-recall observability** **[design]**: every `recall` call whose result set is empty above the rerank floor (`min_rerank_score`/`doc_min_rerank_score`, step 7) increments a counter. The dominant long-term failure mode for this system is an agent that never triggers recall at all — a call that runs and comes back empty is the one signal that would be visible instead, and `doctor` surfaces the running empty-recall count/rate as a named check.
 
 **R2 contingency (lexical quality):** if the golden gate shows Dolt FULLTEXT dragging Recall@K below baseline, replace step 1 with in-process BM25 over candidate rows — memory corpora are small enough (10³–10⁴ rows) that full-scan lexical scoring in Go is trivially fast, and it removes the FULLTEXT write penalty as a bonus. Decide on measurement, not vibes. **[design]**
 
@@ -340,17 +349,19 @@ A `global` Dolt database on the hub, cloned to `~/.memdolt/global/` on each mach
 |---|---|
 | Read | `status`, `recall`, `search`, `locate`, `list_tasks`, `list_decisions`, `list_facts`, `list_proposals` (nee list_pending_writes), `get_command` |
 | Direct-lane write | `task_add`, `task_done`, `log_session_note`, `record_command`, `doc_add`, `render` |
-| Staged write | `propose_fact`, `propose_decision`, `propose_supersede` |
+| Staged write | `propose_fact`, `propose_decision` (title, rationale, alternatives_rejected, evidence?), `propose_supersede` |
 | Review (elicited) | `review_pending` — walks repo-scope proposals via elicitation dialogs (batch approve allowed for repo scope; global excluded per §7.2); fact-key conflict elicitation on `propose_fact` against an existing key (overwrite/supersede/keep-both/cancel, existing value shown inline — r2 §4.4) |
 | Repo ops | `repo_status` (ahead/behind/diverged + working-set state), `repo_pull` (merge; conflicts elicited per §6.3 policy), `repo_push`. **No `sync_adopt` — no destructive counterpart exists.** |
-| History (new) | `history` — blame/log/AS-OF lookups for a fact/decision ("when did this change and who changed it") |
+| History (new) | `history` — blame/log/AS-OF lookups for a fact/decision ("when did this change and who changed it") or the `project_state`/`project_arch` narrative tables ("how did our status/architecture evolve", §3.2) |
 | Gated | `archive_transcript` (confirm=true; unredacted warning — memhub parity) |
 
-Server instructions embed memhub's routing rules (recall-before-ledger, locate-before-grep, turn-1 PROJECT.md, never-write-durable-directly) adapted to memdolt names.
+Server instructions embed memhub's routing rules (recall-before-ledger, locate-before-grep, turn-1 PROJECT.md, never-write-durable-directly) adapted to memdolt names, plus two memdolt-native additions **[design]**: the fact-key namespace convention (§6.1 — `build.*`, `convention.*`, `env.*`, `gotcha.*`, and similar dotted prefixes) so agents file under an existing prefix instead of inventing ad hoc keys, and the filing rule that decides fact vs. decision — **facts state what is true; decisions record what we chose and why — if there's a "because," it's a decision.**
+
+The server instructions text is itself a versioned, first-class artifact: checked in, and its changes are reviewed as deliberately as a schema migration, not tweaked ad hoc. It encodes the agent's recall-decision policy — recall-before-ledger, when to file a fact vs. a decision, what prefix a new fact key gets — and an undiscussed edit to that policy is exactly as load-bearing as an undiscussed column change. **[design]**
 
 ### 11.2 CLI
 
-Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision> <ident>`, `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
+Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
 
 ### 11.3 Config
 
@@ -374,7 +385,7 @@ Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `me
 | global store + promotion | port, genuinely-global via hub (§10) |
 | sync enable/status/snapshot/check/commit/adopt + five verdicts + manifest/digest | **replaced** by push/pull/merge (§3.2); `check --diff` becomes `repo status --diff` over `dolt_diff` |
 | render PROJECT.md / PROJECT_LEDGER.md (atomic two-phase write) | port; ledger's "Recent activity" sourced from `dolt_log` |
-| doctor (19 checks) | port + memdolt-specific checks (LOCK/pidfile/IPC §5.2, remote reachability, schema skew, model presence) |
+| doctor (19 checks) | port + memdolt-specific checks (LOCK/pidfile/IPC §5.2, remote reachability, schema skew, model presence, empty-recall rate §8.1) |
 | audit md (CLAUDE.md/AGENTS.md linter) | port (pure text tool) |
 | export/import JSON v1 | import kept (migration §15); export kept for interop; neither is the sync path |
 | ingest-git + `search file:` | port into code-index store (§6.1 note) |
@@ -528,3 +539,5 @@ Dolt: embedded driver (github.com/dolthub/driver; dolthub.com/blog/2022-07-25-em
 | MD10 | Models fetched at first run, SHA-256-pinned, not embedded in the binary | Proposed |
 | MD11 | ULID PKs on all agent-writable tables | Proposed |
 | MD12 | Direct lanes (tasks/notes/commands/narratives/docs) commit to main without review; notes batched | Proposed |
+| MD13 | Ambient recall: inject `recall` results automatically via agent-CLI prompt-submit hooks, config-gated | Backlog — post-v1 |
+| MD14 | No pinned/importance flag on facts | Deliberate non-decision (rejected) — revisit only on eval evidence of critical facts losing rerank races |
