@@ -352,7 +352,7 @@ A `global` Dolt database on the hub, cloned to `~/.memdolt/global/` on each mach
 | Staged write | `propose_fact`, `propose_decision` (title, rationale, alternatives_rejected, evidence?), `propose_supersede` |
 | Review (elicited) | `review_pending` — walks repo-scope proposals via elicitation dialogs (batch approve allowed for repo scope; global excluded per §7.2); fact-key conflict elicitation on `propose_fact` against an existing key (overwrite/supersede/keep-both/cancel, existing value shown inline — r2 §4.4) |
 | Repo ops | `repo_status` (ahead/behind/diverged + working-set state), `repo_pull` (merge; conflicts elicited per §6.3 policy), `repo_push`. **No `sync_adopt` — no destructive counterpart exists.** |
-| History (new) | `history` — blame/log/AS-OF lookups for a fact/decision ("when did this change and who changed it") or the `project_state`/`project_arch` narrative singletons ("how did our status/architecture evolve", §3.2) |
+| History (new) | `history` — blame/log/AS-OF lookups for a fact/decision ("when did this change and who changed it") or the `project_state`/`project_arch` narrative tables ("how did our status/architecture evolve", §3.2) |
 | Gated | `archive_transcript` (confirm=true; unredacted warning — memhub parity) |
 
 Server instructions embed memhub's routing rules (recall-before-ledger, locate-before-grep, turn-1 PROJECT.md, never-write-durable-directly) adapted to memdolt names, plus two memdolt-native additions **[design]**: the fact-key namespace convention (§6.1 — `build.*`, `convention.*`, `env.*`, `gotcha.*`, and similar dotted prefixes) so agents file under an existing prefix instead of inventing ad hoc keys, and the filing rule that decides fact vs. decision — **facts state what is true; decisions record what we chose and why — if there's a "because," it's a decision.**
@@ -361,7 +361,7 @@ The server instructions text is itself a versioned, first-class artifact: checke
 
 ### 11.2 CLI
 
-Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — they're singleton narrative tables), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
+Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
 
 ### 11.3 Config
 
