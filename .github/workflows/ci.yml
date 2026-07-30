@@ -4,6 +4,20 @@ on:
   push:
   pull_request:
 
+# The embedded Dolt driver dictates two build settings, so they are set
+# once here rather than repeated on every `go` invocation (which also keeps
+# the commands in CLAUDE.md and in this workflow identical):
+#
+#   CGO_ENABLED  dolt's block store imports github.com/dolthub/gozstd, a
+#                cgo wrapper around zstd, unconditionally.
+#   gms_pure_go  swaps go-mysql-server's ICU-backed REGEXP implementation
+#                for the standard library's. Without it the build needs
+#                system ICU development headers, which are not present on
+#                the Windows and macOS runner images.
+env:
+  CGO_ENABLED: "1"
+  GOFLAGS: -tags=gms_pure_go
+
 jobs:
   lint:
     name: Lint
