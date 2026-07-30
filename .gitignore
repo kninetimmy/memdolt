@@ -6,3 +6,11 @@ agent_docs/PROJECT_LEDGER.md
 .orchestrator/state.json
 .orchestrator/delivery.lock
 .orchestrator/metrics/
+
+# memdolt's own runtime store (local Dolt-backed data directory)
+.memdolt/
+
+# Compiled Go binaries
+/memdolt
+/memdolt.exe
+*.exe

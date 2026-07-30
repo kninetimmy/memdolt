@@ -19,9 +19,20 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
-Nothing to build yet — the repo is PRD-only, with no Go module. Planned
-toolchain per PRD §14: Go ≥1.24, `go build ./...`, `go test ./...`,
-golangci-lint. Replace this section once M1 scaffolds the module.
+Go module at the repo root: `github.com/kninetimmy/memdolt`, Go ≥1.24
+(`cmd/memdolt` is the only package so far; later milestones add the
+`internal/...` packages from PRD §14).
+
+- Build: `go build ./...`
+- Vet: `go vet ./...`
+- Test: `go test ./...`
+- Format check: `gofmt -l .` (must print nothing; `gofmt -w .` fixes it)
+- Lint: `golangci-lint run` (config in `.golangci.yml`; not vendored —
+  install it separately, e.g. from
+  https://golangci-lint.run/welcome/install/; CI pins the version it uses
+  in `.github/workflows/ci.yml`)
+- Run the CLI: `go run ./cmd/memdolt version` (add `--json` for a single
+  machine-readable JSON object instead of the human-readable line)
 
 ## Conventions for agents (PRD §14)
 
