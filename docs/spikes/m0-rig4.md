@@ -24,11 +24,15 @@ alone to stand in for it.
 
 It says: two independent physical machines, on the tailnet, using SQL-grant
 auth over remotesapi, can clone from and push to a shared Dolt hub on the
-Pi, and a third machine's fast-forward pull picks up what one of them wrote.
+Pi, and one of those two clients' fast-forward pull picks up what the other
+wrote.
 
 It does **not** say anything about merge, divergent history, concurrent
 writers, non-fast-forward push rejection, or the off-tailnet firewall
 property — see §6.
+
+This verdict is rig 4 only. M0's go/no-go also needs the ONNX rig and the
+retrieval golden gate (§16); nothing here speaks to those.
 
 ## 2. What was measured on
 
@@ -58,8 +62,10 @@ The hub runs on the Pi 5 as a systemd service:
 | ops | `systemctl {status,restart} dolthub`; `journalctl -u dolthub -f` |
 
 **Pinned to v1.88.1, not current dolt.** `dolthub/driver v1.88.1` embeds
-dolt at the pseudo-version cut for the v1.88.1 release (2026-05-07). Dolt's
-current release is v2.2.3. Installing current dolt on the hub would put a
+dolt at the pseudo-version cut for the v1.88.1 release (published
+2026-05-07T22:26:57Z). Dolt shipped v2.0.0 about an hour later
+(2026-05-07T23:32Z), making v1.88.1 the last v1 release. Dolt's current
+release is v2.2.3. Installing current dolt on the hub would put a
 major-version boundary inside the experiment — a failed round trip would be
 ambiguous between "remotesapi doesn't work" and "a v1 client can't talk to
 a v2 hub," two variables in one measurement. The hub is pinned to match the
@@ -150,12 +156,12 @@ trip dies at the commit step — after the clone has already succeeded —
 which reads like a push/remote problem but is purely local identity.
 
 **The fast-forward pull's misleading trailing line.** Forcing a real
-fast-forward (rewinding a client past a peer's commit, then pulling it
-back) produces output that pairs a real progress line with a misleading
-final one:
+fast-forward (rewinding the Windows client past the macOS commit, then
+pulling it back) prints "Fast-forward" followed by output that pairs a real
+progress line with a misleading final one:
 
 ```
-Fast-forward / Updating fbkne6fa..bod0ehid
+Updating fbkne6fa..bod0ehid
 Everything up-to-date
 ```
 
