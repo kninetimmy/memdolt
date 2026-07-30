@@ -1,0 +1,86 @@
+[
+  {
+    "id": "q1_single_owner_vs_single_owner_fact",
+    "query": "how does memdolt keep a single writer",
+    "passage_id": "fact_value_single_owner",
+    "score": -11.073666
+  },
+  {
+    "id": "q1_single_owner_vs_ipc_doc",
+    "query": "how does memdolt keep a single writer",
+    "passage_id": "doc_chunk_single_owner_ipc",
+    "score": -11.047071
+  },
+  {
+    "id": "q1_single_owner_vs_ulid_decision",
+    "query": "how does memdolt keep a single writer",
+    "passage_id": "decision_ulid_pks",
+    "score": -11.056389
+  },
+  {
+    "id": "q1_single_owner_vs_gate_doc",
+    "query": "how does memdolt keep a single writer",
+    "passage_id": "doc_chunk_m0_gate",
+    "score": -11.046994
+  },
+  {
+    "id": "q2_reranker_vs_reranker_fact",
+    "query": "what reranker model does memdolt use",
+    "passage_id": "fact_value_rerank_model",
+    "score": -3.9738576
+  },
+  {
+    "id": "q2_reranker_vs_int8_decision",
+    "query": "what reranker model does memdolt use",
+    "passage_id": "decision_int8_reranker",
+    "score": -2.3205028
+  },
+  {
+    "id": "q2_reranker_vs_embedding_fact",
+    "query": "what reranker model does memdolt use",
+    "passage_id": "fact_value_embedding_model",
+    "score": -10.980812
+  },
+  {
+    "id": "q2_reranker_vs_code_snippet",
+    "query": "what reranker model does memdolt use",
+    "passage_id": "code_snippet_commit_method",
+    "score": -11.081811
+  },
+  {
+    "id": "q3_fusion_vs_fusion_fact",
+    "query": "explain the fusion scoring formula",
+    "passage_id": "fact_value_fusion_formula",
+    "score": -10.01075
+  },
+  {
+    "id": "q3_fusion_vs_pipeline_doc",
+    "query": "explain the fusion scoring formula",
+    "passage_id": "doc_chunk_retrieval_pipeline",
+    "score": -7.311951
+  },
+  {
+    "id": "q3_fusion_vs_cjk_text",
+    "query": "explain the fusion scoring formula",
+    "passage_id": "non_ascii_cjk_emoji",
+    "score": -10.706572
+  },
+  {
+    "id": "q4_german_vs_german_text",
+    "query": "Wie groß ist das Wörterbuch?",
+    "passage_id": "non_ascii_german",
+    "score": 6.0733557
+  },
+  {
+    "id": "q4_german_vs_french_text",
+    "query": "Wie groß ist das Wörterbuch?",
+    "passage_id": "non_ascii_french",
+    "score": -10.98925
+  },
+  {
+    "id": "q4_german_vs_side_store_doc",
+    "query": "Wie groß ist das Wörterbuch?",
+    "passage_id": "doc_chunk_embedding_side_store",
+    "score": -11.066606
+  }
+]
