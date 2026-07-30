@@ -19,9 +19,27 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
-Go module at the repo root: `github.com/kninetimmy/memdolt`, Go ≥1.24
-(`cmd/memdolt` is the only package so far; later milestones add the
-`internal/...` packages from PRD §14).
+Go module at the repo root: `github.com/kninetimmy/memdolt`, Go ≥1.26.2
+(the minimum `github.com/dolthub/driver` requires).
+
+**Two build settings are mandatory**, because the embedded Dolt driver
+requires them:
+
+- `CGO_ENABLED=1` and a working C compiler (gcc/clang; MinGW-w64 on
+  Windows). Dolt's block store imports `github.com/dolthub/gozstd`, a cgo
+  wrapper around zstd, unconditionally — there is no pure-Go build.
+- The `gms_pure_go` build tag, which swaps go-mysql-server's ICU-backed
+  `REGEXP` implementation for the standard library's. Without it the build
+  also needs system ICU development headers, which are not available on all
+  three supported platforms.
+
+Set them once per shell (or with `go env -w`) so the commands below work
+as written; CI sets them at the workflow level:
+
+```sh
+export CGO_ENABLED=1
+export GOFLAGS=-tags=gms_pure_go
+```
 
 - Build: `go build ./...`
 - Vet: `go vet ./...`

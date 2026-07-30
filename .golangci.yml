@@ -2,6 +2,9 @@ version: "2"
 
 run:
   timeout: 5m
+  # The embedded Dolt driver only builds with this tag; see CLAUDE.md.
+  build-tags:
+    - gms_pure_go
 
 linters:
   default: none
