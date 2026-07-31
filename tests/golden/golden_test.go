@@ -188,8 +188,9 @@ func TestRetrievalGolden(t *testing.T) {
 			bmSummary.recallAtK, bmSummary.safetyFailures)
 	}
 	if meetsGate(vecSummary) {
-		t.Logf("note: the vector-only control also cleared the gate — on this golden set's corpus size, "+
-			"the lexical step never had to discriminate the rerank pool (recall@3=%.4f)", vecSummary.recallAtK)
+		t.Logf("note: the vector-only control also cleared the gate — the pool cap (rerankPoolSize=%d) "+
+			"evicts one of %d seeded rows on every query regardless of the lexical step, but never a top-3 "+
+			"target on this golden set (recall@3=%.4f); see docs/spikes/m0-rig3.md §1/§8", rerankPoolSize, len(h.rows), vecSummary.recallAtK)
 	}
 
 	// The actual gate: FULLTEXT only (MD5's shipped choice).

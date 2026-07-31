@@ -376,9 +376,12 @@ func minMax(fts map[rowKey]float64) (float64, float64) {
 	return min, max
 }
 
-// normalizeFTS mirrors util.rs's normalize_fts exactly: min-max normalize
-// into [0, 1], treating a degenerate range (single hit, or a tie across the
-// whole pool) as full strength (1.0) rather than dividing by zero.
+// normalizeFTS mirrors util.rs's normalize_fts: min-max normalize into
+// [0, 1], treating a degenerate range (single hit, or a tie across the
+// whole pool) as full strength (1.0) rather than dividing by zero. The
+// degenerate-range epsilon here is 1e-12, not memhub's f64::EPSILON
+// (~2.22e-16) — numerically irrelevant to any measured result, but not a
+// byte-for-byte port of that one constant.
 func normalizeFTS(value, min, max float64) float64 {
 	if max-min < 1e-12 && max-min > -1e-12 {
 		return 1.0
@@ -397,7 +400,8 @@ func clamp01(v float64) float64 {
 	return v
 }
 
-// cosineSimilarity mirrors util.rs's cosine_similarity exactly.
+// cosineSimilarity mirrors util.rs's cosine_similarity (same near-zero-norm
+// epsilon caveat as normalizeFTS, above: 1e-12 here vs. f64::EPSILON there).
 func cosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) {
 		return 0

@@ -33,20 +33,31 @@ step 1:
 every query's candidate pool built from cosine similarity alone — passes
 the golden gate exactly as well as either lexical implementation. That is
 not "FULLTEXT and BM25 happen to agree"; it is "this golden set, at this
-corpus size, cannot tell any of the three apart," and the reason is
-structural, not a property of either scoring formula: `seedRows()` seeds
-21 rows total and `rerankPoolSize = 20` (`tests/golden/pipeline.go`), so on
-most queries the fused candidate pool never exceeds the pool cap — nearly
-every seeded row reaches the cross-encoder regardless of what step 1
-contributed to its fusion score, and the cross-encoder alone decides the
-top 3. Pool membership is essentially never contested at this scale, so
-FULLTEXT, BM25, and no lexical gather at all cannot differ on outcome here.
-(memhub's own hermetic fixture has the same property — comparably sized,
-same `rerank_candidate_pool = 20` default — which is itself worth recording
-as an M0 finding: memhub's own golden gate has never discriminated its
-lexical step either.) §4 and §8 detail this further; §7's MD5
+corpus size, cannot tell any of the three apart," and the mechanism is more
+precise — and sharper — than "the pool never fills up." It's the opposite:
+verified directly by instrumenting `runQuery`'s candidate assembly over all
+22 queries × 3 configurations, **the fused candidate pool is 21 (every
+seeded row — cosine is never negative for any row on any query in this
+fixture) on 22 of 22 queries, in all three configurations, and so exceeds
+`rerankPoolSize = 20` on every single query, evicting exactly one row each
+time.** The pool cap is contested on *every* query — it just never matters,
+because 20 of 21 rows always reach the cross-encoder regardless. The
+lexical step's only reachable influence at this corpus size is *which
+single, lowest-blended-score row gets evicted before reranking* — and it
+did change that: the evicted row differed across configurations on **4 of
+22 queries** (`semantic-decision-machine-local`,
+`negative-nonsense-tokens`, `semantic-doc-code-style-error-handling`,
+`semantic-global-decision-editor-indent`). It just never evicted a query's
+own top-3 target row, so all three configurations returned identical
+results. (memhub's own hermetic fixture has the same
+21-rows-vs-20-cap property — worth recording as an M0 finding on its own:
+memhub's own golden gate has likely never had its lexical step's *outcome*
+tested either, though by the same mechanism it would still contest which
+single row gets evicted.) §4 and §8 detail this further; §7's MD5
 recommendation is reworded to rest on grounds this measurement actually
-supports.
+supports. Real lexical-step discrimination needs a corpus large enough
+that the cap excludes rows a query might actually want in its top 3, not
+just the least-relevant leftover.
 
 ### What this PASS does and does not license
 
@@ -69,8 +80,10 @@ does not say Dolt FULLTEXT's natural-language relevancy formula is
 numerically equivalent to memhub's SQLite `bm25()` — it isn't (§4). It does
 not cover a larger or more adversarial corpus: everything here runs at
 ~21 rows, well under the low end of the PRD's own "memory scale" (10³–10⁴
-rows, §17 R2's mitigation note) — the row count where pool contention, and
-therefore actual lexical-step discrimination, would start to happen.
+rows, §17 R2's mitigation note) — large enough that the pool cap *is*
+contested on every query (§1), but not large enough that the row it
+evicts is ever one a query actually wants in its top 3. That is the row
+count where actual lexical-step discrimination would start to happen.
 
 ## 2. What the numbers were measured on
 
@@ -144,12 +157,13 @@ actual repo+global merge plumbing (PRD §8.1 step 6, not yet built — M2/M9
 territory). `pipeline.go`'s fusion runs over the whole tagged pool at once
 rather than per-scope-then-merge; the practical difference is that
 `normalize_fts`'s min-max normalization is computed across both scopes'
-FTS hits together instead of independently per scope before a merge. On a
-21-row corpus where each golden query targets one specific row, this
-rarely changes anything — most queries' FTS hit set is small enough that
-`normalize_fts`'s degenerate-range branch (single hit ⇒ 1.0) applies
-either way — and it didn't change the measured pass/fail outcome for
-either `global-*` query here. **This rig gates the retrieval math, not
+FTS hits together instead of independently per scope before a merge.
+Measured directly (per-query distinct-FTS-hit counts range 1–16 across the
+golden set; `normalize_fts`'s single-hit degenerate branch fires on only 1
+of 22 queries), this combined-pool normalization is the live behavior for
+21 of 22 queries, not a rare edge case — but it didn't change the measured
+pass/fail outcome for either `global-*` query here, which is the claim
+this paragraph actually needs. **This rig gates the retrieval math, not
 global-store plumbing** (the acceptance criteria's own words); a literal
 two-store merge is real work for a later milestone, not a numerical
 question this rig exists to answer.
@@ -201,7 +215,14 @@ BGE-small-en-v1.5 embed call and every ms-marco-MiniLM-L-6-v2 rerank call:
      per id first.
    - **BM25 (contingency):** in-process Okapi BM25 (`k1=1.2, b=0.75`)
      over an inverted index built once per source type from the same
-     in-memory corpus, no Dolt query involved at all.
+     in-memory corpus, no Dolt query involved at all. One indexing
+     asymmetry versus FULLTEXT worth flagging: for `doc_chunk` rows, BM25
+     indexes `corpusRow.title + " " + body` — the *hydrated*
+     `"{doc title} — {heading_path}"` matching title (`bm25.go`) — while
+     FULLTEXT indexes the raw `heading_path` column via
+     `doc_chunks(heading_path, body)`. Neither is wrong (each matches what
+     that gatherer actually has on hand), but it means the two lexical
+     paths aren't matching against literally the same text for doc chunks.
    - **Vector-only control:** `noLexicalGatherer` — always returns zero
      hits, so the candidate pool is vector-gather-only. Exists purely to
      answer whether step 1 discriminates anything at this corpus size (§1);
@@ -220,8 +241,10 @@ BGE-small-en-v1.5 embed call and every ms-marco-MiniLM-L-6-v2 rerank call:
    discussed above, and this golden set does not exercise it either — every
    `match`-kind query's target row contains enough of the query's tokens
    that AND-vs-OR never changed which rows were even eligible to match.
-2. **Vector gather** — brute-force cosine (`util.rs`'s exact formula,
-   reimplemented in Go) between the query's BGE embedding and every seeded
+2. **Vector gather** — brute-force cosine (`util.rs`'s formula, reimplemented
+   in Go with the same shape but a different near-zero-norm epsilon
+   constant — numerically irrelevant here, see `pipeline.go`'s
+   `cosineSimilarity` comment) between the query's BGE embedding and every seeded
    row's embedding (built once at seed time via `inference.EmbedRunner`),
    restricted to the requested source types, `cosine < 0.0` excluded. This
    step runs identically in all three configurations, including the
@@ -234,9 +257,11 @@ BGE-small-en-v1.5 embed call and every ms-marco-MiniLM-L-6-v2 rerank call:
    hydrated in memory at seed time (`corpusRow`); no fact in the fixture
    is stale (`fact_stale_after_days` horizon irrelevant to freshly-seeded
    rows) and `accepted_only` is not exercised by this golden set.
-5. **Fusion** — memhub's exact formula and defaults, reimplemented
-   verbatim from `src/retrieval/recall.rs`'s `score()` and
-   `src/retrieval/util.rs`'s `normalize_fts`/`cosine_similarity`:
+5. **Fusion** — memhub's exact formula and defaults, reimplemented from
+   `src/retrieval/recall.rs`'s `score()` and `src/retrieval/util.rs`'s
+   `normalize_fts`/`cosine_similarity` (down to the shape of every term;
+   the one non-verbatim detail is the near-zero-norm epsilon constant
+   noted above):
    `relevance = 0.5·norm(lexical) + 0.5·cosine`, `score = relevance·1.0 −
    0 − 0` (age half-life off ⇒ decay multiplier is always exactly `1.0`;
    the fixture has no stale or superseded rows, so both penalties are
@@ -274,9 +299,19 @@ whether BM25 or the control would have passed:
 [FULLTEXT] queries=22 match=21/21 empty=1/1 recall@3=1.0000 safety_failures=0
 [BM25] queries=22 match=21/21 empty=1/1 recall@3=1.0000 safety_failures=0
 [VECTOR-ONLY (control, no lexical gather)] queries=22 match=21/21 empty=1/1 recall@3=1.0000 safety_failures=0
-note: the vector-only control also cleared the gate — on this golden set's corpus size, the lexical step never had to discriminate the rerank pool (recall@3=1.0000)
---- PASS: TestRetrievalGolden (7.63s)
+note: the vector-only control also cleared the gate — the pool cap (rerankPoolSize=20) evicts one of 21 seeded rows on every query regardless of the lexical step, but never a top-3 target on this golden set (recall@3=1.0000); see docs/spikes/m0-rig3.md §1/§8
+--- PASS: TestRetrievalGolden (7.61s)
 ```
+
+A separate, review-only diagnostic (not part of the committed harness —
+instrumented `runQuery`'s candidate assembly directly rather than reading
+it off the pass/fail summary above) confirmed the exact pool-pressure
+numbers §1 and §8 describe: 21-row fused pool on 22 of 22 queries in all
+three configurations (cosine is never negative for any seeded row on any
+query in this fixture), one row evicted every time, the evicted row
+differing across configurations on 4 of 22 queries, and zero duplicate
+FULLTEXT rows for the same id ever carrying different scores (confirming
+the fan-out claim in §4).
 
 The `doc-`/`semantic-doc-` pair (doc-chunk ranking path) and the
 `global-`/`semantic-global-` pair (cross-scope path) — the two
@@ -333,17 +368,24 @@ would actually decide MD5 on lexical-quality grounds, not this one.
 ## 8. What could not be measured, and what was assumed
 
 **The corpus is too small for this golden set to discriminate the lexical
-step at all — the load-bearing finding of this rig, not a footnote.**
-`rerankPoolSize = 20` (`pipeline.go`) and the seeded corpus is 21 rows;
-almost every query's fused candidate pool never exceeds the pool cap
-regardless of what step 1 contributes, so the cross-encoder alone decides
-the top 3 in practice. The vector-only control (§1, §5) confirms this
+step's outcome — the load-bearing finding of this rig, not a footnote —
+though it is *not* too small to reach the pool cap at all; verify the
+mechanism precisely, not just its effect.** `rerankPoolSize = 20`
+(`pipeline.go`) and the seeded corpus is 21 rows: the fused candidate pool
+is measurably 21 (every seeded row — cosine is never negative here) on
+**22 of 22 queries in all three configurations**, so the cap evicts exactly
+one row on every query, every run. Which row that is does depend on step
+1 — it differed across FULLTEXT/BM25/vector-only on **4 of 22 queries**
+(§1) — but the evicted row was never a top-3 target on any of those 4, so
+the cross-encoder still decided identical top-3s across all three
+configurations. The vector-only control (§1, §5) confirms the *outcome*
 directly: removing the lexical step entirely still clears the gate. Nothing
 measured here says whether Dolt FULLTEXT's NL-mode ranking tracks BM25 (or
-beats no lexical gather at all) once the corpus is large enough that pool
-membership is actually contested — that is a genuinely open question this
-rig's numbers do not answer, at the PRD's own "memory scale" (10³–10⁴ rows,
-§17 R2's mitigation note) or beyond. **The AND-vs-OR lexical-matching
+beats no lexical gather at all) once the corpus is large enough that the
+cap excludes a row a query might actually want in its top 3 — that is a
+genuinely open question this rig's numbers do not answer, at the PRD's own
+"memory scale" (10³–10⁴ rows, §17 R2's mitigation note) or beyond. **The
+AND-vs-OR lexical-matching
 difference (§4)** between memhub's `build_fts_match` and both of this rig's
 lexical gatherers is likewise unexercised by a golden set where every
 target row already contains enough of the query's tokens for that
