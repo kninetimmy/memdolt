@@ -158,7 +158,7 @@ Research findings **[V]**: `github.com/dolthub/driver` opens a Dolt data dir in-
 **Design response [design]:**
 
 1. **Single-owner rule:** when the MCP server is running, it is the sole process holding the embedded store. CLI invocations detect a live server (pidfile + liveness probe in `.memdolt/`) and route through it over a local IPC endpoint (localhost HTTP on an ephemeral port with a per-run token — same pattern as memhub's viz auth). No live server → CLI opens the store directly.
-2. Rely on the driver's built-in retry for the residual races (two CLIs at once); keep every transaction short.
+2. **[V]** memdolt's single-owner advisory lock resolves the residual inter-process races (two CLIs at once): the second process is refused fast with a distinct error (~106 ms measured), before the driver's own retry path is ever reached. The driver's `BackOff` is deliberately left disabled — waiting is the opposite of what the single-owner rule wants when acceptance criteria call for the second process to fail fast. See `docs/spikes/m0-rig1.md`. Keep every transaction short.
 3. Startup recovery: on open, if a lock file carries an ownership record and its **advisory lock is free**, the process that wrote it is gone: clear the record in place and log loudly with the stale pid. **[V]** (M0 rig 1) — the ergonomics marked [verify] here resolve as *the lock decides, the pid describes*. The kernel releases an advisory lock however a process exits, including a kill, so a free lock is proof; a pid cannot tell a live owner from an unrelated process that inherited a recycled pid, and rig 1 measured a correct recovery against a record naming a pid that was demonstrably alive. The record is cleared in place rather than unlinked, because unlinking a file while holding a lock on it lets two processes lock two inodes under one name. Numbers and method: `docs/spikes/m0-rig1.md`.
 4. `doctor` checks: stale LOCK, orphaned pidfile, IPC reachability.
 
@@ -415,7 +415,7 @@ data_dir: /mnt/ssd/memdolt-hub
 - Clone/fetch/pull AND push through remotesapi are supported (Dolt ≥ v1.30 both sides **[V]**). Pushes must be fast-forward unless forced **[V]** — memdolt clients always merge locally then push, so this is the natural flow.
 - Auth = SQL users/grants (`clone_admin` read; push requires elevated grants **[V]**; DoltHub itself calls this auth weak **[V]**) → **the tailnet is the perimeter** (r2 §6.2-6.3 posture: bind tailnet IP, systemd system unit under a dedicated user, `After=tailscaled`, bind-retry for the boot race). Non-Tailscale self-hosters: private network or SSH tunnel; never expose remotesapi publicly. **[design]**
 - Hardware: Pi 5 (8GB) comfortably exceeds Dolt's 2GB production minimum **[V]**; the hub does no inference (§4.1), so r2's Q3 concern does not exist here. Linux desktop per r2 §13.5 checklist (mask suspend, system unit, tailscaled at boot) equally fine. ARM64 Linux release binaries: **[L]** — confirm the asset on github.com/dolthub/dolt/releases during M0. `dolt version` pin: hub and clients within a documented compatible range; `doctor` checks skew.
-- SSD-primary storage (r2 D8 carried over): live databases on USB SSD, not SD card.
+- SSD-primary storage recommended (r2 D8 carried over, downgraded from requirement to recommendation): live databases on USB SSD for endurance and random-write performance under commit churn. This is a documented recommendation, not a requirement — memdolt must not refuse to run without an SSD.
 
 ### 13.2 Backups (r2 §12, mostly dissolved, residue kept)
 
