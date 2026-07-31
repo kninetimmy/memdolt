@@ -415,7 +415,7 @@ data_dir: /mnt/ssd/memdolt-hub
 - Clone/fetch/pull AND push through remotesapi are supported (Dolt ≥ v1.30 both sides **[V]**). Pushes must be fast-forward unless forced **[V]** — memdolt clients always merge locally then push, so this is the natural flow.
 - Auth = SQL users/grants (`clone_admin` read; push requires elevated grants **[V]**; DoltHub itself calls this auth weak **[V]**) → **the tailnet is the perimeter** (r2 §6.2-6.3 posture: bind tailnet IP, systemd system unit under a dedicated user, `After=tailscaled`, bind-retry for the boot race). Non-Tailscale self-hosters: private network or SSH tunnel; never expose remotesapi publicly. **[design]**
 - Hardware: Pi 5 (8GB) comfortably exceeds Dolt's 2GB production minimum **[V]**; the hub does no inference (§4.1), so r2's Q3 concern does not exist here. Linux desktop per r2 §13.5 checklist (mask suspend, system unit, tailscaled at boot) equally fine. ARM64 Linux release binaries: **[L]** — confirm the asset on github.com/dolthub/dolt/releases during M0. `dolt version` pin: hub and clients within a documented compatible range; `doctor` checks skew.
-- SSD-primary storage (r2 D8 carried over): live databases on USB SSD, not SD card.
+- SSD-primary storage recommended (r2 D8 carried over, downgraded from requirement to recommendation): live databases on USB SSD for endurance and random-write performance under commit churn. This is a documented recommendation, not a requirement — memdolt must not refuse to run without an SSD.
 
 ### 13.2 Backups (r2 §12, mostly dissolved, residue kept)
 
