@@ -1,6 +1,6 @@
-//go:build parity
+//go:build parity || golden
 
-package parity
+package inference
 
 import (
 	"encoding/json"
@@ -16,14 +16,14 @@ import (
 )
 
 // tokenizerJSONFile is the slice of a Hugging Face tokenizer.json this
-// harness needs: the WordPiece vocabulary. BGE-small-en-v1.5 and
+// package needs: the WordPiece vocabulary. BGE-small-en-v1.5 and
 // ms-marco-MiniLM-L-6-v2 both bundle a standard uncased BERT tokenizer
 // (normalizer: BertNormalizer{clean_text, handle_chinese_chars: true,
 // strip_accents: null (→ true, tied to lowercase), lowercase: true},
 // pre_tokenizer: BertPreTokenizer, post_processor: TemplateProcessing
 // equivalent to BertProcessing's "[CLS] A [SEP]" / "[CLS] A [SEP] B [SEP]"),
 // confirmed by reading both models' tokenizer_config.json and tokenizer.json
-// directly (docs/spikes/m0-rig2.md records the exact fields). This harness
+// directly (docs/spikes/m0-rig2.md records the exact fields). This package
 // hand-wires those same components from github.com/sugarme/tokenizer rather
 // than parsing the rest of tokenizer.json, because that package has no
 // from-file loader for the full HF tokenizer.json config (its
@@ -36,12 +36,12 @@ type tokenizerJSONFile struct {
 	} `json:"model"`
 }
 
-// buildBertWordPieceTokenizer constructs a Go WordPiece tokenizer from the
+// BuildBertWordPieceTokenizer constructs a Go WordPiece tokenizer from the
 // vocabulary embedded in a Hugging Face tokenizer.json's bytes, wired up to
 // match BAAI/bge-small-en-v1.5 and Xenova/ms-marco-MiniLM-L-6-v2's shared
 // tokenizer config (both uncased BERT WordPiece with the standard
 // [CLS]/[SEP] template).
-func buildBertWordPieceTokenizer(tokenizerJSON []byte) (*sgtokenizer.Tokenizer, error) {
+func BuildBertWordPieceTokenizer(tokenizerJSON []byte) (*sgtokenizer.Tokenizer, error) {
 	var tj tokenizerJSONFile
 	if err := json.Unmarshal(tokenizerJSON, &tj); err != nil {
 		return nil, fmt.Errorf("parsing tokenizer.json: %w", err)
@@ -89,10 +89,10 @@ func buildBertWordPieceTokenizer(tokenizerJSON []byte) (*sgtokenizer.Tokenizer, 
 	return tok, nil
 }
 
-// encodedInput carries the model-ready encoding of one sequence (or
+// EncodedInput carries the model-ready encoding of one sequence (or
 // sequence pair): token ids, attention mask, and BERT segment (token_type)
 // ids, all the same length.
-type encodedInput struct {
+type EncodedInput struct {
 	IDs          []int
 	AttentionIDs []int
 	TypeIDs      []int
@@ -122,24 +122,24 @@ func nfdCompensate(text string) string {
 	return norm.NFD.String(text)
 }
 
-func encodeSingle(tok *sgtokenizer.Tokenizer, text string) (encodedInput, error) {
+func EncodeSingle(tok *sgtokenizer.Tokenizer, text string) (EncodedInput, error) {
 	enc, err := tok.EncodeSingle(nfdCompensate(text), true)
 	if err != nil {
-		return encodedInput{}, fmt.Errorf("encode single: %w", err)
+		return EncodedInput{}, fmt.Errorf("encode single: %w", err)
 	}
-	return encodedInput{
+	return EncodedInput{
 		IDs:          enc.GetIds(),
 		AttentionIDs: enc.GetAttentionMask(),
 		TypeIDs:      enc.GetTypeIds(),
 	}, nil
 }
 
-func encodePair(tok *sgtokenizer.Tokenizer, query, passage string) (encodedInput, error) {
+func EncodePair(tok *sgtokenizer.Tokenizer, query, passage string) (EncodedInput, error) {
 	enc, err := tok.EncodePair(nfdCompensate(query), nfdCompensate(passage), true)
 	if err != nil {
-		return encodedInput{}, fmt.Errorf("encode pair: %w", err)
+		return EncodedInput{}, fmt.Errorf("encode pair: %w", err)
 	}
-	return encodedInput{
+	return EncodedInput{
 		IDs:          enc.GetIds(),
 		AttentionIDs: enc.GetAttentionMask(),
 		TypeIDs:      enc.GetTypeIds(),

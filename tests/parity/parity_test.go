@@ -10,6 +10,8 @@ import (
 
 	sgtokenizer "github.com/sugarme/tokenizer"
 	ort "github.com/yalue/onnxruntime_go"
+
+	"github.com/kninetimmy/memdolt/tests/inference"
 )
 
 // Tolerances (recorded with their reasoning in docs/spikes/m0-rig2.md).
@@ -92,8 +94,8 @@ func readJSON[T any](t *testing.T, path string) T {
 type harness struct {
 	bgeTokenizer      *sgtokenizer.Tokenizer
 	rerankerTokenizer *sgtokenizer.Tokenizer
-	embed             *embedRunner
-	rerank            *rerankRunner
+	embed             *inference.EmbedRunner
+	rerank            *inference.RerankRunner
 
 	corpus      corpusFile
 	textByID    map[string]string
@@ -107,20 +109,20 @@ type harness struct {
 func setupHarness(t *testing.T) *harness {
 	t.Helper()
 
-	modelDir := requireEnv(t, "MEMDOLT_PARITY_MODEL_DIR",
+	modelDir := inference.RequireEnv(t, "MEMDOLT_PARITY_MODEL_DIR",
 		"Point it at a directory containing bge-small-en-v1.5/ and ms-marco-MiniLM-L-6-v2/ "+
 			"subdirectories (memhub build.rs's OUT_DIR staging layout: model.onnx, tokenizer.json, "+
 			"config.json, special_tokens_map.json, tokenizer_config.json in each). If not staged "+
 			"locally, fetch from the pinned URLs in tests/parity/testdata/model_pins.json and verify "+
 			"each SHA-256 before use.")
 
-	pins, err := loadModelPins("testdata/model_pins.json")
+	pins, err := inference.LoadModelPins("testdata/model_pins.json")
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 	bundles := make(map[string]map[string][]byte, len(pins.Bundles))
 	for _, b := range pins.Bundles {
-		files, err := stagedModelFiles(modelDir, b)
+		files, err := inference.StagedModelFiles(modelDir, b)
 		if err != nil {
 			t.Fatalf("%v", err)
 		}
@@ -130,22 +132,22 @@ func setupHarness(t *testing.T) *harness {
 	bgeFiles := bundles["bge-small-en-v1.5"]
 	rrFiles := bundles["ms-marco-MiniLM-L-6-v2"]
 
-	bgeTok, err := buildBertWordPieceTokenizer(bgeFiles["tokenizer.json"])
+	bgeTok, err := inference.BuildBertWordPieceTokenizer(bgeFiles["tokenizer.json"])
 	if err != nil {
 		t.Fatalf("building BGE tokenizer: %v", err)
 	}
-	rrTok, err := buildBertWordPieceTokenizer(rrFiles["tokenizer.json"])
+	rrTok, err := inference.BuildBertWordPieceTokenizer(rrFiles["tokenizer.json"])
 	if err != nil {
 		t.Fatalf("building reranker tokenizer: %v", err)
 	}
 
-	embed, err := newEmbedRunner(bgeFiles["model.onnx"])
+	embed, err := inference.NewEmbedRunner(bgeFiles["model.onnx"])
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 	t.Cleanup(func() { _ = embed.Destroy() })
 
-	rerank, err := newRerankRunner(rrFiles["model.onnx"])
+	rerank, err := inference.NewRerankRunner(rrFiles["model.onnx"])
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -182,7 +184,7 @@ func TestTokenIDsByteIdentical(t *testing.T) {
 		if !ok {
 			t.Fatalf("no BGE token fixture for %s", c.ID)
 		}
-		gotBGEEnc, err := encodeSingle(h.bgeTokenizer, c.Text)
+		gotBGEEnc, err := inference.EncodeSingle(h.bgeTokenizer, c.Text)
 		if err != nil {
 			t.Fatalf("%s: BGE tokenize: %v", c.ID, err)
 		}
@@ -194,7 +196,7 @@ func TestTokenIDsByteIdentical(t *testing.T) {
 		if !ok {
 			t.Fatalf("no reranker token fixture for %s", c.ID)
 		}
-		gotRREnc, err := encodeSingle(h.rerankerTokenizer, c.Text)
+		gotRREnc, err := inference.EncodeSingle(h.rerankerTokenizer, c.Text)
 		if err != nil {
 			t.Fatalf("%s: reranker tokenize: %v", c.ID, err)
 		}
@@ -217,7 +219,7 @@ func TestEmbeddingParity(t *testing.T) {
 		if !ok {
 			t.Fatalf("no embedding fixture for %s", c.ID)
 		}
-		enc, err := encodeSingle(h.bgeTokenizer, c.Text)
+		enc, err := inference.EncodeSingle(h.bgeTokenizer, c.Text)
 		if err != nil {
 			t.Fatalf("%s: tokenize: %v", c.ID, err)
 		}
@@ -264,7 +266,7 @@ func TestRerankParity(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: unknown passage_id %s", p.ID, p.PassageID)
 		}
-		enc, err := encodePair(h.rerankerTokenizer, p.Query, passage)
+		enc, err := inference.EncodePair(h.rerankerTokenizer, p.Query, passage)
 		if err != nil {
 			t.Fatalf("%s: tokenize pair: %v", p.ID, err)
 		}

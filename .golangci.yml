@@ -14,6 +14,11 @@ run:
     # needs staged model files and an onnxruntime shared library). Same
     # rationale: it must stay visible to the linter.
     - parity
+    # tests/golden is behind this one for the same reason (PRD §16's rig 3
+    # retrieval golden gate needs the same staged model files and
+    # onnxruntime shared library as rig 2, plus a disposable embedded Dolt
+    # store). Same rationale: it must stay visible to the linter.
+    - golden
 
 linters:
   default: none
