@@ -157,7 +157,7 @@ non_ascii_german: BGE token ids differ
   want: [101 3280 24665 2080 17499 4078 24185 19418 25987 2015 6655 29181 2102 20405 19317 19204 2015 1010 6151 1096 15536 4103 27969 11039 10047 5017 25520 1000 7020 1000 3671 17417 8743 1012 102]
 ```
 
-**The fix.** `tests/parity/tokenizer.go`'s `nfdCompensate` NFD-normalizes
+**The fix.** `tests/inference/tokenizer.go`'s `nfdCompensate` NFD-normalizes
 text (`golang.org/x/text/unicode/norm`, already an indirect dependency of
 this module via dolt/vitess — no new third-party dependency) before it ever
 reaches the tokenizer, restoring the decomposition `sugarme`'s own
@@ -332,8 +332,9 @@ platforms would use). There is no missing upstream artifact. memdolt's own
 "first-run fetch into `~/.memdolt/models/`, every file SHA-256-pinned"
 mechanism (PRD §8.3) is the right shape for staging this too — model files
 and the onnxruntime shared library are the same kind of problem, and this
-harness's `stagedModelFiles`/SHA-256-verification code
-(`tests/parity/parity.go`) is a small working example of exactly that
+harness's `StagedModelFiles`/SHA-256-verification code
+(`tests/inference/inference.go`, factored out for reuse by M0 rig 3 —
+docs/spikes/m0-rig3.md) is a small working example of exactly that
 pattern, generalizable from "model files" to "the runtime library" with no
 new mechanism.
 
@@ -417,7 +418,7 @@ go test -tags parity,gms_pure_go ./tests/parity/... -v -timeout 30m
 Omitting either environment variable, or pointing `MEMDOLT_PARITY_MODEL_DIR`
 at a directory with a mismatched or missing file, fails the test loudly
 with the fetch/stage instructions above rather than skipping (verified: see
-`tests/parity/parity.go`'s `requireEnv`/`stagedModelFiles`).
+`tests/inference/inference.go`'s `RequireEnv`/`StagedModelFiles`).
 
 Plain `go test ./...` never runs any of this — same convention as rig 1's
 `soak` tag (docs/spikes/m0-rig1.md §14): a command-line `-tags` replaces
