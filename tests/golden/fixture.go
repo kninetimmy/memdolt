@@ -15,9 +15,11 @@ import (
 // doc::add, copied verbatim so this rig's fixture reproduces the content
 // the golden set's matchers were written against, not paraphrased text
 // that merely happens to pass. Every row a golden query targets (§1 of
-// this issue's acceptance criteria) is present, including the doc-chunk
-// row and the two global-scope rows (seeded here as scope-tagged rows in
-// the same store — see schema.go's doc comment).
+// this issue's acceptance criteria) is present, including all three
+// doc_chunk rows chunk_markdown actually produces from the ingested
+// markdown (not just the one a golden query targets — see the doc_chunk
+// rows below) and the two global-scope rows (seeded here as scope-tagged
+// rows in the same store — see schema.go's doc comment).
 //
 // decision.summary strings are the real backfilled summaries memhub's
 // production baseline carries for the four "semantic-" queries that target
@@ -154,14 +156,52 @@ func seedRows() []corpusRow {
 				"harness exists and reports a baseline."},
 
 		// -- doc chunk (repo scope) -----------------------------------------
-		// title is pre-hydrated as "{doc title} — {heading_path}", mirroring
-		// recall.rs's load_source_row for DocChunk.
-		{sourceType: "doc_chunk", id: "doc-error-handling", scope: "repo",
-			title: "Rust Code Style Guide — Error Handling",
-			body: "New fallible functions return `crate::Result<T>`. Never call " +
+		// memhub's doc::add runs the ingested markdown through
+		// chunk_markdown (src/commands/doc.rs ~line 541): one chunk per
+		// ATX heading section, heading line kept in the body, heading_path
+		// carrying the full ancestor breadcrumb. The source markdown
+		// (retrieval_golden_hermetic.rs's seed_hermetic_corpus) is:
+		//
+		//   # Rust Code Style Guide
+		//
+		//   ## Error Handling
+		//
+		//   New fallible functions return `crate::Result<T>`. Never call
+		//   `unwrap()` outside tests. Convert an IO failure with `map_err`
+		//   into `MemhubError::InvalidInput` and propagate it upward with
+		//   the `?` operator so the caller decides how to recover.
+		//
+		//   ## Naming
+		//
+		//   Functions are snake_case verbs; modules are nouns. Avoid
+		//   abbreviations in any public API signature.
+		//
+		// which chunk_markdown splits into exactly three chunks (verified
+		// by hand-tracing that function against this text) — all three are
+		// seeded here, not just the one the golden queries target, because
+		// a faithful port means the *other* rows a real ingest would also
+		// produce are present in the candidate pool too. title is
+		// pre-hydrated as "{doc title} — {heading_path}", mirroring
+		// recall.rs's load_source_row for DocChunk; headingPath is the raw
+		// breadcrumb chunk_markdown produces, which is what
+		// doc_chunk_embed_text (persist.rs) and the FULLTEXT/BM25 lexical
+		// gather actually index — see pipeline.go's embedText.
+		{sourceType: "doc_chunk", id: "doc-chunk-title", scope: "repo", ord: 0,
+			title:       "Rust Code Style Guide — Rust Code Style Guide",
+			headingPath: "Rust Code Style Guide",
+			body:        "# Rust Code Style Guide"},
+		{sourceType: "doc_chunk", id: "doc-error-handling", scope: "repo", ord: 1,
+			title:       "Rust Code Style Guide — Rust Code Style Guide > Error Handling",
+			headingPath: "Rust Code Style Guide > Error Handling",
+			body: "## Error Handling\n\nNew fallible functions return `crate::Result<T>`. Never call " +
 				"`unwrap()` outside tests. Convert an IO failure with `map_err` " +
 				"into `MemhubError::InvalidInput` and propagate it upward with " +
 				"the `?` operator so the caller decides how to recover."},
+		{sourceType: "doc_chunk", id: "doc-naming", scope: "repo", ord: 2,
+			title:       "Rust Code Style Guide — Rust Code Style Guide > Naming",
+			headingPath: "Rust Code Style Guide > Naming",
+			body: "## Naming\n\nFunctions are snake_case verbs; modules are nouns. Avoid " +
+				"abbreviations in any public API signature."},
 
 		// -- global-scope rows (Wave 4 R10 / issue #74's seed_global_store) --
 		{sourceType: "fact", id: "global-fact-signing-key", scope: "global",
@@ -219,12 +259,9 @@ func insertRows(ctx context.Context, db *sql.DB, rows []corpusRow) error {
 					return fmt.Errorf("insert document: %w", err)
 				}
 			}
-			// heading_path stores just the breadcrumb ("Error Handling");
-			// r.title already carries the hydrated "doc title — heading_path"
-			// form for matching, so it is not what gets written here.
 			if _, err := db.ExecContext(ctx,
-				"INSERT INTO doc_chunks (id, doc_id, ord, heading_path, body) VALUES (?, ?, 0, ?, ?)",
-				r.id, docID, "Error Handling", r.body); err != nil {
+				"INSERT INTO doc_chunks (id, doc_id, ord, heading_path, body) VALUES (?, ?, ?, ?, ?)",
+				r.id, docID, r.ord, r.headingPath, r.body); err != nil {
 				return fmt.Errorf("insert doc_chunk %s: %w", r.id, err)
 			}
 		default:

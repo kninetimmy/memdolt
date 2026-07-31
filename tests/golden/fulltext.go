@@ -31,15 +31,33 @@ var fulltextTable = map[string]struct {
 	"doc_chunk": {"doc_chunks", "heading_path, body"},
 }
 
+// Gather queries Dolt's FULLTEXT index in natural-language mode and dedupes
+// the result before applying limit.
+//
+// A `MATCH ... AGAINST` filter in a WHERE clause does not return one row
+// per matching *document* — it returns one row per matching *index term*,
+// so a row whose FULLTEXT-keyed columns contain several of the query's
+// words comes back several times, once per matched word, each copy
+// carrying the identical accumulated relevancy score (confirmed empirically
+// during PR #16's review: 31 rows / 14 distinct ids on one decision-type
+// query in this rig's own fixture — see docs/spikes/m0-rig3.md §4). A bare
+// `LIMIT 50` therefore caps *result rows*, not distinct candidates — at 21
+// seeded rows the fan-out never starved the pool, but at a real project's
+// row count it would silently drop distinct rows whose match happened to
+// land past the row-not-candidate limit. The GROUP BY below collapses the
+// fan-out to one row per id (keeping the max score, which is also the only
+// score — every duplicate carries the same one) before LIMIT ever applies.
 func (g *fulltextGatherer) Gather(ctx context.Context, sourceType, query string, limit int) ([]lexicalHit, error) {
 	t, ok := fulltextTable[sourceType]
 	if !ok {
 		return nil, fmt.Errorf("fulltext: unknown source type %q", sourceType)
 	}
 	sqlText := fmt.Sprintf(
-		"SELECT id, MATCH(%s) AGAINST (? IN NATURAL LANGUAGE MODE) AS score "+
-			"FROM %s WHERE MATCH(%s) AGAINST (? IN NATURAL LANGUAGE MODE) "+
-			"ORDER BY score DESC LIMIT ?",
+		"SELECT id, MAX(score) AS score FROM ("+
+			"SELECT id, MATCH(%s) AGAINST (? IN NATURAL LANGUAGE MODE) AS score "+
+			"FROM %s WHERE MATCH(%s) AGAINST (? IN NATURAL LANGUAGE MODE)"+
+			") AS matches "+
+			"GROUP BY id ORDER BY score DESC LIMIT ?",
 		t.columns, t.table, t.columns)
 	rows, err := g.db.QueryContext(ctx, sqlText, query, query, limit)
 	if err != nil {

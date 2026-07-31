@@ -68,9 +68,18 @@ type corpusRow struct {
 	sourceType string
 	id         string
 	scope      string // "repo" or "global"
-	title      string // fact key / decision title / task title / doc chunk title
+	title      string // fact key / decision title / task title / doc chunk hydrated title
 	body       string // fact value / decision rationale / task notes / doc chunk body
 	summary    string // decisions only; "" otherwise
+	// headingPath is doc_chunk-only: the raw heading breadcrumb
+	// (e.g. "Rust Code Style Guide > Error Handling") as chunk_markdown
+	// and the doc_chunks table store it. title, above, is the *hydrated*
+	// "{doc title} — {heading_path}" form recall.rs's load_source_row
+	// builds for matching/rerank — persist.rs's doc_chunk_embed_text uses
+	// the raw breadcrumb, not the hydrated title, so both are kept.
+	headingPath string
+	// ord is doc_chunk-only: the chunk's position within its document.
+	ord int
 }
 
 // embedText mirrors memhub's retrieval/persist.rs embed-text builders
@@ -91,11 +100,13 @@ func (r corpusRow) embedText() string {
 		}
 		return r.title
 	case "doc_chunk":
-		// r.title already carries "doc title — heading_path" (set at seed
-		// time); the embed text mirrors doc_chunk_embed_text's
-		// heading_path + body shape using the heading_path portion, which
-		// for this rig's single-chunk fixture is the same breadcrumb.
-		return fmt.Sprintf("%s\n\n%s", r.title, r.body)
+		// persist.rs's doc_chunk_embed_text(heading_path, body) — the raw
+		// breadcrumb, not the hydrated "{doc title} — {heading_path}"
+		// title (that hydration is recall-time only, in load_source_row).
+		if r.headingPath != "" {
+			return fmt.Sprintf("%s\n\n%s", r.headingPath, r.body)
+		}
+		return r.body
 	default:
 		return r.title + "\n\n" + r.body
 	}
@@ -129,6 +140,21 @@ type lexicalHit struct {
 type lexicalGatherer interface {
 	Gather(ctx context.Context, sourceType, query string, limit int) ([]lexicalHit, error)
 	Name() string
+}
+
+// noLexicalGatherer is a control, not a §8.1 lexical gather implementation:
+// it returns zero hits for every query, so runQuery's candidate pool is
+// vector-gather-only. It exists to answer one question the FULLTEXT-vs-BM25
+// comparison alone cannot: does the lexical step matter at all on this
+// golden set, or does the rerank pool end up holding the whole corpus
+// regardless of what step 1 does? See docs/spikes/m0-rig3.md §4/§7 for what
+// this measured.
+type noLexicalGatherer struct{}
+
+func (noLexicalGatherer) Name() string { return "VECTOR-ONLY (control, no lexical gather)" }
+
+func (noLexicalGatherer) Gather(context.Context, string, string, int) ([]lexicalHit, error) {
+	return nil, nil
 }
 
 // pipelineHarness bundles everything one query run needs: the seeded
@@ -319,7 +345,9 @@ func runQuery(ctx context.Context, h *pipelineHarness, query string) ([]resultHi
 }
 
 // sortLexicalHitsDesc sorts hits by raw relevance, descending, with a
-// stable id tiebreak — shared by both lexicalGatherer implementations.
+// stable id tiebreak. Used by bm25Gatherer; fulltextGatherer's SQL does its
+// own ORDER BY after the GROUP BY dedupe (fulltext.go), so it has no need
+// of this.
 func sortLexicalHitsDesc(hits []lexicalHit) {
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].raw != hits[j].raw {

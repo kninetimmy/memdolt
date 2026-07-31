@@ -151,10 +151,14 @@ func logSummary(t *testing.T, s evalSummary) {
 // TestRetrievalGolden is PRD §16's rig-3 gate: memdolt's retrieval pipeline
 // must reproduce memhub's recorded baseline (Recall@3 = 100%, 21/21, 0
 // safety failures) on the same 22-query golden set and hermetic fixture
-// shape. FULLTEXT (PRD §8.1 step 1's primary path) is measured first; the
-// in-process BM25 contingency (§8.1 R2) is always measured too so both
-// numbers are on record regardless of which one carries the gate — see
-// docs/spikes/m0-rig3.md for the recorded verdict and MD5 recommendation.
+// shape. MD5 (§19) decided Dolt FULLTEXT as the shipped lexical gather, so
+// this test's pass/fail gate binds to the FULLTEXT configuration only — a
+// run where FULLTEXT stops carrying the gate must fail loudly, not pass
+// silently on the BM25 contingency. BM25 and the vector-only control (no
+// lexical gather at all) are still measured and logged on every run, both
+// because §8.1 R2's contingency needs to stay proven working and because
+// the FULLTEXT-vs-BM25-vs-vector-only comparison is itself a recorded
+// finding — see docs/spikes/m0-rig3.md §1/§4/§7 for what it showed.
 func TestRetrievalGolden(t *testing.T) {
 	golden, err := loadGoldenFile("retrieval_golden.json")
 	if err != nil {
@@ -176,31 +180,34 @@ func TestRetrievalGolden(t *testing.T) {
 	bmSummary := runGoldenEval(t, h, golden)
 	logSummary(t, bmSummary)
 
-	// PRD §16's gate: Recall@3 >= memhub's baseline, zero safety failures.
-	// FULLTEXT is the primary §8.1 path; the BM25 contingency (§8.1 R2)
-	// only needs to carry the gate if FULLTEXT falls short. Both numbers
-	// are always measured and logged above regardless of which one wins.
-	winning, label := ftSummary, "FULLTEXT (primary)"
-	if !meetsGate(ftSummary) && meetsGate(bmSummary) {
-		winning, label = bmSummary, "BM25 (§8.1 R2 contingency)"
+	h.lexical = noLexicalGatherer{}
+	vecSummary := runGoldenEval(t, h, golden)
+	logSummary(t, vecSummary)
+	if !meetsGate(bmSummary) {
+		t.Logf("note: BM25 contingency did not clear the gate on this run (recall@3=%.4f, safety_failures=%d)",
+			bmSummary.recallAtK, bmSummary.safetyFailures)
 	}
-	t.Logf("gate config: %s", label)
+	if meetsGate(vecSummary) {
+		t.Logf("note: the vector-only control also cleared the gate — on this golden set's corpus size, "+
+			"the lexical step never had to discriminate the rerank pool (recall@3=%.4f)", vecSummary.recallAtK)
+	}
 
-	if winning.matchQueries != 21 || winning.emptyQueries != 1 {
+	// The actual gate: FULLTEXT only (MD5's shipped choice).
+	if ftSummary.matchQueries != 21 || ftSummary.emptyQueries != 1 {
 		t.Fatalf("golden query mix drifted: match=%d empty=%d, want 21/1",
-			winning.matchQueries, winning.emptyQueries)
+			ftSummary.matchQueries, ftSummary.emptyQueries)
 	}
 	var misses []string
-	for _, o := range winning.outcomes {
+	for _, o := range ftSummary.outcomes {
 		if !o.passed {
 			misses = append(misses, o.id+": "+o.failureReason)
 		}
 	}
 	if len(misses) > 0 {
-		t.Errorf("%s: recall@3=%.4f, misses:\n%s", label, winning.recallAtK, joinLines(misses))
+		t.Errorf("FULLTEXT: recall@3=%.4f, misses:\n%s", ftSummary.recallAtK, joinLines(misses))
 	}
-	if winning.safetyFailures != 0 {
-		t.Errorf("%s: %d safety failure(s) (gibberish probe leaked a hit)", label, winning.safetyFailures)
+	if ftSummary.safetyFailures != 0 {
+		t.Errorf("FULLTEXT: %d safety failure(s) (gibberish probe leaked a hit)", ftSummary.safetyFailures)
 	}
 }
 
