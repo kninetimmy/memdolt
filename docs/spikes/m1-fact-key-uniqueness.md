@@ -47,6 +47,11 @@ column, with no bound on how many superseded rows share a key.**
 - `key` needs its own B-tree index (`KEY idx_fact_key (key)`). It used to
   get one from `uk_fact_key`. Without one, `WHERE key = ?` does not fall
   back to a scan — it errors (§7).
+- Dotted-prefix filtering and fact FULLTEXT coexist on v1.88.1 when
+  `ft_facts` is declared `(value, key)`, fact retrieval uses
+  `MATCH(value, key)`, and the prefix predicate is ``key LIKE ?`` with a
+  bound dotted prefix such as `build.%` (§8). With `key` first in the
+  FULLTEXT index, that predicate errors even when the B-tree exists.
 
 ## 2. What was measured
 
@@ -58,7 +63,7 @@ column, with no bound on how many superseded rows share a key.**
 | OS | Windows 11 Pro, build 26200, 64-bit |
 | Shell | Git Bash — `GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)` |
 | Storage | disposable local Dolt repositories, all outside any git checkout |
-| Schema | PRD §6.1's `facts` columns, indexes and FULLTEXT key, before and after the change |
+| Schema | PRD §6.1's `facts` columns and live-key indexes in §§3–7; §8 records the follow-up FULLTEXT-order contract |
 
 Every repository started empty; all timestamps are fixture values, not
 observations. The heredocs and single-quoted SQL below are POSIX shell
@@ -138,7 +143,11 @@ id,key,value,superseded_by
 index a fact key has exactly one row ever, so the flow that would set
 `superseded_by` cannot run at all.
 
-## 4. The arrangement the PRD now describes, on one machine
+## 4. The live-key arrangement the PRD adopts, on one machine
+
+This uniqueness run used `ft_facts(key, value)`. The dotted-prefix
+follow-up in §8 changes only that FULLTEXT column order; it leaves every
+live-key result below intact.
 
 ### Reproduce
 
@@ -619,22 +628,54 @@ exit=0
 issue that filter, so `KEY idx_fact_key (key)` is part of the change, not
 an optimization.
 
-## 8. Adjacent finding, outside this spike's lane
+## 8. Dotted-prefix follow-up: FULLTEXT column order is the contract
 
-A prefix filter on the leading column of a FULLTEXT key errors in v1.88.1
-whether or not that column also has a B-tree index — and it errors under
-PRD §6.1's schema as written, so it predates this change:
+Issue #31 settled the adjacent finding against the same Dolt v1.88.1
+driver pinned in `go.mod`. With `ft_facts(key, value)`, a bound dotted
+prefix still fails even though `idx_fact_key` exists:
 
 ```text
-error on line 1 for query SELECT COUNT(*) AS n FROM facts WHERE `key` LIKE 'build.%': Full-Text index found in filter with unknown expression: *expression.GreaterThanOrEqual
-exit=1
+filtering facts by dotted key prefix: Error 1105: Full-Text index found in filter with unknown expression: *expression.GreaterThanOrEqual
 ```
 
-`WHERE value LIKE 'go %'` on the same table exits 0 and returns a count;
-`value` is the FULLTEXT key's second column. `live_key LIKE 'build.%'` also
-works — it is in no FULLTEXT key. PRD §6.1's dotted-namespace note expects
-prefix filtering to work for `list_facts`/`recall`, so this needs its own
-issue. Nothing in this spike or the accompanying PRD change addresses it.
+The smallest working contract is to put `value` first and `key` second in
+the FULLTEXT index, and use the same order in `MATCH`:
+
+```sql
+KEY idx_fact_key (`key`),
+UNIQUE KEY uk_fact_live_key (live_key),
+FULLTEXT KEY ft_facts (value, `key`)
+```
+
+```sql
+-- list_facts / recall prefix filter; bind "build.%"
+SELECT id FROM facts WHERE `key` LIKE ? ORDER BY id;
+
+-- fact lexical gather
+MATCH(value, `key`) AGAINST (? IN NATURAL LANGUAGE MODE)
+```
+
+`TestFactKeyPrefixAndFulltextContract` commits the measurement. Its four
+facts include three `build.*` keys, one `env.*` control, and a superseded
+`build.command` row. The prefix query returns exactly:
+
+```text
+fact-build-cache
+fact-build-new
+fact-build-old
+```
+
+The configured FULLTEXT gather for `cargo` returns both
+`fact-build-new` and superseded `fact-build-old`; the schema change does
+not make retrieval discard the row that §8.1 is designed to penalize.
+Before the column-order change the regression failed with the error above;
+after changing both the index and `MATCH` order it passed.
+
+The supported filter shape is deliberately narrow: a literal dotted
+namespace prefix plus one terminal `%`, passed as a bound value (for
+example `build.%`). There is no contract for a leading wildcard, an infix
+pattern, or general substring search over `key`; content search remains
+the FULLTEXT path. The prefix filter includes live and superseded facts.
 
 ## 9. What the PRD gives up
 
@@ -678,5 +719,7 @@ once when it does. Concretely, M1 owes:
   operator, and clear reviewed records that verification shows are moot;
 - `STORED`, not `VIRTUAL` (§7), with the FULLTEXT check that would catch a
   future "optimization" back to `VIRTUAL`;
+- `ft_facts(value, key)` paired with `MATCH(value, key)`, so the supported
+  bound dotted-prefix filter remains usable (§8);
 - application-level checks for the chain invariants §9 lists, if the
   product wants them.

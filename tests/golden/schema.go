@@ -28,8 +28,10 @@ var schemaDDL = []string{
 		verified_at DATETIME NULL,
 		created_at DATETIME,
 		superseded_by CHAR(26) NULL,
-		UNIQUE KEY uk_fact_key (` + "`key`" + `),
-		FULLTEXT KEY ft_facts (` + "`key`" + `, value)
+		live_key VARCHAR(255) GENERATED ALWAYS AS (IF(superseded_by IS NULL, ` + "`key`" + `, NULL)) STORED,
+		KEY idx_fact_key (` + "`key`" + `),
+		UNIQUE KEY uk_fact_live_key (live_key),
+		FULLTEXT KEY ft_facts (value, ` + "`key`" + `)
 	)`,
 	`CREATE TABLE decisions (
 		id CHAR(26) PRIMARY KEY,
