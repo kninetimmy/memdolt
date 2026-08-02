@@ -239,14 +239,22 @@ A proposal branch's single commit inserts the actual row (fact/decision) with `s
 
 ### 6.3 Conflict semantics
 
-Cell-level three-way merge with `dolt_conflicts_<table>` base/ours/theirs rows and `dolt_conflicts_resolve` **[V]**. Expected conflict classes and policy **[design]**:
+Dolt v1.88.1 exposes two distinct failure surfaces in the measured M1 cases (reproduction and captured output: `docs/spikes/m1-conflict-surfaces.md`) **[V]**:
+
+- **Data conflicts** expose base/ours/theirs rows in `dolt_conflicts_<table>` and are resolved through `dolt conflicts resolve`.
+- **Merge-created constraint violations** expose offending rows in `dolt_constraint_violations_<table>` and are not resolved by `dolt conflicts resolve`, even when that command exits 0.
+
+Expected conflict classes and fail-closed policy **[design]**:
 
 | Conflict | When | Resolution path |
 |---|---|---|
-| same fact `key`, different `value` (UNIQUE collision or same-row cell) | two machines edited the same fact between syncs | elicited: show both values + blame; operator picks ours/theirs/manual |
-| task status races (done vs edited) | benign | auto-resolve newest-`updated_at`, log it |
-| notes / ULID-keyed inserts | never conflict by construction | — |
+| same fact `key`, distinct ULID rows | two machines inserted different values for one fact key between syncs | constraint violation: show every offending row + blame; operator selects or supplies the durable value; atomically restore the UNIQUE invariant and remove only the reviewed violation rows |
+| same-row cell edits, including a fact `value` | two machines edited one row between syncs | data conflict: show base/ours/theirs + blame; operator picks ours/theirs/manual |
+| task done-versus-edit | one machine completed a task while another edited the same row | data conflict: never choose a whole row by newest `updated_at`; show base/ours/theirs and require an operator-approved final row, preserving `done` unless the operator explicitly reopens it |
+| notes / inserts whose only key is a fresh ULID | no same-row conflict by construction | still require both failure surfaces to be empty before commit |
 | schema conflicts | impossible in normal operation (agents can't ALTER; migrations converge before pull, §6.4) | refuse + instruct upgrade |
+
+After any nonzero merge, the client stops before commit and queries both per-table surfaces. It refuses unknown or unattributed rows. For a data conflict it writes only the operator-approved row through the conflict-resolution path. For a constraint violation it repairs the underlying rows and removes the matching reviewed entries from `dolt_constraint_violations_<table>` in one transaction; `dolt conflicts resolve` is not used as a substitute. Before concluding the merge, it re-queries both surfaces and runs constraint verification for every affected table. Any remaining row or failed verification keeps the merge blocked. **[design]**
 
 ### 6.4 Migrations & version skew
 
