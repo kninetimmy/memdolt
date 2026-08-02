@@ -18,3 +18,4 @@ agent_docs/PROJECT_LEDGER.md
 # tests/parity/fixturegen is a standalone Rust crate (M0 rig 2); its build
 # output isn't part of the fixtures it generates and shouldn't be committed.
 /tests/parity/fixturegen/target/
+.codex/agents/
