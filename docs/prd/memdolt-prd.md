@@ -239,7 +239,9 @@ A proposal branch's single commit inserts the actual row (fact/decision) with `s
 
 ### 6.3 Conflict semantics
 
-Dolt v1.88.1 exposes two distinct failure surfaces in the measured M1 cases (reproduction and captured output: `docs/spikes/m1-conflict-surfaces.md`) **[V]**:
+Dolt v1.88.1 merges one row's cells three-way and independently: two branches that modify disjoint columns of the same `tasks` row (`status` on one, `title` on the other, with neither writing `updated_at`) merge to a row carrying both edits — exit 0, automatic merge commit, no row in `dolt_conflicts_tasks`, no review opportunity. A conflict is raised per cell whose two modifications disagree, not per row two branches touched (reproduction and captured output: `docs/spikes/m1-conflict-surfaces.md` §5) **[V]**.
+
+Where the merge does fail, v1.88.1 exposes two distinct failure surfaces in the measured M1 cases **[V]**:
 
 - **Data conflicts** expose base/ours/theirs rows in `dolt_conflicts_<table>` and are resolved through `dolt conflicts resolve`.
 - **Merge-created constraint violations** expose offending rows in `dolt_constraint_violations_<table>` and are not resolved by `dolt conflicts resolve`, even when that command exits 0.
@@ -250,11 +252,13 @@ Expected conflict classes and fail-closed policy **[design]**:
 |---|---|---|
 | same fact `key`, distinct ULID rows | two machines inserted different values for one fact key between syncs | constraint violation: show every offending row + blame; operator selects or supplies the durable value; atomically restore the UNIQUE invariant and remove only the reviewed violation rows |
 | same-row cell edits, including a fact `value` | two machines edited one row between syncs | data conflict: show base/ours/theirs + blame; operator picks ours/theirs/manual |
-| task done-versus-edit | one machine completed a task while another edited the same row | data conflict: never choose a whole row by newest `updated_at`; show base/ours/theirs and require an operator-approved final row, preserving `done` unless the operator explicitly reopens it |
+| task done-versus-edit | one machine completed a task while another edited the same row, both writing `updated_at` (without that shared cell the two edits auto-merge, above) | data conflict: never choose a whole row by newest `updated_at`; show base/ours/theirs and require an operator-approved final row, preserving `done` unless the operator explicitly reopens it |
 | notes / inserts whose only key is a fresh ULID | no same-row conflict by construction | still require both failure surfaces to be empty before commit |
 | schema conflicts | impossible in normal operation (agents can't ALTER; migrations converge before pull, §6.4) | refuse + instruct upgrade |
 
 After any nonzero merge, the client stops before commit and queries both per-table surfaces. It refuses unknown or unattributed rows. For a data conflict it writes only the operator-approved row through the conflict-resolution path. For a constraint violation it repairs the underlying rows and removes the matching reviewed entries from `dolt_constraint_violations_<table>` in one transaction; `dolt conflicts resolve` is not used as a substitute. Before concluding the merge, it re-queries both surfaces and runs constraint verification for every affected table. Any remaining row or failed verification keeps the merge blocked. **[design]**
+
+Because the merge is per-cell, which same-row `tasks` races reach that review at all is decided by the write path, not by Dolt: stamping `updated_at` on every task mutation makes every such race a conflict, while writing only the columns a caller changed lets Dolt combine disjoint task edits unreviewed. `tasks` is a direct lane (§3.1), so either is admissible — but the client picks one deliberately rather than leaving it to whichever `UPDATE` a call site happens to emit. **[design]**
 
 ### 6.4 Migrations & version skew
 
