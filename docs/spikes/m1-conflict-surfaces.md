@@ -60,6 +60,13 @@ reproduced every result recorded for them, commit hashes excepted.
 
 ## 3. Same-key fact inserts
 
+The DDL below is PRD §6.1's `facts` as it stood on this spike's date, with
+`UNIQUE KEY uk_fact_key (key)`. §6.1 has since scoped that uniqueness to
+live rows; the same merge was re-measured against the current schema in
+`m1-fact-key-uniqueness.md` §5 and reproduced this section's outcome —
+two rows in `dolt_constraint_violations_facts`, none in
+`dolt_conflicts_facts` — under the new index name.
+
 ### Reproduce
 
 Run in a fresh directory:
