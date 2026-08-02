@@ -3,7 +3,7 @@
 # a Delivery PR.
 
 schema_version  = 1
-config_revision = "sha256:3c83e176f45b"
+config_revision = "sha256:f4f0952bc29c"
 
 [concurrency]
 max_subagents = 3
@@ -39,4 +39,28 @@ effort = "xhigh"
 
 [hosts.claude.roles.review_downgrade]
 model  = "claude-sonnet-5"
+effort = "high"
+
+[hosts.codex.roles.architect]
+model  = "gpt-5.6-sol"
+effort = "xhigh"
+
+[hosts.codex.roles.scout]
+model  = "gpt-5.6-luna"
+effort = "max"
+
+[hosts.codex.roles.implementer]
+model  = "gpt-5.6-terra"
+effort = "max"
+
+[hosts.codex.roles.specialist]
+model  = "gpt-5.6-sol"
+effort = "max"
+
+[hosts.codex.roles.reviewer]
+model  = "gpt-5.6-sol"
+effort = "xhigh"
+
+[hosts.codex.roles.review_downgrade]
+model  = "gpt-5.6-sol"
 effort = "high"
