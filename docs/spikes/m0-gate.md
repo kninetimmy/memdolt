@@ -37,10 +37,12 @@ The four rigs' verdicts, in the words each note used:
 | 3 — retrieval golden gate | `docs/spikes/m0-rig3.md` | **"PASS on the letter of the gate — Dolt FULLTEXT reproduces memhub's baseline — but the measurement cannot discriminate the lexical step on this golden set, and that is itself the headline finding, not a footnote."** |
 | 4 — Dolt hub, two-client round trip | `docs/spikes/m0-rig4.md` | **PASS** |
 
-Each of those four notes states in its own words that its verdict covers
-only its own rig and that M0's decision needs the others. Four passes do
-not make a milestone verdict by addition: what makes this a GO is the
-three conditions in §3, and what bounds it is §4.
+Each of those four notes bounds its own verdict, though not all in the
+same way: rigs 1 and 4 say in a sentence that their verdict is that rig
+only and that M0's go/no-go needs the others, while rigs 2 and 3 do it
+through a "What this PASS does and does not license" section instead.
+Four passes do not make a milestone verdict by addition: what makes this a
+GO is the three conditions in §3, and what bounds it is §4.
 
 ## 2. Which rig answers which gate condition
 
@@ -150,7 +152,14 @@ not in the rig note).
 **How narrowly this is met.** The soak **inserts only**. It does not
 update the same row from two writers, delete, branch, or merge, so PRD
 §6.3's conflict machinery is entirely unexercised and M1 must not read
-this PASS as covering merges. It is Windows/amd64 only — the harshest of
+this PASS as covering merges. **Cross-process read visibility is checked
+at aggregate granularity only**, so the 2,376,072-read figure above is
+narrower than it looks: each reader verifies key by key the writes *its
+own process* was told were committed, and never another process's keys,
+because knowing which of those are committed would need coordination the
+rig deliberately does not have. What does span processes is the row count,
+which every reader samples and which never decreased. It is Windows/amd64
+only — the harshest of
 the three targets for this rig, but Linux and macOS behaviour of `flock`,
 `SIGKILL` and port exhaustion is inferred from code, not measured. It
 kills processes, not machines: nothing here speaks to power loss or a
