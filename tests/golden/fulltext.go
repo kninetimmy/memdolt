@@ -25,7 +25,7 @@ var fulltextTable = map[string]struct {
 	table   string
 	columns string
 }{
-	"fact":      {"facts", "`key`, value"},
+	"fact":      {"facts", "value, `key`"},
 	"decision":  {"decisions", "title, rationale"},
 	"task":      {"tasks", "title, notes"},
 	"doc_chunk": {"doc_chunks", "heading_path, body"},
