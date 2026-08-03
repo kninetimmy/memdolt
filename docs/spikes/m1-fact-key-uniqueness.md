@@ -44,14 +44,19 @@ column, with no bound on how many superseded rows share a key.**
   `MATCH … AGAINST` on the same table: the FULLTEXT index returns nothing
   (§7). A `VIRTUAL` column would have passed every uniqueness test in this
   spike and destroyed recall.
-- `key` needs its own B-tree index (`KEY idx_fact_key (key)`). It used to
-  get one from `uk_fact_key`. Without one, `WHERE key = ?` does not fall
-  back to a scan — it errors (§7).
-- Dotted-prefix filtering and fact FULLTEXT coexist on v1.88.1 when
-  `ft_facts` is declared `(value, key)`, fact retrieval uses
-  `MATCH(value, key)`, and the prefix predicate is ``key LIKE ?`` with a
-  bound dotted prefix such as `build.%` (§8). With `key` first in the
-  FULLTEXT index, that predicate errors even when the B-tree exists.
+- `KEY idx_fact_key (key)` is not correctness machinery under the current
+  `ft_facts(value, key)` order. The earlier `ft_facts(key, value)` run put
+  `key` first and made equality fail without that B-tree; after the column
+  order changed, exact and dotted-prefix key filters both work with
+  `idx_fact_key` removed (§7). The PRD keeps it as an ordinary lookup index.
+- The FULLTEXT order is a measured tradeoff. Before the change,
+  `ft_facts(key, value)` let standalone `value LIKE 'go %'` succeed but
+  made the supported bound ``key LIKE 'build.%'`` filter fail even with
+  `idx_fact_key`. After the change, `ft_facts(value, key)` paired with
+  `MATCH(value, key)` makes that key filter work over live and superseded
+  facts, while standalone equality and prefix filters on `value` fail with
+  Dolt Error 1105 (§8). The old successful value-prefix behavior is
+  deliberately removed; content queries use `MATCH`.
 
 ## 2. What was measured
 
@@ -63,7 +68,7 @@ column, with no bound on how many superseded rows share a key.**
 | OS | Windows 11 Pro, build 26200, 64-bit |
 | Shell | Git Bash — `GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)` |
 | Storage | disposable local Dolt repositories, all outside any git checkout |
-| Schema | PRD §6.1's `facts` columns and live-key indexes in §§3–7; §8 records the follow-up FULLTEXT-order contract |
+| Schema | PRD §6.1's `facts` columns and live-key indexes in §§3–6; §7 preserves the generated-column storage control and reruns key filters without `idx_fact_key`; §8 records the FULLTEXT-order contract |
 
 Every repository started empty; all timestamps are fixture values, not
 observations. The heredocs and single-quoted SQL below are POSIX shell
@@ -571,10 +576,11 @@ supersede-and-replace is the routine accept path, so this stops being an
 exotic case and becomes one the merge lane must recognize by re-verifying
 before it escalates to an operator. PRD §6.3 carries that policy.
 
-## 7. Why `STORED`, and why `key` keeps an index
+## 7. Why `STORED` remains, and why `idx_fact_key` is not correctness machinery
 
-Two arrangements pass every uniqueness test in §4 and §5 and are still
-wrong.
+The generated column's storage class and the separate `key` B-tree were
+independent controls. The storage finding remains load-bearing; the B-tree
+finding changed when `ft_facts` changed order.
 
 **`VIRTUAL` breaks FULLTEXT.** Identical tables, one column definition
 apart, one row inserted, same query:
@@ -608,10 +614,10 @@ matched nothing, and the same table with `STORED` and without
 `idx_fact_key` matched the row. The generated column's storage class is
 the variable.
 
-**`key` must keep a B-tree index.** `uk_fact_key` used to provide one.
-With `uk_fact_live_key` replacing it, `key` is left as the leading column
-of a FULLTEXT key, and an ordinary equality filter on it does not fall back
-to a scan:
+**Before the FULLTEXT-order change, `key` needed a B-tree for equality.**
+`uk_fact_key` used to provide one. With `uk_fact_live_key` replacing it
+and `ft_facts(key, value)` still putting `key` first, an ordinary equality
+filter on `key` did not fall back to a scan:
 
 ```text
 == without idx_fact_key: SELECT ... WHERE `key` = 'build.command' ==
@@ -624,9 +630,27 @@ id
 exit=0
 ```
 
-`list_facts`, the §11.1 conflict elicitation and the history lookups all
-issue that filter, so `KEY idx_fact_key (key)` is part of the change, not
-an optimization.
+That captured result remains true for the old order. It is not true under
+the current `ft_facts(value, key)` order, where `key` is non-leading. A
+fresh embedded-driver run created the current `facts` shape **without**
+`idx_fact_key`, inserted one live and one superseded `build.command` row
+plus `build.cache` and `env.shell` controls, and executed both filters:
+
+```text
+== without idx_fact_key: WHERE `key` = 'build.command' ==
+fact-build-new
+fact-build-old
+
+== without idx_fact_key: WHERE `key` LIKE 'build.%' ==
+fact-build-cache
+fact-build-new
+fact-build-old
+```
+
+Both queries succeeded. `KEY idx_fact_key (key)` remains the ordinary
+lookup index in the PRD's planned schema, but the exact and prefix filters
+do not depend on it for correctness. The `STORED`-versus-`VIRTUAL`
+FULLTEXT result above is separate and unchanged.
 
 ## 8. Dotted-prefix follow-up: FULLTEXT column order is the contract
 
@@ -638,8 +662,30 @@ prefix still fails even though `idx_fact_key` exists:
 filtering facts by dotted key prefix: Error 1105: Full-Text index found in filter with unknown expression: *expression.GreaterThanOrEqual
 ```
 
-The smallest working contract is to put `value` first and `key` second in
-the FULLTEXT index, and use the same order in `MATCH`:
+That old order also had behavior this document previously recorded:
+``WHERE value LIKE 'go %'`` exited 0 and returned a count because `value`
+was the FULLTEXT key's non-leading column. The current order reverses both
+results:
+
+| `ft_facts` order | Standalone `key` filters | Standalone `value` filters |
+|---|---|---|
+| `(key, value)` — before | equality needed `idx_fact_key`; dotted prefix failed even with it | `value LIKE 'go %'` succeeded |
+| `(value, key)` — after/current | exact and dotted prefix succeed, including without `idx_fact_key` | equality and prefix both fail with Error 1105 |
+
+The fresh current-order failures are:
+
+```text
+== WHERE value = 'current cargo command' ==
+Error 1105: Full-Text index found in filter with unknown expression: *expression.Equals
+
+== WHERE value LIKE 'current%' ==
+Error 1105: Full-Text index found in filter with unknown expression: *expression.GreaterThanOrEqual
+```
+
+The change therefore removes the old successful standalone value-prefix
+filter in exchange for the supported key-prefix filter; fact content
+queries use `MATCH`. The contract puts `value` first and `key` second in
+the FULLTEXT index, and uses the same order in `MATCH`:
 
 ```sql
 KEY idx_fact_key (`key`),
@@ -655,9 +701,14 @@ SELECT id FROM facts WHERE `key` LIKE ? ORDER BY id;
 MATCH(value, `key`) AGAINST (? IN NATURAL LANGUAGE MODE)
 ```
 
-`TestFactKeyPrefixAndFulltextContract` commits the measurement. Its four
-facts include three `build.*` keys, one `env.*` control, and a superseded
-`build.command` row. The prefix query returns exactly:
+`TestFactKeyPrefixAndFulltextContract` commits the measurement in
+`internal/store/localdolt/fulltext_contract_test.go`. It has no build tag,
+uses a disposable embedded Dolt store, and runs under default
+`go test ./...` without ONNX runtime/model environment variables; the
+retrieval golden rig remains separately opt-in. Its test-only `facts`
+schema intentionally omits `idx_fact_key`. Four facts include three
+`build.*` keys, one `env.*` control, and a superseded `build.command` row.
+The prefix query returns exactly:
 
 ```text
 fact-build-cache
@@ -670,6 +721,14 @@ The configured FULLTEXT gather for `cargo` returns both
 not make retrieval discard the row that §8.1 is designed to penalize.
 Before the column-order change the regression failed with the error above;
 after changing both the index and `MATCH` order it passed.
+
+The same default regression creates all five current FULLTEXT keys and
+establishes that this is a leading-column rule, not a `facts.value` quirk.
+Standalone equality and prefix filters fail with Error 1105 for
+`facts.value`, `decisions.title`, `tasks.title`, `session_notes.text`, and
+`doc_chunks.heading_path`. Measured controls still work:
+`decisions.rationale = ?` (a non-leading FULLTEXT column) and
+`decisions.status = ?` (not in a FULLTEXT key).
 
 The supported filter shape is deliberately narrow: a literal dotted
 namespace prefix plus one terminal `%`, passed as a bound value (for
@@ -707,10 +766,12 @@ a reviewable constraint violation (§5) instead of two silent rows.
 
 ## 10. Scope consequence
 
-This spike changes PRD §6.1's `facts` DDL and the sentences that describe what
-it guarantees (§3.2, §6.2, §6.3, §8.1, §11.1). It adds no code and no
-migration; `internal/schema/` does not exist yet, and M1 writes this DDL
-once when it does. Concretely, M1 owes:
+This spike changes PRD §6.1's `facts` DDL and the sentences that describe
+what it guarantees (§3.2, §6.2, §6.3, §8.1, §11.1). This correction adds
+no M1 production schema, query behavior, or migration;
+`internal/schema/` does not exist yet, and M1 writes this DDL once when it
+does. The only executable addition is the default-path, disposable
+embedded-Dolt regression described in §8. Concretely, M1 owes:
 
 - the write ordering from §4 step D — `superseded_by` link before the
   replacement insert, and the same order inside a proposal branch;
@@ -720,6 +781,9 @@ once when it does. Concretely, M1 owes:
 - `STORED`, not `VIRTUAL` (§7), with the FULLTEXT check that would catch a
   future "optimization" back to `VIRTUAL`;
 - `ft_facts(value, key)` paired with `MATCH(value, key)`, so the supported
-  bound dotted-prefix filter remains usable (§8);
+  bound dotted-prefix filter remains usable and standalone `value`
+  equality/prefix filters remain outside the contract (§8);
+- no correctness dependency on `idx_fact_key`; it is an ordinary planned
+  lookup index, and the no-index regression gates the driver behavior (§7);
 - application-level checks for the chain invariants §9 lists, if the
   product wants them.
