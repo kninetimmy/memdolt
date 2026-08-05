@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/singleowner"
@@ -34,6 +37,65 @@ const maxErrorBodyBytes = 512
 // docs/spikes/m0-rig1.md.
 const ownerMaxIdleConns = 64
 
+// How a client paces the probes one transport failure may cause.
+//
+// Rig 1 measured 474,234 connection-refused failures in about a minute from
+// clients that redialled a dead owner without pacing, and the dial failures
+// that followed (WSAENOBUFS) were caused by that hammering rather than by
+// anything the store did. See docs/spikes/m0-rig1.md, F4.
+const (
+	// reconnectAttempts bounds the probes a single transport failure may
+	// cause.
+	reconnectAttempts = 5
+
+	// reconnectBaseDelay is the pause before the second probe; each further
+	// probe waits twice as long, up to reconnectMaxDelay. The five attempts
+	// are therefore spaced 0, 100, 200, 400 and 400 ms — about 1.1 s in
+	// total, long enough to cover an owner restarting and short enough for
+	// a CLI to wait through. Only an owner that holds the pidfile without
+	// answering costs all five: a live owner is adopted on the first probe,
+	// and a free lock is a verdict on the first probe.
+	reconnectBaseDelay = 100 * time.Millisecond
+	reconnectMaxDelay  = 400 * time.Millisecond
+)
+
+// ErrNoLiveOwner reports that a transport failure was followed by a probe
+// finding no live owner: either there is no pidfile, or its record is
+// orphaned. The store is unheld, so the caller may open it directly (PRD
+// §5.2's design response: no live server means the CLI opens the store
+// itself).
+//
+// It says nothing about the operation that failed. That operation reached a
+// transport failure, so its outcome remains unknown — an owner can commit a
+// write and die before its answer arrives (docs/spikes/m0-rig1.md, F3).
+var ErrNoLiveOwner = errors.New("ipc: no live owner holds the store; it may be opened directly")
+
+// pacing spaces the probes made after a transport failure and bounds how
+// many there are.
+type pacing struct {
+	attempts int
+	base     time.Duration
+	max      time.Duration
+}
+
+// delay returns the pause before attempt n, counting from 1. The first
+// attempt is immediate: reading the pidfile is cheap, and a free advisory
+// lock is already proof that the owner it names is gone. Each later attempt
+// waits twice as long as the one before it, up to max.
+func (p pacing) delay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 0
+	}
+	d := p.base
+	for i := 2; i < attempt && d < p.max; i++ {
+		d *= 2
+	}
+	if d > p.max {
+		return p.max
+	}
+	return d
+}
+
 // StatusError reports that the owner answered with a status other than
 // 200 OK.
 //
@@ -56,9 +118,33 @@ func (e *StatusError) Error() string {
 }
 
 // Client talks to the process that owns a repository's store.
+//
+// A client outlives the owner it was dialled for. The endpoint it addresses
+// is not fixed at Dial: after a transport failure PostJSON re-probes the
+// repository's pidfile and adopts whatever live owner it finds, including a
+// replacement listening on a different port with a different token. It is
+// safe for concurrent use.
 type Client struct {
-	baseURL string
-	token   secret
+	// baseDir is the repository whose pidfile advertises the owner. It is
+	// what lets a client that lost its transport find the owner again.
+	baseDir string
+
+	// pacing and probe are fields rather than package constants so that the
+	// reconnection test can count attempts and measure their spacing.
+	// Production clients get the constants above and probeOwner.
+	pacing pacing
+	probe  func(context.Context, string) (Status, OwnerInfo, ownerDetail, error)
+
+	// mu guards the endpoint a request is addressed to, which changes when
+	// the client adopts a replacement owner.
+	mu         sync.Mutex
+	generation uint64
+	baseURL    string
+	token      secret
+
+	// reconnecting serializes re-probing, so that N requests failing
+	// together cause one round of probes rather than N.
+	reconnecting sync.Mutex
 
 	// http bounds a liveness probe at probeTimeout.
 	http *http.Client
@@ -68,7 +154,9 @@ type Client struct {
 	// under concurrent load can legitimately take longer than a liveness
 	// probe may, so its deadline belongs to the caller's context. It has a
 	// connection pool of its own, so a process dials once and keeps the
-	// client rather than dialling per operation.
+	// client rather than dialling per operation — including across a
+	// reconnection, which replaces the address a request is sent to and not
+	// the pool it is sent over.
 	owner *http.Client
 }
 
@@ -87,32 +175,121 @@ func ownerTransport() *http.Transport {
 // Dial reads the repository's pidfile and returns a client for the owner
 // it names. It fails if no live process holds the pidfile.
 func Dial(baseDir string) (*Client, error) {
-	paths, err := layout.New(baseDir)
+	detail, err := heldEndpoint(baseDir)
 	if err != nil {
 		return nil, err
 	}
+	return newClient(baseDir, detail), nil
+}
+
+// heldEndpoint returns the endpoint advertised by a pidfile whose lock is
+// held. It reports the pidfile's state rather than the owner's liveness:
+// confirming that the process on the other end is the memdolt owner it
+// claims to be is Probe's job.
+func heldEndpoint(baseDir string) (ownerDetail, error) {
+	paths, err := layout.New(baseDir)
+	if err != nil {
+		return ownerDetail{}, err
+	}
 	owner, state, err := singleowner.Inspect(paths.PidFile())
 	if err != nil {
-		return nil, fmt.Errorf("ipc: inspect pidfile: %w", err)
+		return ownerDetail{}, fmt.Errorf("ipc: inspect pidfile: %w", err)
 	}
 	if state != singleowner.StateHeld {
-		return nil, fmt.Errorf("ipc: no live owner for %s (pidfile is %v)", baseDir, state)
+		return ownerDetail{}, fmt.Errorf("ipc: no live owner for %s (pidfile is %v)", baseDir, state)
 	}
 	_, detail, err := ownerInfoWithDetail(owner)
 	if err != nil {
-		return nil, fmt.Errorf("ipc: %w", err)
+		return ownerDetail{}, fmt.Errorf("ipc: %w", err)
 	}
-	return newClient(detail), nil
+	return detail, nil
 }
 
-func newClient(detail ownerDetail) *Client {
-	return &Client{
-		// The token is never part of the URL: net/http embeds the URL in
-		// *url.Error, which callers log.
-		baseURL: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(detail.Port)),
-		token:   detail.Token,
+func newClient(baseDir string, detail ownerDetail) *Client {
+	c := &Client{
+		baseDir: baseDir,
+		pacing:  pacing{attempts: reconnectAttempts, base: reconnectBaseDelay, max: reconnectMaxDelay},
+		probe:   probeOwner,
 		http:    &http.Client{Timeout: probeTimeout},
 		owner:   &http.Client{Transport: ownerTransport()},
+	}
+	c.adopt(detail)
+	return c
+}
+
+// adopt points the client at an owner's endpoint.
+func (c *Client) adopt(detail ownerDetail) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// The token is never part of the URL: net/http embeds the URL in
+	// *url.Error, which callers log.
+	c.baseURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(detail.Port))
+	c.token = detail.Token
+	c.generation++
+}
+
+// endpoint returns the address and credential the next request is to use,
+// with the generation they belong to. A caller whose request failed on
+// generation g and finds the client already past g knows another caller
+// re-established the transport on its behalf.
+func (c *Client) endpoint() (uint64, string, secret) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation, c.baseURL, c.token
+}
+
+// reconnect re-establishes transport after the request sent on generation
+// gen hit a transport failure.
+//
+// It never resubmits that request. A write over IPC is at-least-once — rig
+// 1 caught an owner committing a write and dying before its answer arrived
+// (docs/spikes/m0-rig1.md, F3) — and retry-safety waits for M1's
+// client-minted ULIDs, so what is re-made here is the connection and
+// nothing else.
+//
+// It ends in one of three ways: nil, meaning a live owner is now addressed
+// and the next operation reaches it; an error matching ErrNoLiveOwner,
+// meaning the pidfile shows the store is unheld and the caller may open it
+// directly; or a bounded failure after pacing.attempts probes.
+func (c *Client) reconnect(ctx context.Context, gen uint64) error {
+	c.reconnecting.Lock()
+	defer c.reconnecting.Unlock()
+
+	if current, _, _ := c.endpoint(); current != gen {
+		return nil
+	}
+
+	var last error
+	for attempt := 1; attempt <= c.pacing.attempts; attempt++ {
+		if err := wait(ctx, c.pacing.delay(attempt)); err != nil {
+			return err
+		}
+		status, _, detail, err := c.probe(ctx, c.baseDir)
+		switch {
+		case err != nil:
+			// Probe fails closed, so an owner that holds the pidfile but
+			// does not answer yet is an error rather than a verdict. That
+			// is the case the further attempts exist for.
+			last = err
+		case status == StatusOwnerLive:
+			c.adopt(detail)
+			return nil
+		default:
+			return fmt.Errorf("%w (pidfile is %s)", ErrNoLiveOwner, status)
+		}
+	}
+	return fmt.Errorf("ipc: no owner answered for %s in %d attempts: %w", c.baseDir, c.pacing.attempts, last)
+}
+
+func wait(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
 	}
 }
 
@@ -128,22 +305,47 @@ func newClient(detail ownerDetail) *Client {
 // A non-2xx answer is returned as *StatusError; anything else is a
 // transport failure, and the two mean different things to a caller that
 // has to decide whether a write happened.
+//
+// A transport failure additionally re-establishes the connection, so that
+// the caller's next operation reaches the current owner without the caller
+// rebuilding anything. It does not resubmit this operation, whose outcome
+// stays unknown; see reconnect. The error it returns reports the transport
+// failure either way, and matches ErrNoLiveOwner when the re-probe found
+// the store unheld.
 func (c *Client) PostJSON(ctx context.Context, path string, request, response any) error {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encode request for %s: %w", path, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	gen, baseURL, token := c.endpoint()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build request for %s: %w", path, err)
 	}
-	req.Header.Set(TokenHeader, string(c.token))
+	req.Header.Set(TokenHeader, string(token))
 	req.Header.Set("Content-Type", "application/json")
 
+	// net/http replays a request onto a fresh connection only when it is
+	// replayable, which a POST is not unless it carries an idempotency
+	// header. Nothing here sets one, and nothing here should: a write whose
+	// answer was lost may already have been applied (F3), so neither this
+	// package nor the transport beneath it may turn one submission into
+	// two. The one replay it does make regardless — a pooled connection
+	// that died before any byte of the request was written — cannot reach
+	// the store twice, because the owner never saw the first attempt.
 	resp, err := c.owner.Do(req)
 	if err != nil {
-		return fmt.Errorf("request %s: %w", path, err)
+		failed := fmt.Errorf("request %s: %w", path, err)
+		// A cancelled or expired context is the caller's doing, not the
+		// owner's; re-probing would only rediscover the deadline.
+		if ctx.Err() != nil {
+			return failed
+		}
+		if reconnectErr := c.reconnect(ctx, gen); reconnectErr != nil {
+			return fmt.Errorf("%w: %w", failed, reconnectErr)
+		}
+		return failed
 	}
 	// Draining before closing is what lets net/http put the connection back
 	// in the pool. A body closed with bytes still in it costs a connection
@@ -168,15 +370,20 @@ func (c *Client) PostJSON(ctx context.Context, path string, request, response an
 }
 
 // Health asks the owner to identify itself.
+//
+// Unlike PostJSON, it does not reconnect on a transport failure: an
+// unanswered health request is Probe's evidence, and Probe builds a client
+// to make it. Recovering here would re-enter Probe through that client.
 func (c *Client) Health(ctx context.Context) (Health, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+HealthPath, nil)
+	_, baseURL, token := c.endpoint()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+HealthPath, nil)
 	if err != nil {
 		return Health{}, fmt.Errorf("build health request: %w", err)
 	}
-	req.Header.Set(TokenHeader, string(c.token))
+	req.Header.Set(TokenHeader, string(token))
 
 	resp, err := c.http.Do(req)
 	if err != nil {

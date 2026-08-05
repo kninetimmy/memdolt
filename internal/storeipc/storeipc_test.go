@@ -7,7 +7,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kninetimmy/memdolt/internal/ipc"
@@ -40,6 +42,13 @@ func baseDir(t *testing.T) string {
 // endpoint, exactly as the owning process does.
 func startOwner(t *testing.T) (string, *localdolt.Store, *ipc.Server) {
 	t.Helper()
+	return startOwnerWrapping(t, nil)
+}
+
+// startOwnerWrapping is startOwner with the owner's routes wrapped, which is
+// how a test puts a fault between the store and the answer that reports it.
+func startOwnerWrapping(t *testing.T, wrap func(http.Handler) http.Handler) (string, *localdolt.Store, *ipc.Server) {
+	t.Helper()
 	base := baseDir(t)
 
 	st, err := localdolt.New(localdolt.Config{BaseDir: base, Actor: testActor, Logger: discardLogger()})
@@ -54,6 +63,9 @@ func startOwner(t *testing.T) (string, *localdolt.Store, *ipc.Server) {
 	routes, err := storeipc.NewHandler(storeipc.Config{Store: st, Logger: discardLogger()})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
+	}
+	if wrap != nil {
+		routes = wrap(routes)
 	}
 	srv, err := ipc.Listen(ipc.Config{BaseDir: base, Handler: routes, Logger: discardLogger()})
 	if err != nil {
@@ -167,6 +179,124 @@ func TestARefusedWriteIsDistinguishableFromALostAnswer(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(status.Body), []byte("no_such_table")) {
 		t.Fatalf("owner's answer %q does not say why the write failed", status.Body)
+	}
+}
+
+// dropFirstAnswer runs the owner's routes and then aborts the connection
+// before the first answer is written, which is the failure rig 1 caught:
+// the owner applies the write and the client never learns that it did
+// (docs/spikes/m0-rig1.md, F3).
+func dropFirstAnswer(inner http.Handler) http.Handler {
+	var dropped atomic.Bool
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !dropped.CompareAndSwap(false, true) {
+			inner.ServeHTTP(w, r)
+			return
+		}
+		// The answer is written to a recorder that goes nowhere, and then
+		// the connection is closed without one; net/http closes it quietly
+		// on ErrAbortHandler.
+		inner.ServeHTTP(httptest.NewRecorder(), r)
+		panic(http.ErrAbortHandler)
+	})
+}
+
+// TestALostAnswerIsNotResubmitted covers the acceptance criterion that the
+// client machinery never resubmits the operation that hit a transport
+// failure. A write over IPC is at-least-once, so a resubmission is a
+// duplicate write, and M0 has no way to make one harmless.
+func TestALostAnswerIsNotResubmitted(t *testing.T) {
+	ctx := context.Background()
+	base, owner, _ := startOwnerWrapping(t, dropFirstAnswer)
+
+	client, err := storeipc.Dial(base)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	_, err = client.Commit(ctx, storeipc.CommitRequest{
+		Statements: []storeipc.Statement{
+			{SQL: "CREATE TABLE probe (k VARCHAR(64) PRIMARY KEY)"},
+			{SQL: "INSERT INTO probe (k) VALUES (?)", Args: []any{"lost-answer"}},
+		},
+		Message: "a write whose answer never arrives",
+		Author:  storeipc.Actor{Name: "agent:codex", Email: "codex@memdolt.invalid"},
+	})
+	if err == nil {
+		t.Fatal("a write whose answer was dropped was reported as committed")
+	}
+	// The owner never answered, so this is not a refusal: the outcome is
+	// unknown to the caller, and that is the whole point.
+	if storeipc.IsOwnerRefusal(err) {
+		t.Fatalf("a lost answer was reported as an owner refusal: %v", err)
+	}
+	// The owner is still live, so the caller must not be told the store is
+	// free to open.
+	if errors.Is(err, ipc.ErrNoLiveOwner) {
+		t.Fatalf("a live owner was reported as no live owner: %v", err)
+	}
+
+	// The same client, without being rebuilt, reaches the owner again — and
+	// carries a second, distinct write rather than the one that failed.
+	if _, err := client.Commit(ctx, storeipc.CommitRequest{
+		Statements: []storeipc.Statement{{SQL: "INSERT INTO probe (k) VALUES (?)", Args: []any{"answered"}}},
+		Message:    "a write whose answer arrives",
+		Author:     storeipc.Actor{Name: "agent:codex", Email: "codex@memdolt.invalid"},
+	}); err != nil {
+		t.Fatalf("commit after the lost answer: %v", err)
+	}
+
+	rows, err := owner.Query(ctx, "SELECT k, COUNT(*) FROM probe GROUP BY k ORDER BY k")
+	if err != nil {
+		t.Fatalf("query the owner's store directly: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	applied := map[string]int64{}
+	for rows.Next() {
+		var key string
+		var count int64
+		if err := rows.Scan(&key, &count); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		applied[key] = count
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read rows: %v", err)
+	}
+	// The dropped answer's write did land — the table it created is being
+	// read here — and it landed exactly once.
+	if applied["lost-answer"] != 1 {
+		t.Fatalf("the write whose answer was lost was applied %d times, want exactly 1 (rows %v)",
+			applied["lost-answer"], applied)
+	}
+	if applied["answered"] != 1 {
+		t.Fatalf("the write made after the failure was applied %d times, want exactly 1 (rows %v)",
+			applied["answered"], applied)
+	}
+}
+
+// TestAnOperationAfterTheOwnerStopsSaysTheStoreIsFree covers, at the layer a
+// CLI uses, the acceptance criterion that a transport failure against a
+// repository no live owner holds is reported as such: PRD §5.2's design
+// response then has the caller open the store directly.
+func TestAnOperationAfterTheOwnerStopsSaysTheStoreIsFree(t *testing.T) {
+	base, _, srv := startOwner(t)
+
+	client, err := storeipc.Dial(base)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatalf("close the owner's endpoint: %v", err)
+	}
+
+	_, err = client.Query(context.Background(), storeipc.QueryRequest{SQL: "SELECT 1"})
+	if !errors.Is(err, ipc.ErrNoLiveOwner) {
+		t.Fatalf("error = %v, want one matching ipc.ErrNoLiveOwner", err)
+	}
+	if storeipc.IsOwnerRefusal(err) {
+		t.Fatalf("a transport failure was reported as an owner refusal: %v", err)
 	}
 }
 

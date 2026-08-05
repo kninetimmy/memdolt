@@ -77,42 +77,53 @@ type OwnerInfo struct {
 // unusable, or if a live holder's endpoint does not answer with a matching
 // identity, Probe returns an error rather than a verdict.
 func Probe(ctx context.Context, baseDir string) (Status, OwnerInfo, error) {
+	status, info, _, err := probeOwner(ctx, baseDir)
+	return status, info, err
+}
+
+// probeOwner is Probe, plus the endpoint detail it had to read anyway. That
+// detail carries the token, which is why it goes no further than this
+// package: OwnerInfo never carries one. A client reconnecting to a
+// replacement owner needs the new port and the new token together with the
+// verdict that the owner is live, and reading the pidfile a second time to
+// get them would leave a window in which the two disagree.
+func probeOwner(ctx context.Context, baseDir string) (Status, OwnerInfo, ownerDetail, error) {
 	paths, err := layout.New(baseDir)
 	if err != nil {
-		return StatusNoOwner, OwnerInfo{}, err
+		return StatusNoOwner, OwnerInfo{}, ownerDetail{}, err
 	}
 
 	owner, state, err := singleowner.Inspect(paths.PidFile())
 	if err != nil {
-		return StatusNoOwner, OwnerInfo{}, fmt.Errorf("ipc: inspect pidfile: %w", err)
+		return StatusNoOwner, OwnerInfo{}, ownerDetail{}, fmt.Errorf("ipc: inspect pidfile: %w", err)
 	}
 
 	switch state {
 	case singleowner.StateNone:
-		return StatusNoOwner, OwnerInfo{}, nil
+		return StatusNoOwner, OwnerInfo{}, ownerDetail{}, nil
 
 	case singleowner.StateStale:
 		info, _ := ownerInfo(owner) // a dead owner's detail is diagnostic only
-		return StatusOwnerDead, info, nil
+		return StatusOwnerDead, info, ownerDetail{}, nil
 
 	case singleowner.StateHeld:
 		info, detail, err := ownerInfoWithDetail(owner)
 		if err != nil {
-			return StatusNoOwner, OwnerInfo{}, fmt.Errorf("ipc: %w", err)
+			return StatusNoOwner, OwnerInfo{}, ownerDetail{}, fmt.Errorf("ipc: %w", err)
 		}
-		health, err := newClient(detail).Health(ctx)
+		health, err := newClient(baseDir, detail).Health(ctx)
 		if err != nil {
-			return StatusNoOwner, info, fmt.Errorf("ipc: %w: pid %d, %w", ErrOwnerUnverified, info.PID, err)
+			return StatusNoOwner, info, ownerDetail{}, fmt.Errorf("ipc: %w: pid %d, %w", ErrOwnerUnverified, info.PID, err)
 		}
 		if health.OwnerID != owner.ID {
-			return StatusNoOwner, info, fmt.Errorf(
+			return StatusNoOwner, info, ownerDetail{}, fmt.Errorf(
 				"ipc: %w: pidfile names owner %s but the endpoint on port %d reports %s",
 				ErrOwnerUnverified, owner.ID, info.Port, health.OwnerID)
 		}
-		return StatusOwnerLive, info, nil
+		return StatusOwnerLive, info, detail, nil
 
 	default:
-		return StatusNoOwner, OwnerInfo{}, fmt.Errorf("ipc: unexpected pidfile state %v", state)
+		return StatusNoOwner, OwnerInfo{}, ownerDetail{}, fmt.Errorf("ipc: unexpected pidfile state %v", state)
 	}
 }
 
