@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,7 +18,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/singleowner"
@@ -451,6 +454,242 @@ func TestDialReachesTheLiveOwner(t *testing.T) {
 	if _, err := Dial(t.TempDir()); err == nil {
 		t.Fatal("dialling a repository with no owner should fail")
 	}
+}
+
+// servedBy is what the reconnection tests exchange over the endpoint: each
+// owner answers with the name the test gave it, so a request that reached
+// the wrong one is visible rather than merely successful.
+type servedBy struct {
+	Owner string `json:"owner"`
+}
+
+// namedOwner serves one route that reports the owner's test name and counts
+// the requests that reached it.
+func namedOwner(name string, requests *atomic.Int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(servedBy{Owner: name})
+	})
+}
+
+// TestPostJSONReportsNoLiveOwnerWhenTheOwnerIsGone covers the acceptance
+// criterion that a transport failure against a repository whose pidfile
+// shows no live owner is reported as a distinct, programmatically
+// recognisable outcome: the store is unheld, and the caller may open it
+// directly.
+func TestPostJSONReportsNoLiveOwnerWhenTheOwnerIsGone(t *testing.T) {
+	// The two ways an owner stops being live are separate pidfile states,
+	// and only one of them can be produced in-process: a killed owner
+	// leaves its record behind for the kernel to orphan, which needs a real
+	// second process.
+	t.Run("owner killed", func(t *testing.T) {
+		base := t.TempDir()
+		h := startServerHelper(t, base)
+
+		client, err := Dial(base)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		h.kill(t)
+
+		err = client.PostJSON(context.Background(), "/anything", struct{}{}, nil)
+		if !errors.Is(err, ErrNoLiveOwner) {
+			t.Fatalf("error = %v, want one matching ErrNoLiveOwner", err)
+		}
+		// The status the pidfile is in is part of the diagnosis.
+		if !strings.Contains(err.Error(), StatusOwnerDead.String()) {
+			t.Fatalf("error %v does not report the pidfile as %v", err, StatusOwnerDead)
+		}
+	})
+
+	t.Run("owner shut down cleanly", func(t *testing.T) {
+		base := t.TempDir()
+		srv, _ := startServer(t, Config{BaseDir: base})
+
+		client, err := Dial(base)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		if err := srv.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+
+		err = client.PostJSON(context.Background(), "/anything", struct{}{}, nil)
+		if !errors.Is(err, ErrNoLiveOwner) {
+			t.Fatalf("error = %v, want one matching ErrNoLiveOwner", err)
+		}
+		// A refusal is a different thing entirely, and must not be
+		// confused with this one.
+		var status *StatusError
+		if errors.As(err, &status) {
+			t.Fatalf("a transport failure was reported as an owner refusal: %v", err)
+		}
+	})
+}
+
+// TestPostJSONRecoversAcrossAnOwnerRestart covers the acceptance criterion
+// that a client whose owner was replaced reaches the replacement — on its
+// new port and with its new token — on the caller's next operation, without
+// the caller rebuilding anything.
+func TestPostJSONRecoversAcrossAnOwnerRestart(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+
+	var firstRequests, secondRequests atomic.Int64
+	first, _ := startServer(t, Config{BaseDir: base, Handler: namedOwner("first", &firstRequests)})
+
+	client, err := Dial(base)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	var served servedBy
+	if err := client.PostJSON(ctx, "/work", struct{}{}, &served); err != nil {
+		t.Fatalf("operation against the first owner: %v", err)
+	}
+	if served.Owner != "first" {
+		t.Fatalf("served by %q, want the first owner", served.Owner)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatalf("close the first owner: %v", err)
+	}
+	second, _ := startServer(t, Config{BaseDir: base, Handler: namedOwner("second", &secondRequests)})
+	if second.Port() == first.Port() {
+		t.Fatalf("the replacement owner was given the same port %d, so this run cannot show the client following a port change", second.Port())
+	}
+	if second.token == first.token {
+		t.Fatal("the replacement owner reused the first owner's token")
+	}
+
+	// The operation that hits the dead endpoint fails: its outcome is
+	// unknown, and nothing resubmits it.
+	err = client.PostJSON(ctx, "/work", struct{}{}, &served)
+	if err == nil {
+		t.Fatal("an operation sent to the endpoint of a stopped owner reported success")
+	}
+	if errors.Is(err, ErrNoLiveOwner) {
+		t.Fatalf("a live replacement owner was reported as no live owner: %v", err)
+	}
+
+	// The next one reaches the replacement, on the same client.
+	served = servedBy{}
+	if err := client.PostJSON(ctx, "/work", struct{}{}, &served); err != nil {
+		t.Fatalf("operation after the restart: %v", err)
+	}
+	if served.Owner != "second" {
+		t.Fatalf("served by %q, want the replacement owner", served.Owner)
+	}
+	if got := secondRequests.Load(); got != 1 {
+		t.Fatalf("the replacement owner served %d requests, want exactly the one operation submitted to it", got)
+	}
+	if got := firstRequests.Load(); got != 1 {
+		t.Fatalf("the first owner served %d requests, want exactly the one operation submitted to it", got)
+	}
+}
+
+// TestReconnectionIsBoundedAndPaced covers the acceptance criterion that
+// the probes a transport failure causes are counted and spaced: rig 1's
+// clients redialled a dead owner without either, and produced 474,234
+// connection-refused failures in about a minute (docs/spikes/m0-rig1.md,
+// F4).
+func TestReconnectionIsBoundedAndPaced(t *testing.T) {
+	// The schedule itself, independently of any clock: strictly increasing
+	// until it reaches the ceiling, and never above it.
+	t.Run("schedule", func(t *testing.T) {
+		p := pacing{attempts: 6, base: 100 * time.Millisecond, max: 400 * time.Millisecond}
+		want := []time.Duration{0, 100, 200, 400, 400, 400}
+		for i, ms := range want {
+			attempt := i + 1
+			if got := p.delay(attempt); got != ms*time.Millisecond {
+				t.Fatalf("delay before attempt %d = %v, want %v", attempt, got, ms*time.Millisecond)
+			}
+		}
+		if p.delay(64) != p.max {
+			t.Fatalf("delay before a far attempt = %v, want the ceiling %v", p.delay(64), p.max)
+		}
+
+		// And the schedule a real client is built with: five probes, 1.1 s
+		// of delay between them. That is the delay schedule alone — what a
+		// caller waits is this plus each probe's own duration, which
+		// reconnectBaseDelay documents.
+		client := newClient(t.TempDir(), ownerDetail{Port: 1})
+		if client.pacing.attempts != reconnectAttempts {
+			t.Fatalf("a client allows %d probes per transport failure, want %d",
+				client.pacing.attempts, reconnectAttempts)
+		}
+		var total time.Duration
+		for attempt := 1; attempt <= client.pacing.attempts; attempt++ {
+			total += client.pacing.delay(attempt)
+		}
+		if want := 1100 * time.Millisecond; total != want {
+			t.Fatalf("the delays scheduled across %d probes total %v, want %v",
+				client.pacing.attempts, total, want)
+		}
+	})
+
+	t.Run("probes", func(t *testing.T) {
+		base := t.TempDir()
+		client := newClient(base, ownerDetail{Port: closedPort(t), Token: "unused"})
+		client.pacing = pacing{attempts: 4, base: 25 * time.Millisecond, max: 200 * time.Millisecond}
+
+		// An owner that holds the pidfile but does not answer is what the
+		// repeated attempts exist for: Probe fails closed there rather than
+		// returning a verdict, so the client keeps asking, bounded.
+		var at []time.Time
+		client.probe = func(context.Context, string) (Status, OwnerInfo, ownerDetail, error) {
+			at = append(at, time.Now())
+			return StatusNoOwner, OwnerInfo{}, ownerDetail{}, ErrOwnerUnverified
+		}
+
+		start := time.Now()
+		err := client.PostJSON(context.Background(), "/work", struct{}{}, nil)
+		if err == nil {
+			t.Fatal("an operation against a closed port reported success")
+		}
+		if errors.Is(err, ErrNoLiveOwner) {
+			t.Fatalf("an unverified owner was reported as no live owner: %v", err)
+		}
+		if !errors.Is(err, ErrOwnerUnverified) {
+			t.Fatalf("error = %v, want it to carry why the probes failed", err)
+		}
+
+		if len(at) != client.pacing.attempts {
+			t.Fatalf("one transport failure caused %d probes, want the bound of %d", len(at), client.pacing.attempts)
+		}
+		// Each probe waited at least its scheduled delay, and those delays
+		// grow: the observed gaps are therefore increasing too.
+		previous := start
+		for i, when := range at {
+			attempt := i + 1
+			gap := when.Sub(previous)
+			if want := client.pacing.delay(attempt); gap < want {
+				t.Fatalf("probe %d came %v after the one before it, want at least %v", attempt, gap, want)
+			}
+			if attempt > 1 && client.pacing.delay(attempt) <= client.pacing.delay(attempt-1) {
+				t.Fatalf("probe %d was not scheduled later than probe %d", attempt, attempt-1)
+			}
+			previous = when
+		}
+	})
+}
+
+// closedPort returns a loopback port with nothing listening on it, so that
+// a request to it fails in the transport rather than reaching anything.
+func closedPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", loopbackAddr)
+	if err != nil {
+		t.Fatalf("reserve a port: %v", err)
+	}
+	port, err := listenerPort(listener)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close the reserved listener: %v", err)
+	}
+	return port
 }
 
 func TestListenRefusesASecondOwner(t *testing.T) {

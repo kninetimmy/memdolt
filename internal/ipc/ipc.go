@@ -26,6 +26,22 @@
 // package writes a token to a log or an error, and the type it is held in
 // redacts itself when formatted, so an accidental %v cannot leak it
 // either.
+//
+// # Recovering from a transport failure
+//
+// An owner that answers has decided the operation's fate; a transport that
+// fails has not, because the owner may have applied the write and only the
+// answer been lost (docs/spikes/m0-rig1.md, F3). A client therefore never
+// resubmits the operation that failed. What it re-establishes is the
+// connection: Client.PostJSON re-probes the pidfile after a transport
+// failure, at most reconnectAttempts times and with a growing pause between
+// attempts, and ends in one of three states — the client now addresses a
+// live owner, possibly a replacement on a new port with a new token, and
+// the caller's next operation reaches it; the store is unheld, reported as
+// ErrNoLiveOwner so the caller can open it directly (PRD §5.2); or a
+// bounded failure. Nothing here redials in a loop of its own: rig 1
+// measured 474,234 connection-refused failures in about a minute from
+// clients that did (F4).
 package ipc
 
 import (

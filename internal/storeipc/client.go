@@ -10,6 +10,12 @@ import (
 
 // Client submits store operations to the process that owns a repository's
 // store.
+//
+// It adds nothing to the transport underneath it, and in particular no
+// retry: a failed operation is reported to the caller, never resubmitted
+// (docs/spikes/m0-rig1.md, F3 — a write over IPC is at-least-once). The
+// connection itself is re-established by internal/ipc, so a client keeps
+// working across an owner restart without being rebuilt.
 type Client struct {
 	ipc *ipc.Client
 }
@@ -36,7 +42,13 @@ func NewClient(conn *ipc.Client) *Client {
 // request and the write did not happen. Any other error means the outcome
 // is unknown: the owner may have committed and the answer been lost. A
 // caller that must not report a write it cannot vouch for has to keep
-// those apart.
+// those apart. IsOwnerRefusal is that test.
+//
+// An error of the second kind that also matches ipc.ErrNoLiveOwner says
+// something further: no live owner holds the store any more, so the caller
+// may open it directly rather than dial again. The write's own outcome is
+// still unknown — that is what makes it a separate question from the
+// refusal test above.
 func (c *Client) Commit(ctx context.Context, req CommitRequest) (CommitResponse, error) {
 	var resp CommitResponse
 	if err := c.ipc.PostJSON(ctx, CommitPath, req, &resp); err != nil {
@@ -45,7 +57,8 @@ func (c *Client) Commit(ctx context.Context, req CommitRequest) (CommitResponse,
 	return resp, nil
 }
 
-// Query asks the owner to run a read-only statement.
+// Query asks the owner to run a read-only statement. Its errors classify
+// exactly as Commit's do, less the question of whether a write happened.
 func (c *Client) Query(ctx context.Context, req QueryRequest) (QueryResponse, error) {
 	var resp QueryResponse
 	if err := c.ipc.PostJSON(ctx, QueryPath, req, &resp); err != nil {

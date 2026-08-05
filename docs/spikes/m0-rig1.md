@@ -876,6 +876,37 @@ CLI must re-probe on transport failure — `ipc.Probe` already distinguishes
 rather than retrying blindly. Nothing in M0 does this yet because nothing
 in M0 routes anything but the rig.
 
+*Acted on, after this rig ran.* The finding above stands as measured and is
+kept unedited; what its last two sentences describe is no longer the
+product's behaviour.
+
+| | Behaviour on a transport failure |
+|---|---|
+| Before | `ipc.Client` made exactly one transport attempt per operation and returned the failure; `internal/storeipc` passed it through. Recovery, if any, was the caller's to write — and the rig's clients wrote the worst one there is. |
+| After | `Client.PostJSON` re-probes the pidfile through `ipc.Probe`, at most **5** times, spaced **0 / 100 / 200 / 400 / 400 ms** — 1.1 s of delay, to which each attempt adds its own probe, bounded at `probeTimeout`, so the worst case is **16.1 s** for one caller against an owner that holds the pidfile and never answers (and a multiple of that for callers serialized behind it). The outcomes a caller meets in practice are decided by the first probe with no delay: a live owner is adopted, a free lock is a verdict. It ends in one of three ways: it adopts the live owner it finds — including a replacement listening on a **different port with a different token**, which the caller's next operation reaches on the same client, nothing rebuilt by hand; or it returns an error matching `ipc.ErrNoLiveOwner`, which is this finding's *"take the store itself"* (PRD §5.2: no live server means the CLI opens the store directly); or it fails after the bound. |
+
+What did **not** change, and is worth stating because each is easy to
+assume:
+
+- **The failed operation is never resubmitted.** Only the connection is
+  re-established. F3 is the reason: a write whose answer was lost may
+  already have been applied, and retry-safety waits for M1's client-minted
+  ULIDs. The `*ipc.StatusError`-versus-transport-failure split callers use
+  to tell *"did not happen"* from *"unknown"* is untouched.
+- **The rig's own clients still redial in an unpaced loop** — the pacing
+  lives in `internal/ipc`, not in `tests/soak/roles.go`. The counts in §10
+  measure that loop; rewriting it would make them unreproducible.
+- **The pacing binds `*ipc.Client` alone, not every waiting decision in
+  memdolt.** It is not the Dolt driver's `BackOff`, which stays disabled
+  (§5.2.2 design response 2, Q1 below), and it is not
+  `singleowner.Acquire`, which still refuses a second memdolt process in
+  ~106 ms rather than waiting. Three different symbols at three layers; a
+  bounded wait was added to one of them.
+- **The `Health` method does not reconnect**, though it hangs off the same
+  `*ipc.Client`: `Probe` builds a client to make its health request, so
+  recovering there would re-enter `Probe`. The restriction is `PostJSON`'s
+  alone, not a property of every method on the type.
+
 **F5 — Write throughput falls by more than half as history grows.**
 Measured at fixed concurrency (16 writers, identical configuration, the
 only difference being how long it ran):
