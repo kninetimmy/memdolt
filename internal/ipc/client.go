@@ -50,11 +50,19 @@ const (
 
 	// reconnectBaseDelay is the pause before the second probe; each further
 	// probe waits twice as long, up to reconnectMaxDelay. The five attempts
-	// are therefore spaced 0, 100, 200, 400 and 400 ms — about 1.1 s in
-	// total, long enough to cover an owner restarting and short enough for
-	// a CLI to wait through. Only an owner that holds the pidfile without
-	// answering costs all five: a live owner is adopted on the first probe,
-	// and a free lock is a verdict on the first probe.
+	// are therefore spaced 0, 100, 200, 400 and 400 ms: 1.1 s, which is the
+	// delay schedule and nothing else.
+	//
+	// What a caller waits is that plus each probe's own duration, and a
+	// probe against a pidfile whose lock is held makes a health request
+	// bounded at probeTimeout. The worst case is therefore 1.1 s + 5 ×
+	// probeTimeout — 16.1 s, measured against an owner that holds the
+	// pidfile, accepts the connection and never answers.
+	//
+	// Only that owner costs all five attempts. The two outcomes a caller
+	// actually meets are decided by the first probe with no delay at all: a
+	// live owner is adopted, and a free advisory lock is already the
+	// verdict that the store is unheld.
 	reconnectBaseDelay = 100 * time.Millisecond
 	reconnectMaxDelay  = 400 * time.Millisecond
 )
@@ -142,8 +150,14 @@ type Client struct {
 	baseURL    string
 	token      secret
 
-	// reconnecting serializes re-probing, so that N requests failing
-	// together cause one round of probes rather than N.
+	// reconnecting serializes re-probing: callers that fail together probe
+	// one after another rather than at once. It collapses their work only
+	// when a round succeeds, because adopting an owner bumps the
+	// generation and a waiter that failed on an older one then returns
+	// without probing at all. A round that ends in a bounded failure
+	// leaves the generation where it was, so each waiter in turn runs a
+	// full round of its own: four concurrent callers against an owner that
+	// accepts and never answers were measured returning after 64.4 s.
 	reconnecting sync.Mutex
 
 	// http bounds a liveness probe at probeTimeout.
@@ -371,9 +385,11 @@ func (c *Client) PostJSON(ctx context.Context, path string, request, response an
 
 // Health asks the owner to identify itself.
 //
-// Unlike PostJSON, it does not reconnect on a transport failure: an
-// unanswered health request is Probe's evidence, and Probe builds a client
-// to make it. Recovering here would re-enter Probe through that client.
+// It asks whichever owner the client currently addresses, which is the one
+// Dial found until a reconnection adopts a replacement. It does not itself
+// reconnect on a transport failure, unlike PostJSON: an unanswered health
+// request is Probe's evidence, and Probe builds a client to make it, so
+// recovering here would re-enter Probe through that client.
 func (c *Client) Health(ctx context.Context) (Health, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()

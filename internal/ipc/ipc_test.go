@@ -609,8 +609,10 @@ func TestReconnectionIsBoundedAndPaced(t *testing.T) {
 			t.Fatalf("delay before a far attempt = %v, want the ceiling %v", p.delay(64), p.max)
 		}
 
-		// And the schedule a real client is built with: five probes, and a
-		// caller held for about a second at the very worst.
+		// And the schedule a real client is built with: five probes, 1.1 s
+		// of delay between them. That is the delay schedule alone — what a
+		// caller waits is this plus each probe's own duration, which
+		// reconnectBaseDelay documents.
 		client := newClient(t.TempDir(), ownerDetail{Port: 1})
 		if client.pacing.attempts != reconnectAttempts {
 			t.Fatalf("a client allows %d probes per transport failure, want %d",
@@ -621,7 +623,8 @@ func TestReconnectionIsBoundedAndPaced(t *testing.T) {
 			total += client.pacing.delay(attempt)
 		}
 		if want := 1100 * time.Millisecond; total != want {
-			t.Fatalf("a transport failure can hold a caller for %v, want %v", total, want)
+			t.Fatalf("the delays scheduled across %d probes total %v, want %v",
+				client.pacing.attempts, total, want)
 		}
 	})
 
