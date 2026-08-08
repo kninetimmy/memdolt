@@ -64,3 +64,21 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+  # A separate lane rather than a fourth entry in the matrix above: the race
+  # detector needs cgo (set workflow-wide) and an x86-64 host, so it runs on
+  # ubuntu-latest only.
+  race:
+    name: Test (race)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go test -race
+        run: go test -race ./...
