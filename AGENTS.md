@@ -69,6 +69,16 @@ export GOFLAGS=-tags=gms_pure_go
   by the actor (`--actor "Claude Code"` normalizes to `agent:claude-code`; the
   default is `user`), so `dolt_log` answers provenance on its own. `note add`
   and the two `set` commands read their body from stdin when given no argument.
+- Review what agents staged (PRD §7, §11.2): `memdolt review list|show|accept|reject|expire|stale`.
+  `show` renders a proposal as the single-commit diff of its branch; `accept` merges
+  exactly that branch into `main` under a `--no-ff` merge commit — authored by the
+  reviewer and messaged `review accept <kind> <id>`, so `dolt_log` alone carries the
+  whole propose-review-merge cycle — and then deletes the branch. `reject` deletes
+  the branch and leaves `main` where it was, `expire` sweeps branches older than
+  `--older-than`, and `stale` reports them without writing anything. The merge is
+  fail-closed (PRD §6.3): a data conflict, a constraint violation that verification
+  shows is real, or a row memdolt cannot attribute leaves `main` untouched and the
+  proposal still pending.
 - Run the M0 rig-1 concurrency soak (PRD §16): `go test -tags
   soak,gms_pure_go ./tests/soak/...`
 
