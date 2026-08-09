@@ -84,8 +84,18 @@ type Statement struct {
 }
 
 // CommitRequest is the wire form of store.CommitRequest.
+//
+// Text carries the memory the write records, which the owner matches
+// against the repository's deny-list (PRD §11.3). It crosses the wire
+// because the deny-list is enforced where the store is, and a routed
+// write that dropped its text on the way would be the one write nothing
+// scanned. NoText crosses it for the same reason: the owner refuses a
+// request that declares neither, so the declaration has to survive the
+// hop rather than be re-derived from an empty field.
 type CommitRequest struct {
 	Statements []Statement `json:"statements"`
+	Text       []string    `json:"text,omitempty"`
+	NoText     bool        `json:"noText,omitempty"`
 	Message    string      `json:"message"`
 	Author     Actor       `json:"author"`
 }
@@ -186,6 +196,8 @@ func (h *handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.store.Commit(r.Context(), store.CommitRequest{
 		Statements: statements,
+		Text:       req.Text,
+		NoText:     req.NoText,
 		Message:    req.Message,
 		Author:     store.Actor{Name: req.Author.Name, Email: req.Author.Email},
 	})

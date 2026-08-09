@@ -93,6 +93,11 @@ func TestClientWritesAndReadsThroughTheOwner(t *testing.T) {
 			{SQL: "CREATE TABLE probe (k VARCHAR(64) PRIMARY KEY, v TEXT, n BIGINT)"},
 			{SQL: "INSERT INTO probe (k, v, n) VALUES (?, ?, ?)", Args: []any{"msrv", "1.26.2", 7}},
 		},
+		// The probe table is not memory anyone wrote. Declaring that
+		// keeps this a test of the transport, and proves the
+		// declaration itself crosses the wire: an owner that did not
+		// receive it would refuse the write (PRD §11.3).
+		NoText:  true,
 		Message: "propose fact msrv=1.26.2",
 		Author:  storeipc.Actor{Name: "agent:codex", Email: "codex@memdolt.invalid"},
 	})
@@ -160,6 +165,7 @@ func TestARefusedWriteIsDistinguishableFromALostAnswer(t *testing.T) {
 
 	_, err = client.Commit(context.Background(), storeipc.CommitRequest{
 		Statements: []storeipc.Statement{{SQL: "INSERT INTO no_such_table (k) VALUES (?)", Args: []any{"x"}}},
+		NoText:     true,
 		Message:    "write to a table that does not exist",
 		Author:     storeipc.Actor{Name: "user", Email: "user@memdolt.invalid"},
 	})
@@ -219,6 +225,7 @@ func TestALostAnswerIsNotResubmitted(t *testing.T) {
 			{SQL: "CREATE TABLE probe (k VARCHAR(64) PRIMARY KEY)"},
 			{SQL: "INSERT INTO probe (k) VALUES (?)", Args: []any{"lost-answer"}},
 		},
+		NoText:  true,
 		Message: "a write whose answer never arrives",
 		Author:  storeipc.Actor{Name: "agent:codex", Email: "codex@memdolt.invalid"},
 	})
@@ -240,6 +247,7 @@ func TestALostAnswerIsNotResubmitted(t *testing.T) {
 	// carries a second, distinct write rather than the one that failed.
 	if _, err := client.Commit(ctx, storeipc.CommitRequest{
 		Statements: []storeipc.Statement{{SQL: "INSERT INTO probe (k) VALUES (?)", Args: []any{"answered"}}},
+		NoText:     true,
 		Message:    "a write whose answer arrives",
 		Author:     storeipc.Actor{Name: "agent:codex", Email: "codex@memdolt.invalid"},
 	}); err != nil {

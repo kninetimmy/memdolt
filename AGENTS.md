@@ -56,6 +56,13 @@ export GOFLAGS=-tags=gms_pure_go
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
   §6.2, §6.4). It is idempotent: a second run adds nothing to the Dolt
   history.
+- Check a repository: `go run ./cmd/memdolt doctor` reports the store
+  lock's ownership state (held, an orphaned record, absent), whether a live
+  owner answers on its IPC endpoint, and whether the store's schema is
+  newer than the binary (PRD §5.2.4, §6.4). It creates nothing — run
+  against a directory with no store it says so — and exits nonzero when a
+  check fails. A condition memdolt clears by itself (a stale lock record,
+  an orphaned pidfile) is a warning and exits zero.
 - Write and read the direct lanes (PRD §3.1): `memdolt task add|done|block|list`,
   `memdolt note add|list`, `memdolt command record|get`, `memdolt state set|show`
   and `memdolt arch set|show`. Each write is one Dolt commit on `main`, authored
@@ -74,6 +81,37 @@ go-icu-regex. Duration and concurrency are flags (`-soak.duration`,
 `-soak.owner-writers`, `-soak.client-processes`, …), and a long run needs
 `-timeout` raised past the 10-minute default. Findings and measured
 numbers: `docs/spikes/m0-rig1.md`.
+
+## The deny-list (PRD §11.3)
+
+`.memdolt/config.toml` is per-machine and optional. `[deny_list]` is the
+only table with a reader so far:
+
+```toml
+[deny_list]
+patterns = ['(?i)\bAKIA[0-9A-Z]{16}\b']
+```
+
+Patterns are Go regular expressions, written as TOML *literal* strings
+(single quotes) because a regex's backslashes are not valid escapes in a
+TOML basic string. They are matched against `store.CommitRequest.Text` —
+the memory a write records in its own words — before the write's
+transaction opens, so a refused write leaves no row and no commit. Every
+failure refuses: an unreadable file, TOML that does not parse and a pattern
+that does not compile all refuse the write rather than let it through
+unscanned (PRD §13.3 — memdolt keeps secrets out rather than promising to
+delete them).
+
+**Every write declares its text, or declares it has none.** A
+`CommitRequest` that sets neither `Text` nor `NoText` is refused before
+anything is applied, so a new write lane cannot skip the deny-list by
+leaving a field at its zero value — it fails loudly on its first write
+instead. `NoText` is for commits that carry no prose anyone wrote; the
+migration runner is the case it exists for, deliberately, so that a
+deny-list config that cannot be evaluated never stands between an operator
+and `memdolt init`. The declaration travels over IPC too, where
+`storeipc.CommitRequest` carries both fields to the owner that enforces
+them.
 
 ## Conventions for agents (PRD §14)
 

@@ -43,6 +43,7 @@ import (
 	// Registers the "dolt" database/sql driver.
 	_ "github.com/dolthub/driver"
 
+	"github.com/kninetimmy/memdolt/internal/denylist"
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/singleowner"
 	"github.com/kninetimmy/memdolt/internal/store"
@@ -199,6 +200,9 @@ func (s *Store) openEngine(ctx context.Context, dataDir string) error {
 // commit share one connection and one transaction, so a failure part-way
 // through leaves nothing behind.
 //
+// req.Text is matched against the repository's deny-list first; see
+// checkDenyList.
+//
 // A request that changes nothing fails: Dolt reports "nothing to commit"
 // rather than creating an empty commit.
 func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.CommitResult, error) {
@@ -206,23 +210,31 @@ func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.Comm
 	if err != nil {
 		return store.CommitResult{}, err
 	}
-
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return store.CommitResult{}, fmt.Errorf("localdolt: acquire connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
-	return commitConn(ctx, conn, req)
+	return s.commitConn(ctx, conn, req)
 }
 
 // commitConn is Commit's body, minus the choice of connection: it applies
 // req to whatever branch conn is checked out to. The staged-write lane
 // (propose.go) needs that separation, because its connection is checked out
 // to a proposal branch rather than taken fresh from the pool.
-func commitConn(ctx context.Context, conn *sql.Conn, req store.CommitRequest) (store.CommitResult, error) {
+//
+// It is where the request is validated and the deny-list applied, rather
+// than Commit, because it is the one point every write in this package
+// passes through. A check in Commit alone would leave the staged-write lane
+// unscanned — and a proposal is the lane an untrusted agent writes through
+// (PRD §7).
+func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.CommitRequest) (store.CommitResult, error) {
 	if err := req.Validate(); err != nil {
 		return store.CommitResult{}, fmt.Errorf("localdolt: invalid commit request: %w", err)
+	}
+	if err := s.checkDenyList(req.Text); err != nil {
+		return store.CommitResult{}, err
 	}
 
 	tx, err := conn.BeginTx(ctx, nil)
@@ -242,6 +254,47 @@ func commitConn(ctx context.Context, conn *sql.Conn, req store.CommitRequest) (s
 		return store.CommitResult{}, fmt.Errorf("localdolt: commit transaction: %w", err)
 	}
 	return result, nil
+}
+
+// checkDenyList applies the repository's `[deny_list]` (PRD §11.3) to the
+// memory text a write declares.
+//
+// It runs before the transaction opens, so a refused write leaves no row
+// and no commit behind — nothing was ever started. A refused proposal has
+// its branch deleted by stage, the way any other staging failure does, so
+// it leaves nothing behind either.
+//
+// It fails closed in both directions the PRD §14 conventions ask for. A
+// deny-list that is configured but cannot be evaluated — an unreadable
+// config file, TOML that does not parse, a pattern that is not a valid
+// regular expression — refuses the write rather than allowing it. A
+// repository with no deny-list configured refuses nothing, so the
+// unconfigured case costs a write only the stat that finds no config
+// file.
+//
+// A request that declared NoText is not scanned at all, and does not read
+// the config file: a write carrying no prose has nothing a rule could
+// match. That is what keeps a broken deny-list from blocking the migration
+// runner, whose commits are the only such writes today. Validate has
+// already refused anything that neither declared text nor declared none,
+// so an empty text here is a decision somebody wrote down.
+//
+// The config file is read per write rather than cached at Open, so an
+// edited deny-list binds the next write instead of the next process.
+// ponytail: one small read and one compile per write; cache it on the
+// store if writes ever run hot enough for that to show.
+func (s *Store) checkDenyList(text []string) error {
+	if len(text) == 0 {
+		return nil
+	}
+	list, err := denylist.Load(s.paths.ConfigFile())
+	if err != nil {
+		return fmt.Errorf("localdolt: refusing the write: %w", err)
+	}
+	if err := list.Check(text...); err != nil {
+		return fmt.Errorf("localdolt: %w", err)
+	}
+	return nil
 }
 
 // commitTx runs the statements and the Dolt commit inside tx.

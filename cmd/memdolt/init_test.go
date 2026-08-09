@@ -127,7 +127,7 @@ func scratchDir(t *testing.T) string {
 // a later memdolt invocation would see.
 func openInitializedStore(t *testing.T, base string) *localdolt.Store {
 	t.Helper()
-	st, err := localdolt.New(localdolt.Config{BaseDir: base, Actor: initActor})
+	st, err := localdolt.New(localdolt.Config{BaseDir: base, Actor: cliActor})
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}

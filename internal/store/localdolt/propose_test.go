@@ -174,6 +174,7 @@ func TestProposeFactStagesOneCommitOnItsOwnBranch(t *testing.T) {
 		Statements: []store.Statement{
 			{SQL: "INSERT INTO meta (k, v) VALUES ('probe', 'after staging')"},
 		},
+		NoText:  true,
 		Message: "record a durable write after staging",
 		Author:  store.Actor{Name: "user", Email: "user@memdolt.invalid"},
 	}); err != nil {
@@ -279,6 +280,7 @@ func TestProposeSupersedeStagesTheLinkBeforeTheReplacement(t *testing.T) {
 				supersededID, "build.command", "go test ./...", "user", "2026-08-02 12:00:00",
 			},
 		}},
+		Text:    []string{"build.command", "go test ./..."},
 		Message: "record the durable build command",
 		Author:  store.Actor{Name: "user", Email: "user@memdolt.invalid"},
 	}); err != nil {
@@ -372,6 +374,7 @@ func TestProposeRefusalsLeaveNoBranchBehind(t *testing.T) {
 			SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
 			Args: []any{"01J0000000000000000000FACT", "build.command", "go test ./...", "user", "2026-08-02 12:00:00"},
 		}},
+		Text:    []string{"build.command", "go test ./..."},
 		Message: "record the durable build command",
 		Author:  store.Actor{Name: "user", Email: "user@memdolt.invalid"},
 	}); err != nil {

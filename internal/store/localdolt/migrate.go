@@ -18,7 +18,7 @@ const MainBranch = "main"
 
 // metaTableName is the plumbing table meta.schema_version lives in
 // (PRD §6.1).
-const metaTableName = "meta"
+const metaTableName = store.MetaTable
 
 // AppliedMigration describes one migration a Migrate call applied.
 type AppliedMigration struct {
@@ -139,8 +139,14 @@ func (s *Store) applyMigration(ctx context.Context, db *sql.DB, migration store.
 
 	result, err := s.Commit(ctx, store.CommitRequest{
 		Statements: statements,
-		Message:    fmt.Sprintf("migrate schema to v%s (%s)", version, migration.Name),
-		Author:     s.cfg.Actor,
+		// A migration is DDL and a version number, not memory anyone
+		// wrote, so it declares that it has nothing for the deny-list to
+		// scan. That is deliberate rather than incidental: a deny-list
+		// config that cannot be evaluated must not stand between an
+		// operator and `memdolt init`.
+		NoText:  true,
+		Message: fmt.Sprintf("migrate schema to v%s (%s)", version, migration.Name),
+		Author:  s.cfg.Actor,
 	})
 	if err != nil {
 		return AppliedMigration{}, errors.Join(
