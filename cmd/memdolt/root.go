@@ -45,5 +45,8 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newNarrativeCommand(memory.StateNarrative, "status narrative"))
 	root.AddCommand(newNarrativeCommand(memory.ArchNarrative, "architecture narrative"))
 
+	// The review gate of PRD §7 over the staged-write lane of §3.1.
+	root.AddCommand(newReviewCommand())
+
 	return root
 }

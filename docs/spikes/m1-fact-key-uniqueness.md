@@ -496,6 +496,10 @@ dolt add facts && dolt commit -m "Conclude merge"
 All three exited 0, counts returned `0,0`, and `dolt status` reported
 `nothing to commit, working tree clean`.
 
+That `dolt constraints verify facts` is the CLI subcommand. §11 records
+what the embedded driver's equivalent does instead, measured later against
+the same case; this section's captured results are unchanged.
+
 ### Control 1 — the trigger is divergence in `facts`
 
 The same proposal branch, merged into a `main` whose only new commit
@@ -778,6 +782,8 @@ embedded-Dolt regression described in §8. Concretely, M1 owes:
 - the already-satisfied violation from §6 — re-verify with
   `dolt constraints verify` before escalating a merge violation to an
   operator, and clear reviewed records that verification shows are moot;
+  §11 records that the embedded driver cannot run that command, so the
+  lane keeps the policy and changes the mechanism;
 - `STORED`, not `VIRTUAL` (§7), with the FULLTEXT check that would catch a
   future "optimization" back to `VIRTUAL`;
 - `ft_facts(value, key)` paired with `MATCH(value, key)`, so the supported
@@ -787,3 +793,57 @@ embedded-Dolt regression described in §8. Concretely, M1 owes:
   lookup index, and the no-index regression gates the driver behavior (§7);
 - application-level checks for the chain invariants §9 lists, if the
   product wants them.
+
+## 11. M1 follow-up: the embedded driver has no working `constraints verify`
+
+Measured 2026-08-08 while building the M1 review lane (issue #46), against
+`github.com/dolthub/driver` v1.88.1 — the driver pinned in `go.mod`, the
+same Dolt version as §2 — over PRD §6.1's committed schema on Windows 11
+Pro (build 26200) with Go 1.26.5, `CGO_ENABLED=1` and `-tags=gms_pure_go`.
+The probe was a disposable embedded store reproducing §6's case and §5's;
+its assertions became `internal/store/localdolt/review_test.go`.
+
+§6 and §10 record the resolution mechanism as `dolt constraints verify
+facts`, the CLI subcommand, which exited 0 against the already-satisfied
+working set and is the evidence that licensed clearing the records. That
+measurement stands as recorded. The equivalent the embedded driver exposes,
+`CALL DOLT_VERIFY_CONSTRAINTS(...)`, does not reproduce it, so **the M1
+merge lane does not use it**:
+
+| Case | Before (CLI, §6) | After (embedded driver, this section) |
+|---|---|---|
+| already-satisfied supersede (§6) | `dolt constraints verify facts` exits 0 | `CALL DOLT_VERIFY_CONSTRAINTS('facts')` returns `violations = 1` |
+| genuine same-key race (§5) | not measured | returns `violations = 1` — the same answer, so the call does not discriminate the two cases at all |
+| whole-table check | not measured | `CALL DOLT_VERIFY_CONSTRAINTS('--all', 'facts')` fails outright with `Error 1105: error calculating constraint violations: attempted to purge dolt_facts_ft_facts_0_fts_position during Full-Text merge but it could not be found` |
+
+`--output-only` changes neither answer. Without it the call is also not
+read-only: it re-records the violations it reports, so invoking it after
+the reviewed records have been deleted puts them back, `dolt_status` returns
+to `constraint violation`, and the merge can no longer be committed. That
+is measurable as a sequence — merge, clear, verify, commit — where the
+commit fails with `error: the table(s) facts have constraint violations`
+and the same merge without the verify step commits cleanly.
+
+Under PRD §6.1 the `--all` failure is not a corner: every reviewed-lane
+table carries a FULLTEXT key, so `--all` is unavailable wherever it would
+be wanted.
+
+**What the merge lane does instead.** PRD §6.3's policy is unchanged —
+verify before escalating, clear only what verification shows is moot — but
+verification asks the index's own question of the merged rows rather than
+asking Dolt's verifier:
+
+```sql
+-- for the constraint named in dolt_constraint_violations_<table>.violation_info
+SELECT `live_key` FROM `facts`
+ WHERE `live_key` IS NOT NULL
+ GROUP BY `live_key` HAVING COUNT(*) > 1 LIMIT 1;
+```
+
+Measured inside the merge transaction, that returns no rows for §6's
+already-satisfied supersede and one row (`build.command`, 2) for §5's
+genuine same-key race. It is what `internal/store/localdolt/review.go`'s
+`requireConstraintHolds` runs, with the columns read back from
+`information_schema.statistics` rather than from the violation record, so
+that the only identifiers it formats into SQL are ones the database just
+reported.

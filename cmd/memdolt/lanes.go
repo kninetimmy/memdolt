@@ -49,7 +49,17 @@ func (f *storeFlags) bindWriter(cmd *cobra.Command) *cobra.Command {
 
 // run opens the store the flags name, hands its direct lanes to fn and
 // closes it again.
-func (f *storeFlags) run(cmd *cobra.Command, fn func(context.Context, *memory.Lanes) error) (err error) {
+func (f *storeFlags) run(cmd *cobra.Command, fn func(context.Context, *memory.Lanes) error) error {
+	return f.runStore(cmd, func(ctx context.Context, st *localdolt.Store, actor memory.Actor) error {
+		return fn(ctx, memory.New(st, actor))
+	})
+}
+
+// runStore opens the store the flags name, hands it to fn and closes it
+// again. The direct lanes reach it through run, which wraps the store in
+// internal/memory; review (review.go) needs the store itself, because a
+// proposal branch is not one of §3.1's lanes.
+func (f *storeFlags) runStore(cmd *cobra.Command, fn func(context.Context, *localdolt.Store, memory.Actor) error) (err error) {
 	actor, err := memory.NormalizeActor(f.actor)
 	if err != nil {
 		return err
@@ -71,7 +81,7 @@ func (f *storeFlags) run(cmd *cobra.Command, fn func(context.Context, *memory.La
 	if err := requireCurrentSchema(ctx, st); err != nil {
 		return err
 	}
-	return fn(ctx, memory.New(st, actor))
+	return fn(ctx, st, actor)
 }
 
 // requireCurrentSchema refuses a store the shipped statements would not

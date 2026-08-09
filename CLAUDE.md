@@ -69,6 +69,16 @@ export GOFLAGS=-tags=gms_pure_go
   by the actor (`--actor "Claude Code"` normalizes to `agent:claude-code`; the
   default is `user`), so `dolt_log` answers provenance on its own. `note add`
   and the two `set` commands read their body from stdin when given no argument.
+- Review what agents staged (PRD §7, §11.2): `memdolt review list|show|accept|reject|expire|stale`.
+  `show` renders a proposal as the single-commit diff of its branch; `accept` merges
+  exactly that branch into `main` under a `--no-ff` merge commit — authored by the
+  reviewer and messaged `review accept <kind> <id>`, so `dolt_log` alone carries the
+  whole propose-review-merge cycle — and then deletes the branch. `reject` deletes
+  the branch and leaves `main` where it was, `expire` sweeps branches older than
+  `--older-than`, and `stale` reports them without writing anything. The merge is
+  fail-closed (PRD §6.3): a data conflict, a constraint violation that verification
+  shows is real, or a row memdolt cannot attribute leaves `main` untouched and the
+  proposal still pending.
 - Run the M0 rig-1 concurrency soak (PRD §16): `go test -tags
   soak,gms_pure_go ./tests/soak/...`
 
@@ -102,16 +112,32 @@ that does not compile all refuse the write rather than let it through
 unscanned (PRD §13.3 — memdolt keeps secrets out rather than promising to
 delete them).
 
-**Every write declares its text, or declares it has none.** A
-`CommitRequest` that sets neither `Text` nor `NoText` is refused before
-anything is applied, so a new write lane cannot skip the deny-list by
-leaving a field at its zero value — it fails loudly on its first write
-instead. `NoText` is for commits that carry no prose anyone wrote; the
-migration runner is the case it exists for, deliberately, so that a
-deny-list config that cannot be evaluated never stands between an operator
-and `memdolt init`. The declaration travels over IPC too, where
+**Every `CommitRequest` declares its text, or declares it has none.** One
+that sets neither `Text` nor `NoText` is refused before anything is
+applied, so a lane that writes through a `CommitRequest` cannot skip the
+deny-list by leaving a field at its zero value — it fails loudly on its
+first write instead. `NoText` is for commits that carry no prose anyone
+wrote; the migration runner is the case it exists for, deliberately, so
+that a deny-list config that cannot be evaluated never stands between an
+operator and `memdolt init`. The declaration travels over IPC too, where
 `storeipc.CommitRequest` carries both fields to the owner that enforces
 them.
+
+**That tripwire binds `CommitRequest`, not every write to `main`.** It was
+written when the two were the same thing: before the review lane, every
+write went through `localdolt.commitConn`, so "a new write lane fails
+loudly rather than skipping the deny-list" was true of write lanes in
+general. After it, that sentence is true of `CommitRequest` alone, and
+`review accept` is the counterexample that proves the difference — it
+promotes a proposal by merging its branch, so the rows are already staged
+and it concludes with a `DOLT_COMMIT` and no `CommitRequest`. Nothing
+failed loudly; it simply wrote. Its coverage is a second, hand-maintained
+scan in `internal/store/localdolt/review.go`, over prose read from the
+proposal branch's own diff, listing the columns in `scannedColumns` —
+which has to be kept in step with `Fact.text`/`Decision.text` in
+`propose.go` by hand, since nothing checks it. **A future lane that writes
+to `main` without a `CommitRequest` owes the same, and will get no warning
+if it forgets.**
 
 ## Conventions for agents (PRD §14)
 

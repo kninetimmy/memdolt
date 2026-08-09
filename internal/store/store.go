@@ -140,14 +140,28 @@ type CommitRequest struct {
 	// Text is the memory this write records, in the words it was given
 	// in: a fact's key and value, a decision's title and rationale, a
 	// task's or a note's text, a narrative body. It is what the
-	// repository's configured deny-list is matched against (PRD §11.3),
-	// and it is the only thing that is.
+	// repository's configured deny-list is matched against (PRD §11.3).
 	//
-	// That makes filling it in the obligation of every lane that records
-	// prose an agent or a user supplied. Leaving it empty is not a way to
-	// opt out: Validate refuses a request that declares neither text nor
-	// NoText, so a lane goes unscanned only by saying out loud that it
-	// has nothing to scan.
+	// It is no longer the only thing that is. Until the review lane
+	// landed, this field was the deny-list's whole input, because every
+	// write to main was a CommitRequest — before: one field, one seam,
+	// and Validate below made forgetting it impossible. After: review
+	// accept (internal/store/localdolt/review.go) promotes a proposal by
+	// merging its branch, so the rows are already staged and it concludes
+	// with DOLT_COMMIT and no CommitRequest at all. It scans the prose it
+	// is about to make durable itself, out of the proposal branch's own
+	// diff, and the columns it reads are listed in that file's
+	// scannedColumns.
+	//
+	// So the guarantee this field carries is narrower than it reads:
+	// filling it in is the obligation of every lane that records prose
+	// *through a CommitRequest*, and Validate's tripwire binds this type,
+	// not every write path. Leaving it empty is still not a way to opt
+	// out — Validate refuses a request that declares neither text nor
+	// NoText, so such a lane goes unscanned only by saying out loud that
+	// it has nothing to scan — but a lane that never builds a
+	// CommitRequest is outside that tripwire's reach and owes its own
+	// scan.
 	//
 	// Nothing here is sent to the database. Statements carry the values
 	// actually written; this is the same text in the one form a rule can
