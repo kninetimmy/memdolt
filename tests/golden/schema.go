@@ -8,6 +8,15 @@ import (
 	"fmt"
 )
 
+// schemaDDL is this rig's own disposable copy of the schema, not the one
+// memdolt ships: store.Migrations() carries that, and `memdolt init`
+// applies it. The copy stays because the rig deviates from it deliberately
+// (see the scope column below) and because a retrieval gate that built its
+// fixture through the migration runner would gate the runner too. Keep the
+// FULLTEXT column orders here identical to the shipped ones — they decide
+// which filters work (PRD §6.1) — and expect no other drift to be caught
+// automatically.
+//
 // schemaDDL is PRD §6.1's schema, trimmed to the tables this rig's golden
 // queries actually touch (facts, decisions, tasks, session_notes,
 // documents, doc_chunks — the five FULLTEXT-bearing source types plus
