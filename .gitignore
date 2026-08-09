@@ -19,3 +19,4 @@ agent_docs/PROJECT_LEDGER.md
 # output isn't part of the fixtures it generates and shouldn't be committed.
 /tests/parity/fixturegen/target/
 .codex/agents/
+.claude/agents/
