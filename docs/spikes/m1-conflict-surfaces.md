@@ -465,8 +465,56 @@ This spike changes only the §6.3 design assumption:
 - `updated_at` is evidence for review, not a whole-row winner selector;
 - merge concludes only after the relevant conflict and violation tables are
   empty and table constraints verify;
+  §7 records how a client reaches those tables at all, and
+  `m1-fact-key-uniqueness.md` §11 what "verify" turned out to mean;
 - cell-level three-way merge holds: disjoint cell edits to one row merge
   clean and unreviewed, so what reaches the review lane is decided by which
   columns each write path touches.
 
 M1 review, elicitation, sync, and merge machinery remain unimplemented.
+
+## 7. M1 follow-up: reaching these surfaces from the embedded driver
+
+Measured 2026-08-08 while building the M1 review lane (issue #46), against
+`github.com/dolthub/driver` v1.88.1 — the driver pinned in `go.mod`, the
+same Dolt version as §2 — over PRD §6.1's committed schema on Windows 11
+Pro (build 26200) with Go 1.26.5, `CGO_ENABLED=1` and `-tags=gms_pure_go`.
+
+§§3–5 measure `dolt merge` from the CLI, which leaves a failed merge in the
+working set: `dolt status` reports unmerged tables, the two surfaces hold
+rows, and the operator resolves them at leisure. **That is not what an
+embedded client sees under autocommit**, which is how the driver runs by
+default:
+
+| | Before (CLI, §3) | After (embedded driver under autocommit) |
+|---|---|---|
+| a merge that violates a constraint | exits 1; `dolt_constraint_violations_facts` holds 2 rows; `dolt status` reports an unmerged table | `CALL DOLT_MERGE(...)` returns `conflicts = 1`, then the statement's own error rolls the whole merge back: `Committing this transaction resulted in a working set with constraint violations, transaction rolled back` |
+| the surfaces afterwards | queryable, and the basis of the repair | **empty** — `dolt_constraint_violations_facts` returns no rows, `dolt_status` is clean, and `CALL DOLT_MERGE('--abort')` answers `fatal: There is no merge to abort` |
+| a merge that conflicts on a cell | `dolt_conflicts_tasks` holds the base/ours/theirs row | same rollback, under `Merge conflict detected, @autocommit transaction rolled back` |
+
+So §6's "a nonzero merge requires inspection of both Dolt surfaces" is
+reachable from an embedded client only inside an **explicit transaction**.
+Measured there, the merge behaves as §§3–5 describe: `CALL DOLT_MERGE
+('--no-ff', '--no-commit', ?)` returns `conflicts = 1` with no error,
+`dolt_constraint_violations` reports `facts / 2`, `dolt_conflicts` reports
+`facts / 1` for the cell case, and the per-table surfaces are queryable and
+deletable.
+
+Rolling that transaction back is then also the abort the CLI spells
+`dolt merge --abort`: main does not move, the working set is clean, both
+surfaces are empty, the merged branch is untouched, and both the same
+connection and a fresh one from the pool are usable afterwards. That is
+what `internal/store/localdolt/review.go` does on any refusal.
+
+Two smaller results from the same probe, both of which shape the code:
+
+- `DOLT_MERGE` fast-forwards a proposal branch whose main has not moved,
+  which would leave `dolt_log` with no record that a human reviewed
+  anything. `--no-ff` is therefore not a preference: the accept path needs
+  the merge commit to carry the reviewer and the review action.
+- Asked for a NULL `ENUM` column, the driver **panics** inside `Rows.Next`
+  with `interface conversion: interface {} is nil, not uint16` rather than
+  returning an error. `dolt_commit_diff_<table>` is full of them — every
+  `from_` column of an added row — so the review lane renders diff and
+  verification columns with `CAST(... AS CHAR)` in SQL rather than scanning
+  them as they are.
