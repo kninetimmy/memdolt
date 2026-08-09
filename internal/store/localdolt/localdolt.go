@@ -117,6 +117,12 @@ func (s *Store) LockFile() string { return s.paths.LockFile() }
 // error matching errors.Is(err, store.ErrLocked). If the lock file was
 // left behind by a process that died, Open clears it, logs the removal
 // with the stale pid at warn level, and continues (PRD §5.2.3).
+//
+// Open does not apply migrations; a store it opens may be older than the
+// schema this binary ships, and Migrate is what brings it forward. It does
+// refuse a store that is *newer* than this binary, with an error matching
+// errors.Is(err, store.ErrSchemaTooNew) (PRD §6.4), releasing the engine
+// and the lock rather than handing back a usable store.
 func (s *Store) Open(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,6 +145,17 @@ func (s *Store) Open(ctx context.Context) error {
 
 	if err := s.openEngine(ctx, dataDir); err != nil {
 		return errors.Join(err, lock.Release())
+	}
+
+	// PRD §6.4's version-skew refusal. It runs here, before the store is
+	// usable, so that a store written by a newer memdolt is turned away
+	// with an error matching errors.Is(err, store.ErrSchemaTooNew) and no
+	// caller ever gets a handle through which memory data could be read or
+	// written under a schema this binary does not know.
+	if err := s.guardSchemaVersion(ctx); err != nil {
+		db := s.db
+		s.db = nil
+		return errors.Join(err, db.Close(), lock.Release())
 	}
 
 	s.lock = lock

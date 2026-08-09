@@ -22,6 +22,7 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().BoolVar(&jsonOutput, "json", false,
 		"emit machine-readable JSON on stdout instead of human-readable text")
 
+	root.AddCommand(newInitCommand())
 	root.AddCommand(newVersionCommand())
 
 	return root

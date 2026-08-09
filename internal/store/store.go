@@ -33,9 +33,23 @@ import (
 // interrogate dolt_log and its own probe tables, gives way to typed calls.
 // Nothing outside M0 should be built against Query.
 type Store interface {
-	// Open acquires the store and makes it usable. Opening a store that a
-	// live process already owns fails with an error matching
-	// errors.Is(err, ErrLocked) rather than blocking (PRD §5.2.1).
+	// Open acquires the store and makes it usable. It has two refusals,
+	// and they bind different sets of implementations.
+	//
+	// Every implementation refuses a store whose schema_version is newer
+	// than the migrations the binary ships, with an error matching
+	// errors.Is(err, ErrSchemaTooNew), and reads or writes no memory data
+	// on it. PRD §6.4 states that refusal for a clone *or* a hub, so it is
+	// a contract of this interface rather than a property of the embedded
+	// store: LocalStore owes it today, and the RemoteStore of §5.1 owes it
+	// against a hub database the same way. CheckSchemaVersion is the shared
+	// decision; only the read of meta.schema_version is per-implementation.
+	//
+	// ErrLocked is narrower. Opening a store that a live process already
+	// owns fails with an error matching errors.Is(err, ErrLocked) rather
+	// than blocking (PRD §5.2.1) — but that is the single-owner rule of an
+	// implementation that owns a data directory. An implementation with no
+	// data directory to own has no lock to fail on and never returns it.
 	Open(ctx context.Context) error
 
 	// Commit applies a write and records it as one Dolt commit, returning
