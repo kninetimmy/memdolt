@@ -116,10 +116,20 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 // commit migration/<n> (PRD §6.4).
 //
 // The schema_version row is written by the same transaction as the
-// migration's own statements, so a store is never left carrying a
-// migration's tables under the previous version. The tag is a separate
-// call, because a Dolt tag names a commit that has to exist first; it adds
-// no commit of its own.
+// migration's own statements, so a committed migration and the version it
+// claims are one commit or neither.
+//
+// The transaction alone does not make a *failed* migration disappear:
+// measured on Dolt v1.88.1, rolling back a transaction that ran DDL leaves
+// the created table in the working set. Left there it would break the
+// re-run this runner's idempotence promises — migration 1 creating facts a
+// second time fails with "table already exists" — and the next write's
+// DOLT_COMMIT('-A') would sweep the orphan into an unrelated commit. So a
+// failed migration is followed by discardUncommitted, which is what makes
+// the all-or-nothing claim true for DDL as well.
+//
+// The tag is a separate call, because a Dolt tag names a commit that has to
+// exist first; it adds no commit of its own.
 func (s *Store) applyMigration(ctx context.Context, db *sql.DB, migration store.Migration) (AppliedMigration, error) {
 	version := strconv.Itoa(migration.Version)
 	statements := append(slices.Clone(migration.Statements), store.Statement{
@@ -133,7 +143,9 @@ func (s *Store) applyMigration(ctx context.Context, db *sql.DB, migration store.
 		Author:     s.cfg.Actor,
 	})
 	if err != nil {
-		return AppliedMigration{}, fmt.Errorf("localdolt: apply migration %s (%s): %w", version, migration.Name, err)
+		return AppliedMigration{}, errors.Join(
+			fmt.Errorf("localdolt: apply migration %s (%s): %w", version, migration.Name, err),
+			discardUncommitted(ctx, db))
 	}
 
 	tag := store.MigrationTag(migration.Version)
@@ -142,6 +154,30 @@ func (s *Store) applyMigration(ctx context.Context, db *sql.DB, migration store.
 	}
 
 	return AppliedMigration{Version: migration.Version, Name: migration.Name, Commit: result.Hash}, nil
+}
+
+// discardUncommitted throws away everything uncommitted on the current
+// branch, which is how the tables a failed migration created are undone —
+// a transaction rollback does not undo DDL.
+//
+// It is safe here because it runs on a branch the caller has just failed to
+// write and nothing else in the process is writing: the single-owner lock
+// (PRD §5.2) makes this process the only writer, and a migration runs
+// before any other work is in flight. It is not a general-purpose repair —
+// called while another goroutine of this process held uncommitted work, it
+// would discard that too.
+//
+// Two calls, for the same reason git needs two: measured on Dolt v1.88.1,
+// DOLT_RESET('--hard') restores tracked tables but reports success while
+// leaving a table the failed migration created — that table is new, not
+// modified — and DOLT_CLEAN is what removes it.
+func discardUncommitted(ctx context.Context, db *sql.DB) error {
+	for _, statement := range []string{"CALL DOLT_RESET('--hard')", "CALL DOLT_CLEAN()"} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("localdolt: discard the failed migration's uncommitted changes (%s): %w", statement, err)
+		}
+	}
+	return nil
 }
 
 // guardSchemaVersion is PRD §6.4's refusal, applied while the store is
