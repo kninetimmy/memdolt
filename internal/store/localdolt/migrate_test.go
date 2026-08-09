@@ -236,6 +236,18 @@ func TestMigratedSchemaMatchesThePRDSchema(t *testing.T) {
 			"PRIMARY KEY (k)",
 			"v text",
 		}},
+		// PRD §6.2's review metadata, added by migration 2 rather than by
+		// §6.1's DDL block. Its id is the proposal's ULID and the suffix of
+		// the branch that carries it (PRD §3.1).
+		{"proposals", []string{
+			ulidPK,
+			"PRIMARY KEY (id)",
+			"kind enum('fact','decision','supersede')",
+			"rationale text",
+			"actor varchar(64)",
+			"created_at datetime",
+			"target enum('repo','global')",
+		}},
 	} {
 		ddl := showCreateTable(t, st, want.table)
 		for _, fragment := range want.fragments {

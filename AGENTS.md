@@ -54,7 +54,8 @@ export GOFLAGS=-tags=gms_pure_go
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
-  §6.4). It is idempotent: a second run adds nothing to the Dolt history.
+  §6.2, §6.4). It is idempotent: a second run adds nothing to the Dolt
+  history.
 - Write and read the direct lanes (PRD §3.1): `memdolt task add|done|block|list`,
   `memdolt note add|list`, `memdolt command record|get`, `memdolt state set|show`
   and `memdolt arch set|show`. Each write is one Dolt commit on `main`, authored
