@@ -225,10 +225,21 @@ func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.Comm
 // to a proposal branch rather than taken fresh from the pool.
 //
 // It is where the request is validated and the deny-list applied, rather
-// than Commit, because it is the one point every write in this package
-// passes through. A check in Commit alone would leave the staged-write lane
-// unscanned — and a proposal is the lane an untrusted agent writes through
-// (PRD §7).
+// than Commit, because it is the point every write that builds a
+// store.CommitRequest passes through. A check in Commit alone would leave
+// the staged-write lane unscanned — and a proposal is the lane an untrusted
+// agent writes through (PRD §7).
+//
+// Before the review lane landed that was every write in this package, and
+// this comment said so. It is now one of two: review.go's accept promotes a
+// proposal by merging its branch, which stages the rows itself, so it
+// concludes with a DOLT_COMMIT of its own and never reaches here. Those are
+// the only two DOLT_COMMIT sites in this package outside tests. The accept
+// path therefore carries its own call to checkDenyList, over prose it reads
+// out of the proposal branch's diff; the columns it reads are review.go's
+// scannedColumns, which has to stay in step with Fact.text and
+// Decision.text in propose.go, because those are what the same rows were
+// scanned as when they were staged.
 func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.CommitRequest) (store.CommitResult, error) {
 	if err := req.Validate(); err != nil {
 		return store.CommitResult{}, fmt.Errorf("localdolt: invalid commit request: %w", err)
