@@ -133,6 +133,66 @@ func TestLoadOnAMissingFileIsNoDenyList(t *testing.T) {
 	}
 }
 
+// TestLoadAcceptsAConfigFileThatConfiguresNoRules is the deliberate half
+// of the distinction TestLoadRefusesADenyListTableWithNoPatternsKey draws:
+// each of these is a repository that configured no deny-list, not a
+// deny-list that could not be evaluated.
+func TestLoadAcceptsAConfigFileThatConfiguresNoRules(t *testing.T) {
+	for name, content := range map[string]string{
+		// The key is decoded, so the empty list is a decision somebody
+		// wrote down rather than a key that was never read.
+		"an explicitly empty patterns list": "[deny_list]\npatterns = []\n",
+		// PRD §11.3's other tables have no reader yet; a file carrying
+		// only those has configured no deny-list.
+		"only unrelated tables": "[render]\nenabled = true\n",
+		"an empty file":         "",
+	} {
+		list, err := denylist.Load(writeConfig(t, content))
+		if err != nil {
+			t.Fatalf("%s: load = %v, want no error", name, err)
+		}
+		if list != nil {
+			t.Fatalf("%s: load returned a list, want nil for a config file that configures no rules", name)
+		}
+		if err := list.Check("anything at all", theSecret); err != nil {
+			t.Fatalf("%s: a repository with no deny-list denied %v", name, err)
+		}
+	}
+}
+
+// TestLoadRefusesADenyListTableWithNoPatternsKey covers the typo that
+// would otherwise disable enforcement in silence. The table says an
+// operator meant to configure rules; no key in it spells `patterns`, so
+// nothing would be scanned and nothing would say so.
+func TestLoadRefusesADenyListTableWithNoPatternsKey(t *testing.T) {
+	for name, content := range map[string]string{
+		"a misspelled key":    "[deny_list]\npattern = ['" + theSecret + "']\n",
+		"a key with a suffix": "[deny_list]\npatterns_ = ['" + theSecret + "']\n",
+		"no keys at all":      "[deny_list]\n",
+	} {
+		path := writeConfig(t, content)
+		list, err := denylist.Load(path)
+		if err == nil {
+			t.Fatalf("%s: load accepted a [deny_list] table that decodes no patterns", name)
+		}
+		if list != nil {
+			t.Fatalf("%s: load returned a list alongside its error", name)
+		}
+
+		// The operator has to be able to find the file and know what is
+		// wrong with it; a refusal that says neither is a puzzle.
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("%s: refusal %q does not name the config file", name, err)
+		}
+		if !strings.Contains(err.Error(), "[deny_list]") || !strings.Contains(err.Error(), "no patterns decoded") {
+			t.Errorf("%s: refusal %q does not say a [deny_list] table decoded no patterns", name, err)
+		}
+		if strings.Contains(err.Error(), theSecret) {
+			t.Errorf("%s: refusal %q repeats the config file's text back to the caller", name, err)
+		}
+	}
+}
+
 func TestLoadRefusesADenyListItCannotEvaluate(t *testing.T) {
 	cases := map[string]string{
 		"toml that does not parse":    "[deny_list\npatterns = ['x']\n",

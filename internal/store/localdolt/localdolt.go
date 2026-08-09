@@ -277,11 +277,11 @@ func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.Commit
 //
 // It fails closed in both directions the PRD §14 conventions ask for. A
 // deny-list that is configured but cannot be evaluated — an unreadable
-// config file, TOML that does not parse, a pattern that is not a valid
-// regular expression — refuses the write rather than allowing it. A
-// repository with no deny-list configured refuses nothing, so the
-// unconfigured case costs a write only the stat that finds no config
-// file.
+// config file, TOML that does not parse, a `[deny_list]` table whose
+// patterns key is misspelled, a pattern that is not a valid regular
+// expression — refuses the write rather than allowing it. A repository
+// with no deny-list configured refuses nothing, so the unconfigured case
+// costs a write only the stat that finds no config file.
 //
 // A request that declared NoText is not scanned at all, and does not read
 // the config file: a write carrying no prose has nothing a rule could

@@ -108,8 +108,32 @@ func Compile(patterns []string) (*List, error) {
 // A config file that is not there is not a deny-list that cannot be
 // evaluated: it is a repository that configured none, and Load reports a
 // nil *List and no error. Every other failure — a file that cannot be
-// read, TOML that does not parse, a pattern that does not compile — is an
-// error, and a caller that fails closed on it refuses the write.
+// read, TOML that does not parse, a `[deny_list]` table that decodes no
+// `patterns` key, a pattern that does not compile — is an error, and a
+// caller that fails closed on it refuses the write.
+//
+// # A table with no patterns key
+//
+// `pattern = [...]`, `patterns_ = [...]` and a bare `[deny_list]` all
+// decode to zero patterns, which read from the decoded struct alone is
+// indistinguishable from a repository that configured no deny-list: a
+// typo would disable enforcement and say nothing. Load takes the table's
+// presence as an operator who meant to configure rules, and refuses. An
+// explicit `patterns = []` is the other case — the key is decoded, so the
+// empty list is a decision somebody wrote down, and it loads as no
+// deny-list.
+//
+// Load keys on the table's name, so it cannot see past a misspelling of
+// *that*: `[denylist]` is a config file with no `[deny_list]` table in
+// it, and loads as no deny-list. Closing that would mean refusing on any
+// key Load did not decode, which the rest of PRD §11.3's unread config
+// would trip on every write.
+//
+// This refusal binds Load alone, not every entry point of its kind:
+// Compile takes patterns a caller already holds, where zero of them means
+// zero and is no evidence of a typo, so Compile(nil) is still a nil *List
+// and no error. Only the path that reads a config file can tell an empty
+// deny-list from an unread one.
 //
 // Load reads the whole config file but takes only `[deny_list]` from it.
 // The rest of PRD §11.3's keys have no reader yet; when the config layer
@@ -121,11 +145,18 @@ func Load(path string) (*List, error) {
 			Patterns []string `toml:"patterns"`
 		} `toml:"deny_list"`
 	}
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	md, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("denylist: read %s: %w", path, err)
+	}
+	if md.IsDefined("deny_list") && !md.IsDefined("deny_list", "patterns") {
+		return nil, fmt.Errorf(
+			"denylist: %s: a [deny_list] table is present with no patterns decoded: "+
+				"check the spelling of the patterns key, or write patterns = [] "+
+				"to configure an empty deny-list deliberately", path)
 	}
 	list, err := Compile(cfg.DenyList.Patterns)
 	if err != nil {
