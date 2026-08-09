@@ -41,6 +41,21 @@ var reviewedLaneTables = map[string]string{
 	"proposals": "id",
 }
 
+// scannedColumns are the columns of each reviewed-lane table that hold
+// prose an agent supplied, and so the columns the repository's deny-list
+// is matched against when a proposal is promoted (PRD §11.3).
+//
+// They are the same columns the staged-write lane declares as
+// store.CommitRequest.Text — Fact.text, Decision.text and the proposal's
+// rationale in propose.go — and they have to stay in step with it: a
+// column added there and forgotten here would be scanned when a proposal
+// is staged and not when it is made durable.
+var scannedColumns = map[string][]string{
+	"facts":     {"key", "value", "kind", "evidence"},
+	"decisions": {"title", "rationale", "summary", "alternatives_rejected", "evidence"},
+	"proposals": {"rationale"},
+}
+
 // clearableViolation is the one constraint-violation class PRD §6.3 admits
 // clearing, and it is admitted only against evidence: the unique index the
 // record names is re-checked over the merged rows, and the record is
@@ -192,15 +207,9 @@ func (s *Store) ProposalDiff(ctx context.Context, id string) (ProposalDiff, erro
 		return ProposalDiff{}, err
 	}
 
-	var parent string
-	err = db.QueryRowContext(ctx,
-		"SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = ?", record.commit).Scan(&parent)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ProposalDiff{}, fmt.Errorf("localdolt: the proposal commit %s on %q has no parent to diff against",
-			record.commit, branch)
-	}
+	parent, err := commitParent(ctx, db, record)
 	if err != nil {
-		return ProposalDiff{}, fmt.Errorf("localdolt: read the parent of proposal commit %s: %w", record.commit, err)
+		return ProposalDiff{}, err
 	}
 
 	diff := ProposalDiff{Proposal: proposal, Parent: parent}
@@ -356,6 +365,21 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 				"accepting it here would promote it into this repository instead", id)
 	}
 
+	// The deny-list runs again here, over the prose the branch is about to
+	// make durable (PRD §11.3). It ran once already when the proposal was
+	// staged, but the accept is a second write, on a second day, against a
+	// config file localdolt.checkDenyList deliberately reads per write so
+	// that an edited rule binds the next one. A rule added after an agent
+	// staged something would otherwise be silently skipped by exactly the
+	// lane the review gate exists to police.
+	text, err := s.proposalText(ctx, conn, record)
+	if err != nil {
+		return AcceptResult{}, err
+	}
+	if err := s.checkDenyList(text); err != nil {
+		return AcceptResult{}, fmt.Errorf("localdolt: refusing to promote proposal %s: %w", id, err)
+	}
+
 	result, err := s.acceptInTx(ctx, conn, proposal, reviewer)
 	if err != nil {
 		return AcceptResult{}, err
@@ -370,6 +394,32 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 			id, result.Commit, branch, err)
 	}
 	return result, nil
+}
+
+// proposalText collects the prose a proposal's commit would make durable,
+// read out of the branch's own diff rather than out of the merged working
+// set, so that it is the proposal's rows that are scanned and not whatever
+// else happens to be on main.
+func (s *Store) proposalText(ctx context.Context, q branchQuerier, record branchRecord) ([]string, error) {
+	parent, err := commitParent(ctx, q, record)
+	if err != nil {
+		return nil, err
+	}
+	var text []string
+	for _, table := range sortedReviewedTables() {
+		changes, err := tableChanges(ctx, q, table, parent, record.commit)
+		if err != nil {
+			return nil, err
+		}
+		for _, change := range changes {
+			for _, column := range scannedColumns[table] {
+				if value, ok := change.To[column]; ok {
+					text = append(text, value)
+				}
+			}
+		}
+	}
+	return text, nil
 }
 
 // acceptInTx runs the merge and PRD §6.3's protocol in one transaction,
@@ -892,6 +942,23 @@ func findProposalBranch(ctx context.Context, q branchQuerier, branch string) (br
 	return branchRecord{}, fmt.Errorf(
 		"localdolt: there is no pending proposal %q; a proposal is pending exactly while its branch %q exists (PRD §3.2)",
 		strings.TrimPrefix(branch, ProposalBranchPrefix), branch)
+}
+
+// commitParent reports the commit a proposal branch was cut from, which is
+// the other side of the single-commit diff that is the proposal's whole
+// payload (PRD §3.1).
+func commitParent(ctx context.Context, q branchQuerier, record branchRecord) (string, error) {
+	var parent string
+	err := q.QueryRowContext(ctx,
+		"SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = ?", record.commit).Scan(&parent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("localdolt: the proposal commit %s on %q has no parent to diff against",
+			record.commit, record.name)
+	}
+	if err != nil {
+		return "", fmt.Errorf("localdolt: read the parent of proposal commit %s: %w", record.commit, err)
+	}
+	return parent, nil
 }
 
 // hydrate reads the PRD §6.2 metadata row a proposal branch carries.

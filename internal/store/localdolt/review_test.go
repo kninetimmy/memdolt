@@ -3,11 +3,13 @@ package localdolt_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -161,6 +163,7 @@ func TestReviewAcceptSupersedeClearsAnAlreadySatisfiedViolation(t *testing.T) {
 				bystanderID, "convention.style", "gofmt", "user", "2026-08-02 12:00:00",
 			},
 		}},
+		Text:    []string{"build.command", "go test ./...", "convention.style", "gofmt"},
 		Message: "record the durable facts",
 		Author:  reviewer,
 	}); err != nil {
@@ -185,6 +188,7 @@ func TestReviewAcceptSupersedeClearsAnAlreadySatisfiedViolation(t *testing.T) {
 			SQL:  "UPDATE facts SET value = ? WHERE id = ?",
 			Args: []any{"gofmt -l .", bystanderID},
 		}},
+		Text:    []string{"gofmt -l ."},
 		Message: "an unrelated durable edit",
 		Author:  reviewer,
 	}); err != nil {
@@ -274,6 +278,7 @@ func TestReviewAcceptStaysBlocked(t *testing.T) {
 			},
 			diverge: func(t *testing.T, st *localdolt.Store, _ string) {
 				commitOnMain(t, st, "record a durable fact under the same key",
+					[]string{"build.command", "go test ./..."},
 					store.Statement{
 						SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
 						Args: []any{"01J0000000000000000000MAIN", "build.command", "go test ./...", "user", "2026-08-02 12:00:00"},
@@ -288,6 +293,7 @@ func TestReviewAcceptStaysBlocked(t *testing.T) {
 			seed: func(t *testing.T, st *localdolt.Store) string {
 				const id = "01J0000000000000000000FACT"
 				commitOnMain(t, st, "record the durable build command",
+					[]string{"build.command", "go test ./..."},
 					store.Statement{
 						SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
 						Args: []any{id, "build.command", "go test ./...", "user", "2026-08-02 12:00:00"},
@@ -305,7 +311,7 @@ func TestReviewAcceptStaysBlocked(t *testing.T) {
 			},
 			diverge: func(t *testing.T, st *localdolt.Store, id string) {
 				// main writes the same cell the proposal's link writes.
-				commitOnMain(t, st, "supersede the same row on main",
+				commitOnMain(t, st, "supersede the same row on main", nil,
 					store.Statement{
 						SQL:  "UPDATE facts SET superseded_by = ? WHERE id = ?",
 						Args: []any{"01J000000000000000000MAIN", id},
@@ -360,7 +366,7 @@ func TestReviewAcceptStaysBlocked(t *testing.T) {
 
 			// The store is still usable, and the proposal can still be
 			// reviewed: a refusal is not a wedge.
-			commitOnMain(t, st, "a durable write after the blocked merge",
+			commitOnMain(t, st, "a durable write after the blocked merge", nil,
 				store.Statement{SQL: "INSERT INTO meta (k, v) VALUES ('probe', 'after block')"})
 			if _, err := st.RejectProposal(ctx, staged.ID); err != nil {
 				t.Fatalf("reject the blocked proposal: %v", err)
@@ -624,11 +630,14 @@ func TestReviewAcceptRefusesToPromoteOverUncommittedWork(t *testing.T) {
 }
 
 // commitOnMain records one durable write, the way review or a direct lane
-// would leave main.
-func commitOnMain(t *testing.T, st *localdolt.Store, message string, statements ...store.Statement) {
+// would leave main. text is what the deny-list would scan (PRD §11.3);
+// empty declares the write carries no prose.
+func commitOnMain(t *testing.T, st *localdolt.Store, message string, text []string, statements ...store.Statement) {
 	t.Helper()
 	if _, err := st.Commit(context.Background(), store.CommitRequest{
 		Statements: statements,
+		Text:       text,
+		NoText:     len(text) == 0,
 		Message:    message,
 		Author:     reviewer,
 	}); err != nil {
@@ -682,4 +691,64 @@ func commitRecordOf(t *testing.T, st *localdolt.Store, commit string) commitReco
 		t.Fatalf("look up commit %s: %v", commit, err)
 	}
 	return record
+}
+
+// TestReviewAcceptScansTheDenyListAgain covers the gap between staging and
+// promotion: PRD §11.3's deny-list is read per write, so that an edited
+// rule binds the next one, and the accept is a second write. A rule added
+// after an agent staged a proposal has to stop that proposal becoming
+// durable — otherwise review, the lane the gate exists to police, is the
+// one lane that can carry text past a rule.
+func TestReviewAcceptScansTheDenyListAgain(t *testing.T) {
+	ctx := context.Background()
+	base := baseDir(t)
+	st := openStore(t, base, discardLogger())
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "the deploy key rotates monthly", Actor: stagingActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "env.token", Value: "ghp_0123456789abcdefghijklmnopqrstuvwxyz"})
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+
+	// The rule arrives after the proposal was staged, which is the whole
+	// point: staging saw no deny-list at all.
+	paths, err := layout.New(base)
+	if err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	if err := os.WriteFile(paths.ConfigFile(),
+		[]byte("[deny_list]\npatterns = [\"ghp_[A-Za-z0-9]{36}\"]\n"), 0o600); err != nil {
+		t.Fatalf("write the deny-list config: %v", err)
+	}
+
+	_, err = st.AcceptProposal(ctx, staged.ID, reviewer)
+	if err == nil {
+		t.Fatal("the accept promoted text the deny-list forbids")
+	}
+	if !strings.Contains(err.Error(), "refusing to promote") || !strings.Contains(err.Error(), "deny_list.patterns[0]") {
+		t.Fatalf("refusal %q does not name the deny-list rule that stopped it", err)
+	}
+
+	// Nothing landed and nothing was thrown away: the proposal is still
+	// there to reject or to fix the rule for.
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM facts"); got != 0 {
+		t.Fatalf("main carries %d facts after a refused promotion, want 0", got)
+	}
+	requireProposalBranches(t, st, staged.Branch)
+
+	// A proposal the rule does not match still promotes, so the refusal is
+	// the rule's and not the lane's.
+	clean, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "the linter is part of the contract", Actor: stagingActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "convention.style", Value: "gofmt -l ."})
+	if err != nil {
+		t.Fatalf("propose a clean fact: %v", err)
+	}
+	if _, err := st.AcceptProposal(ctx, clean.ID, reviewer); err != nil {
+		t.Fatalf("accept a proposal the deny-list does not match: %v", err)
+	}
 }
