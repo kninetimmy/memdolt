@@ -56,6 +56,13 @@ export GOFLAGS=-tags=gms_pure_go
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
   §6.2, §6.4). It is idempotent: a second run adds nothing to the Dolt
   history.
+- Check a repository: `go run ./cmd/memdolt doctor` reports the store
+  lock's ownership state (held, an orphaned record, absent), whether a live
+  owner answers on its IPC endpoint, and whether the store's schema is
+  newer than the binary (PRD §5.2.4, §6.4). It creates nothing — run
+  against a directory with no store it says so — and exits nonzero when a
+  check fails. A condition memdolt clears by itself (a stale lock record,
+  an orphaned pidfile) is a warning and exits zero.
 - Write and read the direct lanes (PRD §3.1): `memdolt task add|done|block|list`,
   `memdolt note add|list`, `memdolt command record|get`, `memdolt state set|show`
   and `memdolt arch set|show`. Each write is one Dolt commit on `main`, authored

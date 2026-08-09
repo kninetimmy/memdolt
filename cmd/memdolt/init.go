@@ -11,12 +11,6 @@ import (
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
-// initActor is the identity init's migration commits are attributed to.
-// init is a person running a command, so it is PRD §3.1's plain "user"
-// rather than an agent. The address is in .invalid (RFC 2606) because
-// memdolt asserts an identity for dolt_log and dolt_blame, not a mailbox.
-var initActor = store.Actor{Name: "user", Email: "user@memdolt.invalid"}
-
 // initInfo is the payload printed by `memdolt init --json`. An empty
 // Applied is how a machine reader sees "already initialized": init applied
 // nothing and the Dolt history did not move.
@@ -57,7 +51,7 @@ func newInitCommand() *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, dir string) (err error) {
-	st, err := localdolt.New(localdolt.Config{BaseDir: dir, Actor: initActor})
+	st, err := localdolt.New(localdolt.Config{BaseDir: dir, Actor: cliActor})
 	if err != nil {
 		return err
 	}

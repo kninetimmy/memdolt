@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/store"
 )
 
 // jsonOutput backs the --json persistent flag shared by every memdolt
@@ -11,6 +12,13 @@ import (
 // single machine-readable JSON object on stdout instead of human-readable
 // text.
 var jsonOutput bool
+
+// cliActor is the identity a CLI invocation opens the store under, and
+// the one its commits are attributed to. A CLI is a person running a
+// command, so it is PRD §3.1's plain "user" rather than an agent. The
+// address is in .invalid (RFC 2606) because memdolt asserts an identity
+// for dolt_log and dolt_blame, not a mailbox.
+var cliActor = store.Actor{Name: "user", Email: "user@memdolt.invalid"}
 
 // newRootCommand builds the memdolt root command and wires up its
 // subcommands. It is a constructor (rather than a package-level var) so
@@ -26,6 +34,7 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().BoolVar(&jsonOutput, "json", false,
 		"emit machine-readable JSON on stdout instead of human-readable text")
 
+	root.AddCommand(newDoctorCommand())
 	root.AddCommand(newInitCommand())
 	root.AddCommand(newVersionCommand())
 

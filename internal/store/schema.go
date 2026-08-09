@@ -7,10 +7,17 @@ import (
 	"strconv"
 )
 
-// SchemaVersionKey is the meta row the migration runner is keyed on
-// (PRD §6.4). Its value is the decimal version of the newest migration
-// applied to a store.
-const SchemaVersionKey = "schema_version"
+const (
+	// MetaTable is the plumbing table of PRD §6.1. It is not memory data
+	// and carries no ULID: it is keyed by a string, and schema_version is
+	// the row that keys the migration runner.
+	MetaTable = "meta"
+
+	// SchemaVersionKey is the meta row the migration runner is keyed on
+	// (PRD §6.4). Its value is the decimal version of the newest migration
+	// applied to a store.
+	SchemaVersionKey = "schema_version"
+)
 
 // Migration is one step of memdolt's schema history: the statements that
 // take a store from Version-1 to Version, applied as a unit.

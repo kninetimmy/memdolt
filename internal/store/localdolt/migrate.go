@@ -18,7 +18,7 @@ const MainBranch = "main"
 
 // metaTableName is the plumbing table meta.schema_version lives in
 // (PRD §6.1).
-const metaTableName = "meta"
+const metaTableName = store.MetaTable
 
 // AppliedMigration describes one migration a Migrate call applied.
 type AppliedMigration struct {
