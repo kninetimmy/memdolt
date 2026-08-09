@@ -692,6 +692,73 @@ func closedPort(t *testing.T) int {
 	return port
 }
 
+// TestReconnectionQueueEndsOnTheCallersContext covers the acceptance
+// criterion that a caller whose context expires while its re-probe is
+// queued behind another caller's round returns on its own deadline. Waiting
+// for that turn was a sync.Mutex acquisition, which cannot be cancelled, so
+// the wait was bounded by the other callers' probe schedules instead: four
+// concurrent callers against an owner that accepts and never answers were
+// measured returning after 64.4 s, whatever deadline each of them carried.
+func TestReconnectionQueueEndsOnTheCallersContext(t *testing.T) {
+	base := t.TempDir()
+	client := newClient(base, ownerDetail{Port: closedPort(t), Token: "unused"})
+	client.pacing = pacing{attempts: 2, base: time.Millisecond, max: time.Millisecond}
+
+	// The first caller's round holds the serialization inside its first
+	// probe until the test lets it go. A second caller that returns before
+	// then returned without its turn, which is the whole point.
+	probing := make(chan struct{})
+	release := make(chan struct{})
+	releaseHolder := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseHolder)
+
+	var probes atomic.Int64
+	client.probe = func(context.Context, string) (Status, OwnerInfo, ownerDetail, error) {
+		if probes.Add(1) == 1 {
+			close(probing)
+			<-release
+		}
+		return StatusNoOwner, OwnerInfo{}, ownerDetail{}, ErrOwnerUnverified
+	}
+
+	holder := make(chan error, 1)
+	go func() { holder <- client.PostJSON(context.Background(), "/work", struct{}{}, nil) }()
+	<-probing
+
+	deadline := 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+
+	queued := make(chan error, 1)
+	start := time.Now()
+	go func() { queued <- client.PostJSON(ctx, "/work", struct{}{}, nil) }()
+
+	var err error
+	select {
+	case err = <-queued:
+	case <-time.After(50 * deadline):
+		t.Fatalf("a caller with a %v deadline was still queued for its re-probe %v later", deadline, 50*deadline)
+	}
+	waited := time.Since(start)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error after %v = %v, want one matching context.DeadlineExceeded", waited, err)
+	}
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("%d probes were made, want only the held round's: a caller that gave up must not have probed", got)
+	}
+
+	// The round that held the queue is undisturbed, and hands the
+	// serialization on when it ends.
+	releaseHolder()
+	if err := <-holder; !errors.Is(err, ErrOwnerUnverified) {
+		t.Fatalf("the holding caller's round ended with %v, want its own bounded failure", err)
+	}
+	if got := probes.Load(); got != int64(client.pacing.attempts) {
+		t.Fatalf("the holding caller made %d probes, want the bound of %d", got, client.pacing.attempts)
+	}
+}
+
 func TestListenRefusesASecondOwner(t *testing.T) {
 	base := t.TempDir()
 	first, _ := startServer(t, Config{BaseDir: base})
