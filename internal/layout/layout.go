@@ -11,6 +11,7 @@
 //
 //	<base>/.memdolt/          memdolt's per-repository state
 //	  dolt/                   Dolt data dir; database name = "memory"
+//	  config.toml             per-machine configuration (§11.3)
 //	  LOCK                    memdolt's single-owner store lock (§5.2)
 //	  server.pid              MCP server pidfile (§5.2)
 package layout
@@ -42,6 +43,15 @@ const (
 	// PidFileName is the single-owner pidfile written by the IPC endpoint
 	// (PRD §5.2, §5.3). It holds a live credential and is created 0600.
 	PidFileName = "server.pid"
+
+	// ConfigFileName is the per-repository configuration file (PRD §5.3,
+	// §11.3). It is per-machine and gitignored; a repository checks in
+	// config.example.toml instead.
+	//
+	// Its absence is not an error anywhere: every key it holds has a
+	// default, and a repository with no config file is configured with
+	// those defaults.
+	ConfigFileName = "config.toml"
 )
 
 // ErrNoBaseDir is returned by New when it is given an empty base directory.
@@ -83,3 +93,7 @@ func (p Paths) LockFile() string { return filepath.Join(p.Dir(), LockFileName) }
 
 // PidFile returns <base>/.memdolt/server.pid, the IPC endpoint's pidfile.
 func (p Paths) PidFile() string { return filepath.Join(p.Dir(), PidFileName) }
+
+// ConfigFile returns <base>/.memdolt/config.toml, this repository's
+// per-machine configuration (PRD §11.3).
+func (p Paths) ConfigFile() string { return filepath.Join(p.Dir(), ConfigFileName) }

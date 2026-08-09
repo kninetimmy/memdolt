@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kninetimmy/memdolt/internal/denylist"
 	"github.com/kninetimmy/memdolt/internal/singleowner"
 )
 
@@ -55,6 +56,15 @@ type Store interface {
 	// Commit applies a write and records it as one Dolt commit, returning
 	// the commit hash. Everything in the request lands in a single commit
 	// or none of it does.
+	//
+	// Before any of it is applied, the request's Text is matched against
+	// the repository's configured deny-list (PRD §11.3). A write that
+	// matches is refused with an error matching
+	// errors.Is(err, ErrDenied) that names the rule, and so is a write
+	// whose deny-list is configured but cannot be evaluated; either way
+	// no row and no commit is left behind, because the check runs before
+	// the transaction opens. A repository with no deny-list configured is
+	// unaffected.
 	Commit(ctx context.Context, req CommitRequest) (CommitResult, error)
 
 	// Query runs a read-only statement. The caller closes the returned
@@ -70,6 +80,11 @@ type Store interface {
 // same sentinel the single-owner lock uses, re-exported so that callers
 // programming against Store need not know how ownership is enforced.
 var ErrLocked = singleowner.ErrLocked
+
+// ErrDenied reports a write refused by a configured deny-list rule
+// (PRD §11.3), re-exported for the same reason as ErrLocked. The error it
+// matches names the rule; *denylist.DeniedError carries the detail.
+var ErrDenied = denylist.ErrDenied
 
 // ErrNotOpen reports an operation on a store that is not open.
 var ErrNotOpen = errors.New("store is not open")
@@ -118,6 +133,23 @@ type CommitRequest struct {
 	// Statements are applied in order, on one connection, inside one
 	// transaction.
 	Statements []Statement
+
+	// Text is the memory this write records, in the words it was given
+	// in: a fact's key and value, a decision's title and rationale, a
+	// task's or a note's text, a narrative body. It is what the
+	// repository's configured deny-list is matched against (PRD §11.3),
+	// and it is the only thing that is.
+	//
+	// That makes filling it in the obligation of every lane that records
+	// prose an agent or a user supplied. A lane that leaves it empty is
+	// not scanned — which is right for the writes that carry no such
+	// prose (the migration runner's commits are the case that exists
+	// today) and a hole in the deny-list for any other.
+	//
+	// Nothing here is sent to the database. Statements carry the values
+	// actually written; this is the same text in the one form a rule can
+	// be matched against without parsing SQL.
+	Text []string
 
 	// Message is the commit message. PRD §3.1 wants a structured
 	// one-liner: "propose fact msrv=1.24", "note batch (3)",

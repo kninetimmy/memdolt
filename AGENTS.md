@@ -82,6 +82,32 @@ go-icu-regex. Duration and concurrency are flags (`-soak.duration`,
 `-timeout` raised past the 10-minute default. Findings and measured
 numbers: `docs/spikes/m0-rig1.md`.
 
+## The deny-list (PRD §11.3)
+
+`.memdolt/config.toml` is per-machine and optional. `[deny_list]` is the
+only table with a reader so far:
+
+```toml
+[deny_list]
+patterns = ['(?i)\bAKIA[0-9A-Z]{16}\b']
+```
+
+Patterns are Go regular expressions, written as TOML *literal* strings
+(single quotes) because a regex's backslashes are not valid escapes in a
+TOML basic string. They are matched against `store.CommitRequest.Text` —
+the memory a write records in its own words — before the write's
+transaction opens, so a refused write leaves no row and no commit. Every
+failure refuses: an unreadable file, TOML that does not parse and a pattern
+that does not compile all refuse the write rather than let it through
+unscanned (PRD §13.3 — memdolt keeps secrets out rather than promising to
+delete them).
+
+**A write lane that leaves `Text` empty is not scanned.** That is right for
+writes carrying no prose (the migration runner's commits) and a hole in the
+deny-list for any lane that records what an agent or a user wrote, so every
+such lane fills it in — including over IPC, where `storeipc.CommitRequest`
+carries it to the owner that enforces it.
+
 ## Conventions for agents (PRD §14)
 
 - The PRD is authority; don't silently diverge from it.

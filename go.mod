@@ -3,6 +3,7 @@ module github.com/kninetimmy/memdolt
 go 1.26.2
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/dolthub/driver v1.88.1
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/spf13/cobra v1.10.2

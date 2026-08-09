@@ -24,6 +24,7 @@ func TestPathsAreRootedBeneathTheCallerSuppliedBase(t *testing.T) {
 		"dolt data dir": {paths.DoltDataDir(), filepath.Join(base, ".memdolt", "dolt")},
 		"lock file":     {paths.LockFile(), filepath.Join(base, ".memdolt", "LOCK")},
 		"pidfile":       {paths.PidFile(), filepath.Join(base, ".memdolt", "server.pid")},
+		"config file":   {paths.ConfigFile(), filepath.Join(base, ".memdolt", "config.toml")},
 	}
 	for name, tc := range cases {
 		if tc.got != tc.want {
