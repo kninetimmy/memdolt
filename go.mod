@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/dolthub/driver v1.88.1
+	github.com/oklog/ulid/v2 v2.1.2
 	github.com/spf13/cobra v1.10.2
 	github.com/sugarme/tokenizer v0.3.0
 	github.com/yalue/onnxruntime_go v1.31.0

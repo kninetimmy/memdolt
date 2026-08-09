@@ -55,6 +55,12 @@ export GOFLAGS=-tags=gms_pure_go
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
   §6.4). It is idempotent: a second run adds nothing to the Dolt history.
+- Write and read the direct lanes (PRD §3.1): `memdolt task add|done|block|list`,
+  `memdolt note add|list`, `memdolt command record|get`, `memdolt state set|show`
+  and `memdolt arch set|show`. Each write is one Dolt commit on `main`, authored
+  by the actor (`--actor "Claude Code"` normalizes to `agent:claude-code`; the
+  default is `user`), so `dolt_log` answers provenance on its own. `note add`
+  and the two `set` commands read their body from stdin when given no argument.
 - Run the M0 rig-1 concurrency soak (PRD §16): `go test -tags
   soak,gms_pure_go ./tests/soak/...`
 

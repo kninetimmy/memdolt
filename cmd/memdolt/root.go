@@ -1,6 +1,10 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/spf13/cobra"
+
+	"github.com/kninetimmy/memdolt/internal/memory"
+)
 
 // jsonOutput backs the --json persistent flag shared by every memdolt
 // command (the memhub convention, PRD §14): when set, a command emits a
@@ -24,6 +28,13 @@ func newRootCommand() *cobra.Command {
 
 	root.AddCommand(newInitCommand())
 	root.AddCommand(newVersionCommand())
+
+	// The direct lanes of PRD §3.1.
+	root.AddCommand(newTaskCommand())
+	root.AddCommand(newNoteCommand())
+	root.AddCommand(newCommandCommand())
+	root.AddCommand(newNarrativeCommand(memory.StateNarrative, "status narrative"))
+	root.AddCommand(newNarrativeCommand(memory.ArchNarrative, "architecture narrative"))
 
 	return root
 }
