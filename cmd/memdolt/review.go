@@ -188,9 +188,11 @@ func newReviewAcceptCommand() *cobra.Command {
 		Use:   "accept <id>",
 		Short: "Merge a proposal into main and delete its branch",
 		Long: "Merge a proposal into main, making the row it proposes durable, and delete the\n" +
-			"branch. The merge is fail-closed (PRD §6.3): a data conflict, a constraint\n" +
-			"violation that verification shows is real, or a row memdolt cannot attribute\n" +
-			"leaves main exactly where it was and the proposal still pending.",
+			"branch. What merges is the one commit the proposal was staged with — the commit\n" +
+			"`review show` renders — so a branch carrying anything else is refused rather\n" +
+			"than merged past review. The merge is fail-closed (PRD §6.3): a data conflict, a\n" +
+			"constraint violation that verification shows is real, or a row memdolt cannot\n" +
+			"attribute leaves main exactly where it was and the proposal still pending.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, actor memory.Actor) error {

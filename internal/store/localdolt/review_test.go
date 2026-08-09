@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -373,6 +374,298 @@ func TestReviewAcceptStaysBlocked(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReviewAcceptRefusesMoreThanTheOneStagedCommit covers the guard that
+// closes the gap between what an accept renders and scans — the head commit
+// of the proposal branch — and what it used to merge, which was the branch.
+// A proposal is one commit cut from main (PRD §3.1), memdolt's own
+// staged-write lane produces nothing else, and a branch carrying more is
+// refused by count rather than merged partly unreviewed.
+func TestReviewAcceptRefusesMoreThanTheOneStagedCommit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// craft turns a proposal memdolt staged into one memdolt could not
+		// have, the way the only writer that can do it would.
+		craft func(*testing.T, *localdolt.Store, localdolt.StagedProposal)
+	}{
+		{
+			// The straightforward case: a second commit, written onto the
+			// branch after review would have seen the first.
+			name: "a second commit written straight onto the branch",
+			craft: func(t *testing.T, st *localdolt.Store, staged localdolt.StagedProposal) {
+				commitByHand(t, st, staged.Branch, "sneak a second commit onto the proposal",
+					store.Statement{
+						SQL: "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+						Args: []any{
+							"01J00000000000000000SNEAK", "env.token", "unreviewed",
+							"agent:claude-code", "2026-08-02 12:00:00",
+						},
+					})
+			},
+		},
+		{
+			// The same thing arrived at sideways: the branch head is a merge
+			// commit, so the branch carries its staging commit and the merge
+			// that buried it.
+			name: "a merge commit at the branch head",
+			craft: func(t *testing.T, st *localdolt.Store, staged localdolt.StagedProposal) {
+				commitOnMain(t, st, "a durable write on main",
+					[]string{"convention.style", "gofmt -l ."},
+					store.Statement{
+						SQL: "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+						Args: []any{
+							"01J0000000000000000000MAIN", "convention.style", "gofmt -l .",
+							"user", "2026-08-02 12:00:00",
+						},
+					})
+				mergeMainByHand(t, st, staged.Branch)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := migratedStore(t)
+
+			staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+				Rationale: "the race lane is the one CI runs", Actor: stagingActor, Target: localdolt.TargetRepo,
+			}, localdolt.Fact{Key: "build.command", Value: "go test -race ./..."})
+			if err != nil {
+				t.Fatalf("propose fact: %v", err)
+			}
+			tc.craft(t, st, staged)
+
+			mainHead := headCommit(t, st)
+			mainCommits := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log")
+			factsBefore := scanInt(t, st, "SELECT COUNT(*) FROM facts")
+
+			_, err = st.AcceptProposal(ctx, staged.ID, reviewer)
+			if err == nil {
+				t.Fatal("the accept merged a branch carrying more than the proposal's own commit")
+			}
+			// The refusal names the proposal and what it counted, so the
+			// operator can go and look at the branch.
+			for _, want := range []string{"refusing to promote", staged.ID, staged.Branch, "2 commits"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal %q does not mention %q", err, want)
+				}
+			}
+
+			// Nothing was promoted: main did not move and no row of either
+			// commit became durable.
+			if got := headCommit(t, st); got != mainHead {
+				t.Fatalf("main head = %q, want %q: a refused accept moved main", got, mainHead)
+			}
+			if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log"); got != mainCommits {
+				t.Fatalf("main has %d commits after a refused accept, want %d", got, mainCommits)
+			}
+			if got := scanInt(t, st, "SELECT COUNT(*) FROM facts"); got != factsBefore {
+				t.Fatalf("main carries %d facts after a refused accept, want %d", got, factsBefore)
+			}
+			if got := scanInt(t, st, "SELECT COUNT(*) FROM proposals"); got != 0 {
+				t.Fatalf("a refused accept put %d proposals row(s) on main", got)
+			}
+
+			// And nothing was discarded either: the branch is still there,
+			// the proposal is still pending, and the operator still has
+			// every other review verb.
+			requireProposalBranches(t, st, staged.Branch)
+			pending, err := st.PendingProposals(ctx)
+			if err != nil {
+				t.Fatalf("list pending proposals: %v", err)
+			}
+			if len(pending) != 1 || pending[0].ID != staged.ID {
+				t.Fatalf("after a refused accept the pending proposals are %+v, want the refused one", pending)
+			}
+			if _, err := st.ProposalDiff(ctx, staged.ID); err != nil {
+				t.Fatalf("show the refused proposal: %v", err)
+			}
+			requireOnMain(t, st)
+			if _, err := st.RejectProposal(ctx, staged.ID); err != nil {
+				t.Fatalf("reject the refused proposal: %v", err)
+			}
+		})
+	}
+}
+
+// TestReviewAcceptPromotesAProposalStagedBeforeMainMoved covers the other
+// side of that guard: the count is of what the proposal carries past its
+// merge base, not of how far main has run on since, so a direct-lane write
+// landing between staging and review is not a reason to refuse. It also
+// pins what the merge commit descends from — main's previous head first,
+// and the staging commit `review list` reported second.
+func TestReviewAcceptPromotesAProposalStagedBeforeMainMoved(t *testing.T) {
+	ctx := context.Background()
+	st := migratedStore(t)
+
+	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "the race lane is the one CI runs", Actor: stagingActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "build.command", Value: "go test -race ./..."})
+	if err != nil {
+		t.Fatalf("propose fact: %v", err)
+	}
+
+	// A direct lane writes to main while the proposal sits in review
+	// (PRD §3.1: the direct lanes do not wait for anybody).
+	commitOnMain(t, st, "note what the session was doing", []string{"reviewing the build command"},
+		store.Statement{
+			SQL: "INSERT INTO session_notes (id, actor, text, created_at) VALUES (?, ?, ?, ?)",
+			Args: []any{
+				"01J000000000000000000NOTE", "user", "reviewing the build command", "2026-08-02 12:00:00",
+			},
+		})
+	mainHead := headCommit(t, st)
+	if mainHead == staged.Commit {
+		t.Fatal("the direct-lane write did not move main")
+	}
+
+	// What review reports before the accept is still the commit the
+	// proposal was staged with, not the branch's position relative to main.
+	pending, err := st.PendingProposals(ctx)
+	if err != nil {
+		t.Fatalf("list pending proposals: %v", err)
+	}
+	if len(pending) != 1 || pending[0].Commit != staged.Commit {
+		t.Fatalf("review list reports %+v, want the staging commit %q", pending, staged.Commit)
+	}
+
+	result, err := st.AcceptProposal(ctx, staged.ID, reviewer)
+	if err != nil {
+		t.Fatalf("accept a proposal staged before main moved: %v", err)
+	}
+
+	// The merge commit descends from both sides, and its second parent is
+	// the commit review reported — the one the deny-list scanned.
+	parents := parentsOf(t, st, result.Commit)
+	if len(parents) != 2 || parents[0] != mainHead || parents[1] != pending[0].Commit {
+		t.Fatalf("merge commit parents = %v, want [%s %s]", parents, mainHead, pending[0].Commit)
+	}
+	if got := headCommit(t, st); got != result.Commit {
+		t.Fatalf("main head = %q, want the merge commit %q", got, result.Commit)
+	}
+
+	// Both sides are durable: the promoted fact and the direct-lane row the
+	// merge had to carry past.
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM facts WHERE id = ? AND live_key = ?",
+		staged.RowID, "build.command"); got != 1 {
+		t.Fatal("the accepted fact is not live on main")
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM session_notes"); got != 1 {
+		t.Fatalf("main carries %d session notes after the merge, want the direct-lane row", got)
+	}
+	requireProposalBranches(t, st)
+	requireOnMain(t, st)
+}
+
+// TestReviewShowDiffsAgainstTheHeadsFirstParent covers what `review show`
+// renders on a branch whose head has two parents. Nothing in SQL orders the
+// rows of dolt_commit_ancestors, so the parent an unordered read returns is
+// whichever one came back — and here the two are different diffs, since one
+// parent is the proposal's own staging commit and the other is main.
+//
+// This asserts the contract rather than reproducing a failure: probed on
+// this build, the unordered read returned parent_index 0 ten times out of
+// ten (docs/spikes/m1-conflict-surfaces.md §8). An order nothing asks for is
+// not one to depend on, and this is the assertion that notices if it changes.
+//
+// Accept refuses this branch (it carries two commits past main); show does
+// not, which is how an operator sees what is on it before rejecting it.
+func TestReviewShowDiffsAgainstTheHeadsFirstParent(t *testing.T) {
+	ctx := context.Background()
+	st := migratedStore(t)
+
+	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "the race lane is the one CI runs", Actor: stagingActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "build.command", Value: "go test -race ./..."})
+	if err != nil {
+		t.Fatalf("propose fact: %v", err)
+	}
+	commitOnMain(t, st, "a durable write on main", []string{"convention.style", "gofmt -l ."},
+		store.Statement{
+			SQL: "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+			Args: []any{
+				"01J0000000000000000000MAIN", "convention.style", "gofmt -l .", "user", "2026-08-02 12:00:00",
+			},
+		})
+	mergeMainByHand(t, st, staged.Branch)
+
+	head := headCommitOn(t, st, staged.Branch).hash
+	parents := parentsOf(t, st, head)
+	if len(parents) != 2 {
+		t.Fatalf("the crafted branch head has parents %v, want two", parents)
+	}
+	if parents[0] != staged.Commit {
+		t.Fatalf("the crafted head's first parent is %q, want the staging commit %q", parents[0], staged.Commit)
+	}
+
+	first, err := st.ProposalDiff(ctx, staged.ID)
+	if err != nil {
+		t.Fatalf("show proposal: %v", err)
+	}
+	if first.Proposal.Commit != head {
+		t.Fatalf("show rendered commit %q, want the branch head %q", first.Proposal.Commit, head)
+	}
+	if first.Parent != parents[0] {
+		t.Fatalf("show diffed against %q, want the head's first parent %q (its second is %q)",
+			first.Parent, parents[0], parents[1])
+	}
+	// Which parent it is decides what the diff says, not just which hash it
+	// reports: against the first parent the head commit is what the merge
+	// brought over from main, and the proposal's own row is not in it.
+	if len(first.Changes) != 1 {
+		t.Fatalf("show rendered %+v, want the one row the head commit changed", first.Changes)
+	}
+	if change := first.Changes[0]; change.Table != "facts" || change.To["key"] != "convention.style" {
+		t.Fatalf("show rendered %+v, want the row the merge brought over from main", change)
+	}
+
+	for i := range 5 {
+		again, err := st.ProposalDiff(ctx, staged.ID)
+		if err != nil {
+			t.Fatalf("show proposal again (%d): %v", i, err)
+		}
+		if again.Parent != first.Parent || !reflect.DeepEqual(again.Changes, first.Changes) {
+			t.Fatalf("show rendered %q %+v on invocation %d, want the %q %+v it rendered first",
+				again.Parent, again.Changes, i, first.Parent, first.Changes)
+		}
+	}
+}
+
+// commitByHand puts a second commit on a proposal branch the way the only
+// writer that can reach past memdolt would: an agent with a shell and a SQL
+// prompt, while no owner holds the store. The staged-write lane cannot
+// produce such a branch — stage() cuts from main, writes once, commits once,
+// or takes the branch with it — so the guard that refuses one has to be
+// tested against a branch built this way.
+//
+// It goes through RunOnBranch because the checkout, the writes and the
+// commit have to share one session, which the store's pool cannot give a
+// test: the embedded driver throws every connection away rather than reuse
+// it (see export_test.go).
+func commitByHand(t *testing.T, st *localdolt.Store, branch, message string, statements ...store.Statement) {
+	t.Helper()
+	statements = append(slices.Clone(statements), store.Statement{
+		SQL:  "CALL DOLT_COMMIT('-A', '-m', ?, '--author', ?)",
+		Args: []any{message, stagingActor.String()},
+	})
+	if err := st.RunOnBranch(context.Background(), branch, statements...); err != nil {
+		t.Fatalf("write a second commit onto %s by hand: %v", branch, err)
+	}
+	requireOnMain(t, st)
+}
+
+// mergeMainByHand gives a proposal branch a head with two parents, the other
+// shape memdolt's own lane cannot produce. main has to have moved first, or
+// there is nothing to merge.
+func mergeMainByHand(t *testing.T, st *localdolt.Store, branch string) {
+	t.Helper()
+	if err := st.RunOnBranch(context.Background(), branch, store.Statement{
+		SQL:  "CALL DOLT_MERGE('--no-ff', '-m', ?, ?, '--author', ?)",
+		Args: []any{"merge main into the proposal by hand", localdolt.MainBranch, stagingActor.String()},
+	}); err != nil {
+		t.Fatalf("merge %s into %s by hand: %v", localdolt.MainBranch, branch, err)
+	}
+	requireOnMain(t, st)
 }
 
 // TestReviewRejectDeletesTheBranchAndLeavesMainUnchanged covers the other
