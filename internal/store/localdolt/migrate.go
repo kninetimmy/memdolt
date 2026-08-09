@@ -236,10 +236,18 @@ func schemaVersion(ctx context.Context, db *sql.DB) (int, error) {
 	return version, nil
 }
 
-// activeBranch reports the branch the store's connections are on.
-func activeBranch(ctx context.Context, db *sql.DB) (string, error) {
+// rowQuerier is the one method activeBranch needs, so that it can be asked
+// of the pool (*sql.DB, which answers for whatever connection it hands out)
+// or of one connection (*sql.Conn, the only way to ask a session that the
+// staged-write lane has checked out to a proposal branch).
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// activeBranch reports the branch q is on.
+func activeBranch(ctx context.Context, q rowQuerier) (string, error) {
 	var branch string
-	if err := db.QueryRowContext(ctx, "SELECT active_branch()").Scan(&branch); err != nil {
+	if err := q.QueryRowContext(ctx, "SELECT active_branch()").Scan(&branch); err != nil {
 		return "", fmt.Errorf("localdolt: read the active branch: %w", err)
 	}
 	return branch, nil

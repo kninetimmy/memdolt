@@ -41,7 +41,7 @@ func newInitCommand() *cobra.Command {
 		Use:   "init",
 		Short: "Create this repository's memdolt store and bring its schema up to date",
 		Long: "Create the embedded Dolt store beneath <dir>/.memdolt and apply every schema\n" +
-			"migration it is missing, one Dolt commit each (PRD §6.1, §6.4).\n\n" +
+			"migration it is missing, one Dolt commit each (PRD §6.1, §6.2, §6.4).\n\n" +
 			"init is idempotent: run against a store that is already current, it reports\n" +
 			"that and adds nothing to the Dolt history.",
 		Args: cobra.NoArgs,

@@ -36,6 +36,7 @@ type Migration struct {
 // already ran it will never run it again.
 var migrations = []Migration{
 	{Version: 1, Name: "initial schema", Statements: initialSchema},
+	{Version: 2, Name: "proposals metadata", Statements: proposalsSchema},
 }
 
 // Migrations returns the schema history the binary ships, oldest first.
@@ -194,5 +195,36 @@ var initialSchema = []Statement{
 	{SQL: `CREATE TABLE meta (
   k VARCHAR(64) PRIMARY KEY,
   v TEXT
+)`},
+}
+
+// proposalsSchema is PRD §6.2's review-metadata table, the row a staged
+// write carries on its proposal branch beside the fact or decision it
+// proposes. §6.1's DDL block does not list it, so it arrives as its own
+// migration rather than as an edit to initialSchema: migration 1 has
+// shipped, and an applied migration is never edited (see Migration).
+//
+// Details that are decisions rather than transcription:
+//
+//   - id is the proposal's ULID, and the branch that carries the proposal
+//     is proposal/<id> (PRD §3.1). One id names both, so review goes from a
+//     proposal row to its branch and back with no lookup table.
+//   - kind is an ENUM of the three staged-write tools of §11.1 —
+//     propose_fact, propose_decision, propose_supersede — rather than a
+//     free string, so a typo is a write error rather than a proposal that
+//     review cannot classify. §6.2 names the column, not its type.
+//   - actor is VARCHAR(64) to match facts.source and session_notes.actor,
+//     the other columns that hold a normalized §3.1 actor.
+//   - No FULLTEXT key: review metadata is listed and diffed by id, never
+//     searched for content, and every FULLTEXT key costs five internal
+//     index tables on write (§6.1).
+var proposalsSchema = []Statement{
+	{SQL: `CREATE TABLE proposals (
+  id CHAR(26) PRIMARY KEY,
+  kind ENUM('fact','decision','supersede'),
+  rationale TEXT,
+  actor VARCHAR(64),
+  created_at DATETIME,
+  target ENUM('repo','global')
 )`},
 }

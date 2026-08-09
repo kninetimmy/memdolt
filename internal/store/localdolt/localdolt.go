@@ -206,15 +206,24 @@ func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.Comm
 	if err != nil {
 		return store.CommitResult{}, err
 	}
-	if err := req.Validate(); err != nil {
-		return store.CommitResult{}, fmt.Errorf("localdolt: invalid commit request: %w", err)
-	}
 
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return store.CommitResult{}, fmt.Errorf("localdolt: acquire connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+
+	return commitConn(ctx, conn, req)
+}
+
+// commitConn is Commit's body, minus the choice of connection: it applies
+// req to whatever branch conn is checked out to. The staged-write lane
+// (propose.go) needs that separation, because its connection is checked out
+// to a proposal branch rather than taken fresh from the pool.
+func commitConn(ctx context.Context, conn *sql.Conn, req store.CommitRequest) (store.CommitResult, error) {
+	if err := req.Validate(); err != nil {
+		return store.CommitResult{}, fmt.Errorf("localdolt: invalid commit request: %w", err)
+	}
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
