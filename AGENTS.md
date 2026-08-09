@@ -51,6 +51,10 @@ export GOFLAGS=-tags=gms_pure_go
   in `.github/workflows/ci.yml`)
 - Run the CLI: `go run ./cmd/memdolt version` (add `--json` for a single
   machine-readable JSON object instead of the human-readable line)
+- Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
+  the current directory (`--dir` points it elsewhere) and applies every
+  schema migration the store is missing, one Dolt commit each (PRD §6.1,
+  §6.4). It is idempotent: a second run adds nothing to the Dolt history.
 - Run the M0 rig-1 concurrency soak (PRD §16): `go test -tags
   soak,gms_pure_go ./tests/soak/...`
 
