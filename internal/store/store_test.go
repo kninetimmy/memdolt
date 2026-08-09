@@ -36,6 +36,7 @@ func TestCommitRequestValidate(t *testing.T) {
 	actor := store.Actor{Name: "user", Email: "user@memdolt.invalid"}
 	valid := store.CommitRequest{
 		Statements: []store.Statement{{SQL: "INSERT INTO t (k) VALUES (?)", Args: []any{"k"}}},
+		Text:       []string{"the note this write records"},
 		Message:    "note batch (1)",
 		Author:     actor,
 	}
@@ -43,16 +44,42 @@ func TestCommitRequestValidate(t *testing.T) {
 		t.Fatalf("valid request rejected: %v", err)
 	}
 
+	// The other half of the declaration: a write that says it has no text
+	// for the deny-list to scan is valid too.
+	declaresNone := valid
+	declaresNone.Text, declaresNone.NoText = nil, true
+	if err := declaresNone.Validate(); err != nil {
+		t.Fatalf("request declaring NoText rejected: %v", err)
+	}
+
 	cases := map[string]store.CommitRequest{
-		"no statements":   {Message: "m", Author: actor},
-		"empty statement": {Statements: []store.Statement{{SQL: "  "}}, Message: "m", Author: actor},
-		"no message":      {Statements: valid.Statements, Author: actor},
+		"no statements":   {Text: valid.Text, Message: "m", Author: actor},
+		"empty statement": {Statements: []store.Statement{{SQL: "  "}}, Text: valid.Text, Message: "m", Author: actor},
+		"no message":      {Statements: valid.Statements, Text: valid.Text, Author: actor},
 		"multiline message": {
 			Statements: valid.Statements,
+			Text:       valid.Text,
 			Message:    "line one\nline two",
 			Author:     actor,
 		},
-		"invalid author": {Statements: valid.Statements, Message: "m"},
+		"invalid author": {Statements: valid.Statements, Text: valid.Text, Message: "m"},
+
+		// The deny-list tripwire (PRD §11.3). A request that declares
+		// neither text nor NoText is the shape a lane takes when nobody
+		// thought about the deny-list at all, and it is refused rather
+		// than committed unscanned.
+		"declares neither text nor NoText": {
+			Statements: valid.Statements,
+			Message:    "m",
+			Author:     actor,
+		},
+		"declares both text and NoText": {
+			Statements: valid.Statements,
+			Text:       valid.Text,
+			NoText:     true,
+			Message:    "m",
+			Author:     actor,
+		},
 	}
 	for name, req := range cases {
 		if err := req.Validate(); err == nil {

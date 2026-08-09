@@ -69,9 +69,17 @@ func now() time.Time { return time.Now().UTC().Truncate(time.Second) }
 
 // write applies one statement and records it as one Dolt commit authored
 // by the lane's actor (§3.1).
-func (l *Lanes) write(ctx context.Context, message string, stmt store.Statement) (string, error) {
+//
+// text is what the write records in the caller's own words — a task title
+// and its notes, a note's body, a command line, a narrative body — for the
+// deny-list to match against (§11.3). Every direct lane has some, so none
+// of them declares store.CommitRequest.NoText; a lane added here that
+// passed none would be refused by the store on its first write rather than
+// committed unscanned.
+func (l *Lanes) write(ctx context.Context, message string, text []string, stmt store.Statement) (string, error) {
 	result, err := l.store.Commit(ctx, store.CommitRequest{
 		Statements: []store.Statement{stmt},
+		Text:       text,
 		Message:    message,
 		Author:     l.actor.CommitAuthor(),
 	})
@@ -154,7 +162,7 @@ func (l *Lanes) AddTask(ctx context.Context, title, notes string) (Task, string,
 		CreatedAt: stamp,
 		UpdatedAt: stamp,
 	}
-	hash, err := l.write(ctx, "task add "+summarize(task.Title), store.Statement{
+	hash, err := l.write(ctx, "task add "+summarize(task.Title), []string{task.Title, task.Notes}, store.Statement{
 		SQL: "INSERT INTO tasks (id, title, status, notes, created_at, updated_at) " +
 			"VALUES (?, ?, ?, ?, ?, ?)",
 		Args: []any{task.ID, task.Title, task.Status, nullable(task.Notes), task.CreatedAt, task.UpdatedAt},
@@ -228,7 +236,10 @@ func (l *Lanes) setTaskStatus(ctx context.Context, id, status, notes string) (Ta
 		}
 	}
 
-	hash, err := l.write(ctx, "task "+taskOperation(status)+" "+task.ID, stmt)
+	// The notes are the only words this write records; a completion that
+	// leaves them alone declares them anyway, empty, because "there is
+	// nothing to scan here" is a claim the store makes a lane state.
+	hash, err := l.write(ctx, "task "+taskOperation(status)+" "+task.ID, []string{notes}, stmt)
 	if err != nil {
 		return Task{}, "", fmt.Errorf("mark task %s %s: %w", task.ID, status, err)
 	}
@@ -328,7 +339,7 @@ func (l *Lanes) LogNote(ctx context.Context, body string) (Note, string, error) 
 		Text:      body,
 		CreatedAt: now(),
 	}
-	hash, err := l.write(ctx, "note add "+summarize(note.Text), store.Statement{
+	hash, err := l.write(ctx, "note add "+summarize(note.Text), []string{note.Text}, store.Statement{
 		SQL: "INSERT INTO session_notes (id, actor, actor_raw, text, created_at) " +
 			"VALUES (?, ?, ?, ?, ?)",
 		Args: []any{note.ID, note.Actor, note.ActorRaw, note.Text, note.CreatedAt},
@@ -425,6 +436,7 @@ func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCod
 
 	hash, err := l.write(ctx,
 		fmt.Sprintf("command record %s (exit %d)", command.Kind, command.LastExitCode),
+		[]string{command.Cmdline},
 		store.Statement{
 			SQL: "INSERT INTO commands (kind, cmdline, last_exit_code, last_run_at, success_count, fail_count) " +
 				"VALUES (?, ?, ?, ?, ?, ?) " +
@@ -539,7 +551,7 @@ func (l *Lanes) SetNarrative(ctx context.Context, kind NarrativeKind, body strin
 		ActorRaw:  l.actor.Raw,
 		CreatedAt: now(),
 	}
-	hash, err := l.write(ctx, string(kind)+" set", store.Statement{
+	hash, err := l.write(ctx, string(kind)+" set", []string{narrative.Body}, store.Statement{
 		SQL: "INSERT INTO " + table + " (id, body, actor, actor_raw, created_at) " +
 			"VALUES (?, ?, ?, ?, ?)",
 		Args: []any{narrative.ID, narrative.Body, narrative.Actor, narrative.ActorRaw, narrative.CreatedAt},

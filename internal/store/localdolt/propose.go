@@ -131,6 +131,9 @@ func (f Fact) validate() error {
 	return nil
 }
 
+// text is what this fact says, for the deny-list to scan (PRD §11.3).
+func (f Fact) text() []string { return []string{f.Key, f.Value, f.Kind, f.Evidence} }
+
 // Decision is the decisions row a proposal stages: the columns an agent
 // supplies. id, status, source and decided_at are memdolt's to fill.
 type Decision struct {
@@ -166,6 +169,11 @@ func (d Decision) validate() error {
 		return fmt.Errorf("decision title %q must not contain a line break; it is part of the commit message (PRD §3.1)", d.Title)
 	}
 	return nil
+}
+
+// text is what this decision says, for the deny-list to scan (PRD §11.3).
+func (d Decision) text() []string {
+	return []string{d.Title, d.Rationale, d.Summary, d.AlternativesRejected, d.Evidence}
 }
 
 // StagedProposal describes the branch a staged write created.
@@ -212,6 +220,7 @@ func (s *Store) ProposeFact(ctx context.Context, p Proposal, f Fact) (StagedProp
 		now:        now,
 		message:    "propose fact " + f.Key,
 		statements: []store.Statement{insertFact(rowID, f, p.Actor, now)},
+		text:       f.text(),
 	})
 }
 
@@ -230,6 +239,7 @@ func (s *Store) ProposeDecision(ctx context.Context, p Proposal, d Decision) (St
 		now:        now,
 		message:    "propose decision " + d.Title,
 		statements: []store.Statement{insertDecision(rowID, d, p.Actor, now)},
+		text:       d.text(),
 	})
 }
 
@@ -269,6 +279,7 @@ func (s *Store) ProposeSupersede(ctx context.Context, p Proposal, supersededID s
 		rowID:        rowID,
 		now:          now,
 		message:      "propose supersede fact " + replacement.Key,
+		text:         replacement.text(),
 		supersededID: supersededID,
 		statements: []store.Statement{
 			{
@@ -302,6 +313,13 @@ type stagedWrite struct {
 	// statements are the row writes, already in the order §6.1 requires.
 	statements []store.Statement
 
+	// text is what the proposed row says, for the deny-list to match
+	// against (PRD §11.3). Every free-text column an agent supplied is in
+	// it, evidence pointers included: a URL is as good a place to leak a
+	// token as a value is, and a proposal is written by the untrusted
+	// writer of PRD §7.
+	text []string
+
 	// supersededID, when set, is the live fact the first statement links.
 	// stage verifies it is live on the branch before anything is written.
 	supersededID string
@@ -328,6 +346,10 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	if err := w.proposal.validate(); err != nil {
 		return StagedProposal{}, fmt.Errorf("localdolt: propose %s: %w", w.kind, err)
 	}
+
+	// The reviewer's rationale rides in the same commit as the row it
+	// explains, and an agent wrote it, so the deny-list scans it too.
+	w.text = append(slices.Clone(w.text), w.proposal.Rationale)
 
 	id := newID()
 	branch := ProposalBranch(id)
@@ -364,7 +386,7 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 			deleteBranch(ctx, conn, branch))
 	}
 
-	result, stageErr := stageOnBranch(ctx, conn, w, statements)
+	result, stageErr := s.stageOnBranch(ctx, conn, w, statements)
 
 	if restoreErr := checkoutBranch(ctx, conn, origin); restoreErr != nil {
 		// The session is stranded on the proposal branch. Whatever else
@@ -389,14 +411,15 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 }
 
 // stageOnBranch writes the proposal on the branch conn is checked out to.
-func stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite, statements []store.Statement) (store.CommitResult, error) {
+func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite, statements []store.Statement) (store.CommitResult, error) {
 	if w.supersededID != "" {
 		if err := requireLiveFact(ctx, conn, w.supersededID); err != nil {
 			return store.CommitResult{}, err
 		}
 	}
-	return commitConn(ctx, conn, store.CommitRequest{
+	return s.commitConn(ctx, conn, store.CommitRequest{
 		Statements: statements,
+		Text:       w.text,
 		Message:    w.message,
 		Author:     w.proposal.Actor,
 	})

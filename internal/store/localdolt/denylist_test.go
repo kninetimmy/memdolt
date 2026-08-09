@@ -38,7 +38,7 @@ func factWrite(id, key, value string) store.CommitRequest {
 func TestCommitRefusesTextMatchingTheDenyListAndLeavesNothingBehind(t *testing.T) {
 	ctx := context.Background()
 	base := baseDir(t)
-	st := migratedStore(t, base)
+	st := migratedStoreAt(t, base)
 	before := commitCount(t, st)
 
 	writeDenyList(t, base, `AKIA[0-9A-Z]{16}`)
@@ -74,13 +74,74 @@ func TestCommitRefusesTextMatchingTheDenyListAndLeavesNothingBehind(t *testing.T
 	}
 }
 
+// TestStagedWritesAreScannedByTheDenyList runs the deny-list through the
+// staged-write lane of PRD §6.2, the one an untrusted agent writes with.
+//
+// Its commits do not go through Store.Commit — they are made on a proposal
+// branch, on a connection the lane holds — so a deny-list wired only into
+// Commit would leave exactly these writes unscanned. Each case here puts
+// the secret in a different agent-supplied column to check that the lane
+// declares all of them and not just the one in the commit message.
+func TestStagedWritesAreScannedByTheDenyList(t *testing.T) {
+	ctx := context.Background()
+	base := baseDir(t)
+	st := migratedStoreAt(t, base)
+	before := commitCount(t, st)
+
+	writeDenyList(t, base, `AKIA[0-9A-Z]{16}`)
+
+	good := localdolt.Proposal{Rationale: "why", Actor: stagingActor, Target: localdolt.TargetRepo}
+	for name, stage := range map[string]func() (localdolt.StagedProposal, error){
+		"a fact's value": func() (localdolt.StagedProposal, error) {
+			return st.ProposeFact(ctx, good, localdolt.Fact{Key: "aws.access_key", Value: theSecret})
+		},
+		"a decision's rationale": func() (localdolt.StagedProposal, error) {
+			return st.ProposeDecision(ctx, good, localdolt.Decision{
+				Title:     "Rotate the deploy credentials",
+				Rationale: "the old one was " + theSecret,
+			})
+		},
+		"the note to the reviewer": func() (localdolt.StagedProposal, error) {
+			return st.ProposeFact(ctx,
+				localdolt.Proposal{Rationale: "found in the log: " + theSecret, Actor: stagingActor, Target: localdolt.TargetRepo},
+				localdolt.Fact{Key: "build.tool", Value: "go 1.26"})
+		},
+	} {
+		_, err := stage()
+		if !errors.Is(err, store.ErrDenied) {
+			t.Errorf("%s: staging error = %v, want one matching store.ErrDenied", name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), theSecret) {
+			t.Errorf("%s: refusal %q repeats the matched text back to the caller", name, err)
+		}
+	}
+
+	// A refused proposal leaves no branch, no row and no commit: staging
+	// deletes the branch it could not fill, the way it does for any other
+	// refusal.
+	requireProposalBranches(t, st)
+	if got := factCount(t, st); got != 0 {
+		t.Fatalf("facts after refused proposals = %d, want 0", got)
+	}
+	if got := commitCount(t, st); got != before {
+		t.Fatalf("history after refused proposals has %d commits, want %d", got, before)
+	}
+
+	// Text the rule does not match still stages, on its own branch.
+	staged, err := st.ProposeFact(ctx, good, localdolt.Fact{Key: "build.tool", Value: "go 1.26"})
+	if err != nil {
+		t.Fatalf("propose a fact the deny-list does not match: %v", err)
+	}
+	requireProposalBranches(t, st, staged.Branch)
+}
+
 // TestCommitRefusesADenyListItCannotEvaluate covers the fail-closed half
 // of PRD §14: a configured deny-list memdolt cannot evaluate refuses the
 // write rather than letting it through unscanned.
 func TestCommitRefusesADenyListItCannotEvaluate(t *testing.T) {
 	ctx := context.Background()
 	base := baseDir(t)
-	st := migratedStore(t, base)
+	st := migratedStoreAt(t, base)
 	before := commitCount(t, st)
 
 	// A pattern that is not a valid regular expression: configured, and
@@ -107,7 +168,7 @@ func TestCommitRefusesADenyListItCannotEvaluate(t *testing.T) {
 func TestCommitIsUnaffectedWithoutADenyList(t *testing.T) {
 	ctx := context.Background()
 	base := baseDir(t)
-	st := migratedStore(t, base)
+	st := migratedStoreAt(t, base)
 	before := commitCount(t, st)
 
 	if _, err := st.Commit(ctx, factWrite("01J00000000000000000000004", "aws.access_key", theSecret)); err != nil {
@@ -164,9 +225,10 @@ func writeDenyList(t *testing.T, base string, patterns ...string) {
 	}
 }
 
-// migratedStore opens a store with PRD §6.1's schema applied, which is
-// what a write path needs beneath it.
-func migratedStore(t *testing.T, base string) *localdolt.Store {
+// migratedStoreAt opens a store at base with PRD §6.1's schema applied,
+// which is what a write path needs beneath it. These tests name the base
+// directory because the deny-list they configure lives in it.
+func migratedStoreAt(t *testing.T, base string) *localdolt.Store {
 	t.Helper()
 	st := openStore(t, base, discardLogger())
 	if _, err := st.Migrate(context.Background()); err != nil {

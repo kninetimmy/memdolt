@@ -64,6 +64,7 @@ func TestFactKeyPrefixAndFulltextContract(t *testing.T) {
 			{SQL: `INSERT INTO doc_chunks (id, heading_path, body)
 				VALUES ('chunk-cargo', 'Build > Cargo', 'cargo reference')`},
 		},
+		NoText:  true,
 		Message: "seed FULLTEXT contract probe",
 		Author:  store.Actor{Name: "agent:codex", Email: "codex@memdolt.invalid"},
 	})

@@ -278,6 +278,7 @@ func TestOpenRefusesAStoreNewerThanTheBinary(t *testing.T) {
 		Statements: []store.Statement{
 			{SQL: "UPDATE meta SET v = ? WHERE k = ?", Args: []any{newer, store.SchemaVersionKey}},
 		},
+		NoText:  true,
 		Message: "record a schema version a newer memdolt migrated to",
 		Author:  store.Actor{Name: "user", Email: "user@memdolt.invalid"},
 	}); err != nil {
@@ -304,6 +305,7 @@ func TestOpenRefusesAStoreNewerThanTheBinary(t *testing.T) {
 	}
 	if _, commitErr := second.Commit(ctx, store.CommitRequest{
 		Statements: []store.Statement{{SQL: "INSERT INTO facts (id) VALUES ('01J000000000000000000000')"}},
+		NoText:     true,
 		Message:    "write to a store this binary must not touch",
 		Author:     store.Actor{Name: "user", Email: "user@memdolt.invalid"},
 	}); !errors.Is(commitErr, store.ErrNotOpen) {

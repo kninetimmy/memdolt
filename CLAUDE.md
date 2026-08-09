@@ -102,11 +102,16 @@ that does not compile all refuse the write rather than let it through
 unscanned (PRD §13.3 — memdolt keeps secrets out rather than promising to
 delete them).
 
-**A write lane that leaves `Text` empty is not scanned.** That is right for
-writes carrying no prose (the migration runner's commits) and a hole in the
-deny-list for any lane that records what an agent or a user wrote, so every
-such lane fills it in — including over IPC, where `storeipc.CommitRequest`
-carries it to the owner that enforces it.
+**Every write declares its text, or declares it has none.** A
+`CommitRequest` that sets neither `Text` nor `NoText` is refused before
+anything is applied, so a new write lane cannot skip the deny-list by
+leaving a field at its zero value — it fails loudly on its first write
+instead. `NoText` is for commits that carry no prose anyone wrote; the
+migration runner is the case it exists for, deliberately, so that a
+deny-list config that cannot be evaluated never stands between an operator
+and `memdolt init`. The declaration travels over IPC too, where
+`storeipc.CommitRequest` carries both fields to the owner that enforces
+them.
 
 ## Conventions for agents (PRD §14)
 

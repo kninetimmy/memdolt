@@ -104,6 +104,7 @@ func TestCommitProducesADoltCommitVisibleInDoltLog(t *testing.T) {
 			{SQL: "CREATE TABLE probe (k VARCHAR(64) PRIMARY KEY, v TEXT)"},
 			{SQL: "INSERT INTO probe (k, v) VALUES (?, ?)", Args: []any{"msrv", "1.24"}},
 		},
+		NoText:  true,
 		Message: message,
 		Author:  author,
 	})
@@ -171,6 +172,7 @@ func TestCommitRejectsAWriteWithNothingToRecord(t *testing.T) {
 	author := store.Actor{Name: "user", Email: "user@memdolt.invalid"}
 	if _, err := st.Commit(ctx, store.CommitRequest{
 		Statements: []store.Statement{{SQL: "SELECT 1"}},
+		NoText:     true,
 		Message:    "nothing to see",
 		Author:     author,
 	}); err == nil {
@@ -194,6 +196,7 @@ func TestOperationsOnAClosedStoreFail(t *testing.T) {
 	}
 	if _, err := st.Commit(ctx, store.CommitRequest{
 		Statements: []store.Statement{{SQL: "SELECT 1"}},
+		NoText:     true,
 		Message:    "m",
 		Author:     store.Actor{Name: "user", Email: "user@memdolt.invalid"},
 	}); !errors.Is(err, store.ErrNotOpen) {
@@ -290,6 +293,7 @@ func TestOpenRecoversALockLeftByADeadProcess(t *testing.T) {
 	// And the store really is usable afterwards.
 	if _, err := st.Commit(context.Background(), store.CommitRequest{
 		Statements: []store.Statement{{SQL: "CREATE TABLE probe (k VARCHAR(64) PRIMARY KEY)"}},
+		NoText:     true,
 		Message:    "schema probe",
 		Author:     store.Actor{Name: "user", Email: "user@memdolt.invalid"},
 	}); err != nil {

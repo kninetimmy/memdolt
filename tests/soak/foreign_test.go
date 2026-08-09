@@ -264,6 +264,7 @@ func probeOwnerStillWorks(t *testing.T, ctx context.Context, base string, observ
 			{SQL: "CREATE TABLE IF NOT EXISTS owner_marker (k VARCHAR(64) PRIMARY KEY)"},
 			{SQL: "INSERT INTO owner_marker (k) VALUES (?)", Args: []any{"after-the-foreign-open"}},
 		},
+		NoText:  true,
 		Message: "soak: owner writes after a foreign process opened the data directory",
 		Author:  storeipc.Actor{Name: ownerActor.Name, Email: ownerActor.Email},
 	})

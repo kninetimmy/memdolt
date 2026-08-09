@@ -65,6 +65,9 @@ type Store interface {
 	// no row and no commit is left behind, because the check runs before
 	// the transaction opens. A repository with no deny-list configured is
 	// unaffected.
+	//
+	// A request that declares neither Text nor NoText is refused before
+	// any of that, so that a lane cannot skip the deny-list by omission.
 	Commit(ctx context.Context, req CommitRequest) (CommitResult, error)
 
 	// Query runs a read-only statement. The caller closes the returned
@@ -141,15 +144,32 @@ type CommitRequest struct {
 	// and it is the only thing that is.
 	//
 	// That makes filling it in the obligation of every lane that records
-	// prose an agent or a user supplied. A lane that leaves it empty is
-	// not scanned — which is right for the writes that carry no such
-	// prose (the migration runner's commits are the case that exists
-	// today) and a hole in the deny-list for any other.
+	// prose an agent or a user supplied. Leaving it empty is not a way to
+	// opt out: Validate refuses a request that declares neither text nor
+	// NoText, so a lane goes unscanned only by saying out loud that it
+	// has nothing to scan.
 	//
 	// Nothing here is sent to the database. Statements carry the values
 	// actually written; this is the same text in the one form a rule can
 	// be matched against without parsing SQL.
 	Text []string
+
+	// NoText declares that this write records no memory prose, and is the
+	// only way to commit without Text.
+	//
+	// It exists because the alternative — treating an empty Text as
+	// "nothing to scan" — makes the deny-list fail open per lane: a new
+	// write path that never filled Text in would pass the deny-list
+	// without being evaluated, and would do it silently, at a zero value
+	// nobody wrote. Requiring the declaration turns that into a refusal
+	// the first time the lane runs.
+	//
+	// The migration runner is the case it exists for. Its commits carry
+	// DDL and a schema_version row, no prose an agent supplied, and
+	// scanning them would put a broken deny-list config between an
+	// operator and `memdolt init` — the one command that has to work
+	// before anything else can.
+	NoText bool
 
 	// Message is the commit message. PRD §3.1 wants a structured
 	// one-liner: "propose fact msrv=1.24", "note batch (3)",
@@ -169,6 +189,12 @@ func (r CommitRequest) Validate() error {
 		if strings.TrimSpace(stmt.SQL) == "" {
 			return fmt.Errorf("statement %d is empty", i)
 		}
+	}
+	if len(r.Text) == 0 && !r.NoText {
+		return errors.New("commit must declare the text the deny-list scans, or set NoText to declare it has none (PRD §11.3)")
+	}
+	if len(r.Text) > 0 && r.NoText {
+		return errors.New("commit declares both Text and NoText")
 	}
 	if strings.TrimSpace(r.Message) == "" {
 		return errors.New("commit requires a message")

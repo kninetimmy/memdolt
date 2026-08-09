@@ -149,7 +149,7 @@ func TestDoctorFailsAndExitsNonzeroOnASchemaNewerThanTheBinary(t *testing.T) {
 	runMemdolt(t, "init", "--dir", base)
 	recordANewerSchemaVersion(t, base)
 
-	out, err := runMemdoltErr(t, "doctor", "--dir", base, "--json")
+	out, err := runMemdoltResult(t, "doctor", "--dir", base, "--json")
 	if err == nil {
 		t.Fatalf("doctor succeeded against a store newer than the binary; output %q", out)
 	}
@@ -248,6 +248,7 @@ func recordANewerSchemaVersion(t *testing.T, base string) {
 			SQL:  "UPDATE " + store.MetaTable + " SET v = ? WHERE k = ?",
 			Args: []any{strconv.Itoa(store.LatestSchemaVersion() + 1), store.SchemaVersionKey},
 		}},
+		NoText:  true,
 		Message: "record a schema version a newer memdolt migrated to",
 		Author:  cliActor,
 	}); err != nil {
@@ -301,9 +302,10 @@ func hostname(t *testing.T) string {
 	return host
 }
 
-// runMemdoltErr runs a command and hands back both its output and its
-// error, which is what a command expected to exit nonzero needs.
-func runMemdoltErr(t *testing.T, args ...string) (string, error) {
+// runMemdoltResult runs a command and hands back both its output and its
+// error, which is what a command expected to exit nonzero needs: doctor
+// prints its report either way.
+func runMemdoltResult(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	root := newRootCommand()
 	out := &bytes.Buffer{}
