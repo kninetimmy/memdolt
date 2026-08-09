@@ -518,3 +518,59 @@ Two smaller results from the same probe, both of which shape the code:
   `from_` column of an added row — so the review lane renders diff and
   verification columns with `CAST(... AS CHAR)` in SQL rather than scanning
   them as they are.
+
+## 8. M1 follow-up: merging the reviewed commit rather than the branch
+
+Measured 2026-08-09 while closing two findings from PR #52's own review
+(issue #55), on the setup §7 describes: `github.com/dolthub/driver` v1.88.1
+over PRD §6.1's committed schema, Windows 11 Pro build 26200, Go 1.26.5,
+`CGO_ENABLED=1`, `-tags=gms_pure_go`. The probe was a throwaway test inside
+`internal/store/localdolt` that staged proposals through `ProposeFact` and
+then drove the accept's SQL by hand; it is not part of the suite.
+
+§7 settled how the accept reaches Dolt's failure surfaces. It left the
+accept naming the proposal by *branch* — which is what
+`ProposalDiff`/`proposalText` had already resolved once, and read one commit
+out of:
+
+| | Before (PR #52) | After (this change) |
+|---|---|---|
+| what the merge names | the branch: `CALL DOLT_MERGE('--no-ff','--no-commit','proposal/<id>')`, resolved again inside the merge | the staging commit, by hash — the same commit `review show` rendered and the deny-list scanned |
+| a branch carrying two commits | shown and scanned as its head commit alone, and merged whole | refused before the merge, naming the proposal and the count; `main` unmoved, branch intact, proposal still pending |
+| the parent `review show` diffs against | `SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = ?` — one row of however many | the same, `ORDER BY parent_index LIMIT 1`: the first parent, every time |
+
+What the probe measured, in the order the accept now asks it:
+
+- `SELECT COUNT(*) FROM DOLT_LOG(?, '--not', ?)` takes **both revisions as
+  bound parameters** — unlike `AS OF`, this table function does not need
+  them formatted into the query text. It answered `1` for a branch memdolt
+  staged, `1` again after a direct-lane write moved `main` past it, `2` for
+  a branch given a second commit by hand, and `2` for a branch whose head is
+  a merge of `main` into it.
+- `SELECT DOLT_MERGE_BASE(?, ?)` likewise takes a commit hash bound.
+- `CALL DOLT_MERGE('--no-ff', '--no-commit', ?)` takes a commit hash bound,
+  exactly as it takes a branch name: `fast_forward = 0`, `conflicts = 0`,
+  `message = "merge successful"`. Concluding it with `DOLT_COMMIT('-A')`
+  produced a merge commit whose `parent_index = 0` is `main`'s previous head
+  and whose `parent_index = 1` is the hash that was passed in — so the
+  commit review reported is provably the commit that merged.
+- For a head with two parents, the unordered `SELECT parent_hash … WHERE
+  commit_hash = ?` returned `parent_index = 0` on all ten reads. Nothing in
+  the SQL asks for that order, and the two answers are different diffs, so
+  `commitParent` orders by `parent_index` rather than depending on it.
+
+One result from the same probe shapes the tests rather than the lane: **the
+driver never reuses a connection.** `DoltConn.IsValid` reports `false` and
+`DoltConn.ResetSession` returns `driver.ErrBadConn` — "It's simpler to just
+throw the session away and get a new one" (`conn.go`). So every statement
+taken from `*sql.DB` starts a fresh session on `main`, a `CALL
+DOLT_CHECKOUT` cannot span two of them, and the session-free alternative
+does not work either: a write qualified by the branch's revision database
+(``INSERT INTO `memory/proposal/<id>`.facts …``) returns no error and is
+then discarded along with the session that made it, after which a
+qualified `CALL DOLT_COMMIT` answers `Error 1105: nothing to commit` and a
+qualified `CALL DOLT_MERGE` returns cleanly having moved nothing. Writing
+anywhere but `main` needs one held connection — which is what `propose.go`'s
+`stage` does, and what the `RunOnBranch` helper in the package's
+`export_test.go` does so that a test can build the hand-crafted branches
+memdolt's own lanes cannot.
