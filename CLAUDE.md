@@ -120,10 +120,26 @@ Patterns are Go regular expressions, written as TOML *literal* strings
 TOML basic string. They are matched against `store.CommitRequest.Text` —
 the memory a write records in its own words — before the write's
 transaction opens, so a refused write leaves no row and no commit. Every
-failure refuses: an unreadable file, TOML that does not parse and a pattern
-that does not compile all refuse the write rather than let it through
-unscanned (PRD §13.3 — memdolt keeps secrets out rather than promising to
-delete them).
+failure refuses: an unreadable file, TOML that does not parse, a
+`[deny_list]` table that decodes no `patterns` key and a pattern that does
+not compile all refuse the write rather than let it through unscanned (PRD
+§13.3 — memdolt keeps secrets out rather than promising to delete them).
+
+**That list used to end at "a pattern that does not compile".** A
+`[deny_list]` table whose key was misspelled — `pattern =`, `patterns_ =`,
+or no keys at all — decoded to zero patterns, which was indistinguishable
+from a repository that had configured none: the typo disabled enforcement
+and nothing said so. `denylist.Load` now reads the table's presence as an
+operator who meant to configure rules and refuses when no `patterns` key
+decoded. An explicit `patterns = []` still loads as no deny-list, because
+the key decoded and the empty list is a decision somebody wrote down.
+**The refusal binds `Load`, not every entry point of its kind**:
+`denylist.Compile` takes patterns a caller already holds, where zero of
+them means zero and is no evidence of a typo, so `Compile(nil)` is still
+no deny-list and no error. Nor does it see past a misspelled *table*
+name: `[denylist]` is a config file with no `[deny_list]` in it and loads
+as no deny-list, since refusing on any undecoded key would trip on the
+rest of PRD §11.3's config, which has no reader yet.
 
 **Every `CommitRequest` declares its text, or declares it has none.** One
 that sets neither `Text` nor `NoText` is refused before anything is
