@@ -39,9 +39,11 @@
 // live owner, possibly a replacement on a new port with a new token, and
 // the caller's next operation reaches it; the store is unheld, reported as
 // ErrNoLiveOwner so the caller can open it directly (PRD §5.2); or a
-// bounded failure. Nothing here redials in a loop of its own: rig 1
-// measured 474,234 connection-refused failures in about a minute from
-// clients that did (F4).
+// bounded failure. Every wait on that path ends when the caller's context
+// does, the wait for another caller's re-probe to finish included, so what
+// bounds a caller is its own deadline. Nothing here redials in a loop of
+// its own: rig 1 measured 474,234 connection-refused failures in about a
+// minute from clients that did (F4).
 package ipc
 
 import (

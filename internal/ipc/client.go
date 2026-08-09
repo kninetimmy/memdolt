@@ -158,7 +158,12 @@ type Client struct {
 	// leaves the generation where it was, so each waiter in turn runs a
 	// full round of its own: four concurrent callers against an owner that
 	// accepts and never answers were measured returning after 64.4 s.
-	reconnecting sync.Mutex
+	//
+	// It is a one-slot channel rather than a sync.Mutex so that waiting for
+	// a turn can be given up: sync.Mutex.Lock cannot be cancelled, and a
+	// caller queued behind those rounds would otherwise sit through all of
+	// them before discovering its own deadline had passed.
+	reconnecting chan struct{}
 
 	// http bounds a liveness probe at probeTimeout.
 	http *http.Client
@@ -221,11 +226,12 @@ func heldEndpoint(baseDir string) (ownerDetail, error) {
 
 func newClient(baseDir string, detail ownerDetail) *Client {
 	c := &Client{
-		baseDir: baseDir,
-		pacing:  pacing{attempts: reconnectAttempts, base: reconnectBaseDelay, max: reconnectMaxDelay},
-		probe:   probeOwner,
-		http:    &http.Client{Timeout: probeTimeout},
-		owner:   &http.Client{Transport: ownerTransport()},
+		baseDir:      baseDir,
+		pacing:       pacing{attempts: reconnectAttempts, base: reconnectBaseDelay, max: reconnectMaxDelay},
+		probe:        probeOwner,
+		reconnecting: make(chan struct{}, 1),
+		http:         &http.Client{Timeout: probeTimeout},
+		owner:        &http.Client{Transport: ownerTransport()},
 	}
 	c.adopt(detail)
 	return c
@@ -261,13 +267,22 @@ func (c *Client) endpoint() (uint64, string, secret) {
 // client-minted ULIDs, so what is re-made here is the connection and
 // nothing else.
 //
-// It ends in one of three ways: nil, meaning a live owner is now addressed
+// It ends in one of four ways: nil, meaning a live owner is now addressed
 // and the next operation reaches it; an error matching ErrNoLiveOwner,
 // meaning the pidfile shows the store is unheld and the caller may open it
-// directly; or a bounded failure after pacing.attempts probes.
+// directly; a bounded failure after pacing.attempts probes; or the caller's
+// own context error, because every wait it makes — for a turn to probe as
+// much as between probes — ends when that context does.
 func (c *Client) reconnect(ctx context.Context, gen uint64) error {
-	c.reconnecting.Lock()
-	defer c.reconnecting.Unlock()
+	// A turn is worth waiting for only as long as the caller has: another
+	// caller's round can cost the whole pacing schedule plus a probe timeout
+	// per attempt, which is longer than many callers' deadlines.
+	select {
+	case c.reconnecting <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-c.reconnecting }()
 
 	if current, _, _ := c.endpoint(); current != gen {
 		return nil
