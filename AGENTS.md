@@ -71,14 +71,27 @@ export GOFLAGS=-tags=gms_pure_go
   and the two `set` commands read their body from stdin when given no argument.
 - Review what agents staged (PRD §7, §11.2): `memdolt review list|show|accept|reject|expire|stale`.
   `show` renders a proposal as the single-commit diff of its branch; `accept` merges
-  exactly that branch into `main` under a `--no-ff` merge commit — authored by the
-  reviewer and messaged `review accept <kind> <id>`, so `dolt_log` alone carries the
-  whole propose-review-merge cycle — and then deletes the branch. `reject` deletes
-  the branch and leaves `main` where it was, `expire` sweeps branches older than
-  `--older-than`, and `stale` reports them without writing anything. The merge is
-  fail-closed (PRD §6.3): a data conflict, a constraint violation that verification
-  shows is real, or a row memdolt cannot attribute leaves `main` untouched and the
-  proposal still pending.
+  exactly the one commit that proposal was staged with into `main` under a `--no-ff`
+  merge commit — authored by the reviewer and messaged `review accept <kind> <id>`,
+  so `dolt_log` alone carries the whole propose-review-merge cycle — and then deletes
+  the branch. `reject` deletes the branch and leaves `main` where it was, `expire`
+  sweeps branches older than `--older-than`, and `stale` reports them without writing
+  anything. The merge is fail-closed (PRD §6.3): a data conflict, a constraint
+  violation that verification shows is real, or a row memdolt cannot attribute leaves
+  `main` untouched and the proposal still pending.
+
+  **That sentence used to read "merges exactly that branch".** It merged the branch
+  by name and trusted it to hold one commit, which is true of every branch `stage()`
+  produces and of nothing else: a branch carrying two commits was shown and
+  deny-list-scanned as its head commit alone and merged whole. `accept` now counts
+  what the branch carries past its merge base with `main` and refuses unless the
+  count is one, then merges the staging commit *by hash* — so the commit review
+  showed is the commit that merges. **The count binds `AcceptProposal` alone, not
+  every review verb**: `show`, `reject`, `expire` and `stale` still take a proposal
+  branch whatever is on it, and `show` renders its head commit against that commit's
+  first parent — a partial view of a branch carrying more, which is how an operator
+  sees what a branch holds before rejecting it. Refusing at the one verb that writes
+  to `main` is the point, not an oversight at the others.
 - Run the M0 rig-1 concurrency soak (PRD §16): `go test -tags
   soak,gms_pure_go ./tests/soak/...`
 
@@ -135,9 +148,11 @@ failed loudly; it simply wrote. Its coverage is a second, hand-maintained
 scan in `internal/store/localdolt/review.go`, over prose read from the
 proposal branch's own diff, listing the columns in `scannedColumns` —
 which has to be kept in step with `Fact.text`/`Decision.text` in
-`propose.go` by hand, since nothing checks it. **A future lane that writes
-to `main` without a `CommitRequest` owes the same, and will get no warning
-if it forgets.**
+`propose.go` by hand, since nothing checks it. That diff is the head
+commit's, so the scan covers the whole of what merges only because
+`requireOneCommit` refuses to promote a branch carrying anything else.
+**A future lane that writes to `main` without a `CommitRequest` owes the
+same, and will get no warning if it forgets.**
 
 ## Conventions for agents (PRD §14)
 

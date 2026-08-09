@@ -92,7 +92,12 @@ type PendingProposal struct {
 	// Branch is ProposalBranch(ID).
 	Branch string `json:"branch"`
 
-	// Commit is the branch's single commit.
+	// Commit is the branch's head, and on a branch memdolt staged it is the
+	// branch's single commit (PRD §3.1). It is the commit review renders,
+	// the commit the deny-list is matched against, and the commit accept
+	// merges: requireOneCommit refuses an accept where those three would not
+	// be the whole branch. Before that guard, this field described what
+	// stage() produces; it is now also what accept requires.
 	Commit string `json:"commit"`
 
 	// StagedAt is that commit's date, which is what expiry and the stale
@@ -126,6 +131,15 @@ type ProposalChange struct {
 // ProposalDiff is what `review show` renders: the proposal and the single
 // commit that is its whole payload (PRD §3.1 — one branch per proposal is
 // what makes this a single-commit diff rather than a range).
+//
+// Show renders the branch's head commit against that commit's first parent,
+// whatever else the branch carries. On a branch memdolt staged, the head is
+// the whole branch and the two are the same thing. On a hand-crafted branch
+// they are not, and this renders the head commit alone — a partial view of
+// the branch. That is deliberate: the refusal belongs to accept, which is
+// where a partial view would become durable truth (requireOneCommit), and
+// showing a branch review cannot promote is still how an operator finds out
+// what is on it before rejecting it.
 type ProposalDiff struct {
 	Proposal PendingProposal  `json:"proposal"`
 	Parent   string           `json:"parent"`
@@ -288,8 +302,16 @@ func (s *Store) ExpireProposals(ctx context.Context, before time.Time) ([]Pendin
 }
 
 // AcceptProposal promotes one proposal into durable truth: it merges
-// exactly that proposal's branch into main and deletes the branch
-// (PRD §3.1, §7.1).
+// exactly the one commit that proposal was staged with into main and
+// deletes its branch (PRD §3.1, §7.1).
+//
+// "Exactly one commit" is checked rather than assumed, and the commit is
+// named by hash rather than by branch. Before this the accept merged the
+// branch by name and trusted it to hold one commit, which is true of every
+// branch stage() produces and of nothing else: a two-commit branch was
+// rendered and deny-list-scanned as its head commit alone and merged whole.
+// requireOneCommit below is that check, and doltMerge merges
+// proposal.Commit — the same commit the scan read.
 //
 // The merge runs under PRD §6.3's fail-closed protocol. It is a --no-ff
 // merge, so the review action always gets a commit of its own even when
@@ -363,6 +385,14 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 		return AcceptResult{}, fmt.Errorf(
 			"localdolt: proposal %s targets the global store, which memdolt does not have yet (PRD §10); "+
 				"accepting it here would promote it into this repository instead", id)
+	}
+
+	// Everything below is about one commit: the one the proposal was staged
+	// with. This is what establishes that the branch holds nothing else, and
+	// it runs before the scan rather than after it because the scan reads
+	// that commit's diff and would otherwise report on part of a branch.
+	if err := requireOneCommit(ctx, conn, proposal); err != nil {
+		return AcceptResult{}, err
 	}
 
 	// The deny-list runs again here, over the prose the branch is about to
@@ -449,7 +479,11 @@ func (s *Store) acceptInTx(ctx context.Context, conn *sql.Conn, proposal Pending
 
 // merge is the body of PRD §6.3's protocol, inside the accept transaction.
 func (s *Store) merge(ctx context.Context, tx *sql.Tx, proposal PendingProposal, reviewer store.Actor) (AcceptResult, error) {
-	base, err := mergeBase(ctx, tx, MainBranch, proposal.Branch)
+	// Every revision this protocol resolves is either main or the proposal's
+	// staging commit. The branch name is not resolved again anywhere below:
+	// it would be a second lookup of something already read, and what came
+	// back would not have to be what the deny-list scanned.
+	base, err := mergeBase(ctx, tx, MainBranch, proposal.Commit)
 	if err != nil {
 		return AcceptResult{}, err
 	}
@@ -458,7 +492,7 @@ func (s *Store) merge(ctx context.Context, tx *sql.Tx, proposal PendingProposal,
 		return AcceptResult{}, err
 	}
 
-	if err := doltMerge(ctx, tx, proposal.Branch); err != nil {
+	if err := doltMerge(ctx, tx, proposal); err != nil {
 		return AcceptResult{}, err
 	}
 
@@ -498,13 +532,24 @@ func (s *Store) merge(ctx context.Context, tx *sql.Tx, proposal PendingProposal,
 // review action a commit of its own even where main has not moved; a
 // fast-forward would move main onto the staging commit and leave dolt_log
 // with no record that anyone reviewed anything.
-func doltMerge(ctx context.Context, tx *sql.Tx, branch string) error {
+//
+// It merges the proposal's staging commit by hash. Naming the branch here
+// instead would resolve it a second time, after requireOneCommit counted it
+// and after the deny-list scanned the commit it pointed at, so a branch
+// moved in between would merge rows nothing had checked — the window is
+// small and the write is durable truth, which is the wrong trade. A hash
+// resolves to itself. Measured on github.com/dolthub/driver v1.88.1,
+// DOLT_MERGE takes a commit hash as a bound parameter exactly as it takes a
+// branch name, and the merge commit's second parent is that hash
+// (docs/spikes/m1-conflict-surfaces.md §8).
+func doltMerge(ctx context.Context, tx *sql.Tx, proposal PendingProposal) error {
 	var hash, message sql.NullString
 	var fastForward, conflicts sql.NullInt64
-	err := tx.QueryRowContext(ctx, "CALL DOLT_MERGE('--no-ff', '--no-commit', ?)", branch).
+	err := tx.QueryRowContext(ctx, "CALL DOLT_MERGE('--no-ff', '--no-commit', ?)", proposal.Commit).
 		Scan(&hash, &fastForward, &conflicts, &message)
 	if err != nil {
-		return fmt.Errorf("localdolt: merge %q into %q: %w", branch, MainBranch, err)
+		return fmt.Errorf("localdolt: merge the staging commit %s of proposal %s into %q: %w",
+			proposal.Commit, proposal.ID, MainBranch, err)
 	}
 	// A nonzero conflicts count is not an error here: it is the signal that
 	// PRD §6.3's inspection is required, and the surfaces below are what
@@ -944,13 +989,57 @@ func findProposalBranch(ctx context.Context, q branchQuerier, branch string) (br
 		strings.TrimPrefix(branch, ProposalBranchPrefix), branch)
 }
 
+// requireOneCommit refuses to promote a proposal branch carrying anything
+// but the one commit it was staged with (PRD §3.1: one branch, one commit).
+//
+// It is what makes the reads either side of it whole. Review renders a
+// proposal as its head commit diffed against that commit's parent, and the
+// deny-list re-scan reads the same diff, so on a branch carrying two commits
+// both would describe the last one while the merge promoted both: rows
+// nobody reviewed and prose no rule was matched against. memdolt's own
+// staged-write lane cannot produce such a branch — stage() cuts from main,
+// writes once and commits once, or deletes the branch — but a proposal
+// branch is a branch in a data directory, and an agent with a shell and no
+// owner holding the store can commit to it directly.
+//
+// The count is asked of the staging commit rather than of the branch name,
+// for the same reason doltMerge merges that commit: it is the commit
+// everything else in the accept is about. '--not main' names exactly the
+// commits it carries past its merge base with main, so a proposal staged
+// before main moved still counts one, and a branch cut from somewhere other
+// than main counts everything back to where it really forked.
+func requireOneCommit(ctx context.Context, q branchQuerier, proposal PendingProposal) error {
+	var commits int
+	err := q.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM DOLT_LOG(?, '--not', ?)", proposal.Commit, MainBranch).Scan(&commits)
+	if err != nil {
+		return fmt.Errorf("localdolt: count what proposal %s carries past %q: %w", proposal.ID, MainBranch, err)
+	}
+	if commits != 1 {
+		return fmt.Errorf(
+			"localdolt: refusing to promote proposal %s: its branch %q carries %d commits past its merge base "+
+				"with %q, and a proposal is exactly one commit cut from %s (PRD §3.1); review shows and "+
+				"deny-list-scans that one commit, so merging the branch would promote rows nobody reviewed",
+			proposal.ID, proposal.Branch, commits, MainBranch, MainBranch)
+	}
+	return nil
+}
+
 // commitParent reports the commit a proposal branch was cut from, which is
 // the other side of the single-commit diff that is the proposal's whole
 // payload (PRD §3.1).
+//
+// A commit with one parent has one answer. A merge commit has two, and
+// nothing in SQL orders the rows of dolt_commit_ancestors, so ORDER BY
+// parent_index is what makes this the first parent every time rather than
+// whichever row came back first — the difference between `review show`
+// rendering one diff and rendering either of two. Both callers get it: the
+// ordering is on this function, not on one of its call sites.
 func commitParent(ctx context.Context, q branchQuerier, record branchRecord) (string, error) {
 	var parent string
 	err := q.QueryRowContext(ctx,
-		"SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = ?", record.commit).Scan(&parent)
+		"SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = ? ORDER BY parent_index LIMIT 1",
+		record.commit).Scan(&parent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("localdolt: the proposal commit %s on %q has no parent to diff against",
 			record.commit, record.name)
