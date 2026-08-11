@@ -22,11 +22,14 @@
 //	POST /v0/store/query   {sql, args}                   -> {columns, rows}
 //
 // It is deliberately the smallest thing that carries store.Store's M0
-// subset, and it inherits that subset's escape hatch: Query's raw SQL and
-// its untyped result grid exist because the M0 rig has to interrogate
-// dolt_log and its own probe tables. M1 replaces both ends with the typed
-// memory operations of PRD §5.1. Nothing outside M0 should be built
-// against this shape.
+// subset, including Query's raw SQL and untyped result grid, because the M0
+// rig has to interrogate dolt_log and its own probe tables. Before the Store
+// boundary was enforced, this route forwarded every statement unchanged and
+// could leave an uncommitted write in the owner's working set. It now inherits
+// Store.Query's one-SELECT-or-SHOW restriction; that restriction binds this
+// query route, while the commit route remains the version-controlled write
+// path. M1 replaces both ends with the typed memory operations of PRD §5.1.
+// Nothing outside M0 should be built against this shape.
 //
 // # What the result grid can carry
 //
@@ -56,7 +59,7 @@ const (
 	// CommitPath applies a write and records it as one Dolt commit.
 	CommitPath = "/v0/store/commit"
 
-	// QueryPath runs a read-only statement.
+	// QueryPath runs exactly one read-only SELECT or SHOW statement.
 	QueryPath = "/v0/store/query"
 
 	// DefaultMaxRows bounds a result set. Memory-scale tables (PRD §8.1
@@ -106,7 +109,8 @@ type CommitResponse struct {
 	RowsAffected int64  `json:"rowsAffected"`
 }
 
-// QueryRequest is one read-only statement.
+// QueryRequest is exactly one read-only SELECT or SHOW statement. The owner
+// enforces that boundary before execution.
 type QueryRequest struct {
 	SQL  string `json:"sql"`
 	Args []any  `json:"args,omitempty"`

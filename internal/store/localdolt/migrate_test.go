@@ -434,17 +434,8 @@ func normalizeDDL(ddl string) string {
 
 func execQuery(t *testing.T, st *localdolt.Store, query string) {
 	t.Helper()
-	rows, err := st.Query(context.Background(), query)
-	if err != nil {
+	if err := st.RunOnBranch(context.Background(), localdolt.MainBranch, store.Statement{SQL: query}); err != nil {
 		t.Fatalf("%s: %v", query, err)
-	}
-	for rows.Next() { //nolint:revive // draining the result set runs the statement to completion
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("%s: %v", query, err)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatalf("%s: close: %v", query, err)
 	}
 }
 
