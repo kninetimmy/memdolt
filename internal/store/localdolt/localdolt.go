@@ -238,9 +238,9 @@ func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.Comm
 // the only two DOLT_COMMIT sites in this package outside tests. The accept
 // path therefore carries its own call to checkDenyList, over prose it reads
 // out of the proposal branch's diff; the columns it reads are review.go's
-// scannedColumns, which has to stay in step with Fact.text and
-// Decision.text in propose.go, because those are what the same rows were
-// scanned as when they were staged.
+// scannedColumns, which has to stay in step with Fact.text, Decision.text,
+// and the proposal rationale and actor in propose.go, because those are
+// what the same rows were scanned as when they were staged.
 func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.CommitRequest) (store.CommitResult, error) {
 	if err := req.Validate(); err != nil {
 		return store.CommitResult{}, fmt.Errorf("localdolt: invalid commit request: %w", err)

@@ -41,19 +41,21 @@ var reviewedLaneTables = map[string]string{
 	"proposals": "id",
 }
 
-// scannedColumns are the columns of each reviewed-lane table that hold
-// prose an agent supplied, and so the columns the repository's deny-list
-// is matched against when a proposal is promoted (PRD §11.3).
+// scannedColumns are the columns of each reviewed-lane table that supply
+// the distinct caller-originated strings the repository's deny-list is
+// matched against when a proposal is promoted (PRD §11.3).
 //
 // They are the same columns the staged-write lane declares as
-// store.CommitRequest.Text — Fact.text, Decision.text and the proposal's
-// rationale in propose.go — and they have to stay in step with it: a
-// column added there and forgotten here would be scanned when a proposal
-// is staged and not when it is made durable.
+// store.CommitRequest.Text — Fact.text, Decision.text, and the proposal's
+// rationale and actor in propose.go — and they have to stay in step with
+// it: a column added there and forgotten here would be scanned when a
+// proposal is staged and not when it is made durable. The actor is also
+// stored as the proposed fact or decision's source; proposals.actor is the
+// one scan source for that duplicated value.
 var scannedColumns = map[string][]string{
 	"facts":     {"key", "value", "kind", "evidence"},
 	"decisions": {"title", "rationale", "summary", "alternatives_rejected", "evidence"},
-	"proposals": {"rationale"},
+	"proposals": {"rationale", "actor"},
 }
 
 // clearableViolation is the one constraint-violation class PRD §6.3 admits

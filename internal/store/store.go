@@ -144,8 +144,9 @@ type CommitRequest struct {
 
 	// Text is the memory this write records, in the words it was given
 	// in: a fact's key and value, a decision's title and rationale, a
-	// task's or a note's text, a narrative body. It is what the
-	// repository's configured deny-list is matched against (PRD §11.3).
+	// task's or a note's text, a persisted actor value, a narrative body.
+	// It is what the repository's configured deny-list is matched against
+	// (PRD §11.3).
 	//
 	// It is no longer the only thing that is. Until the review lane
 	// landed, this field was the deny-list's whole input, because every
@@ -192,7 +193,9 @@ type CommitRequest struct {
 
 	// Message is the commit message. PRD §3.1 wants a structured
 	// one-liner: "propose fact msrv=1.24", "note batch (3)",
-	// "review accept #42".
+	// "review accept #42". It is commit metadata, not automatic deny-list
+	// input. Caller-originated text copied into Message must also be
+	// declared in Text.
 	Message string
 
 	// Author is attributed in dolt_log and dolt_blame.

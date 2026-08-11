@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kninetimmy/memdolt/internal/layout"
+	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -15,6 +16,8 @@ import (
 // theSecret stands in for whatever a deny-list exists to keep out of the
 // store's history. Nothing in these tests lets it reach an error message.
 const theSecret = "AKIAIOSFODNN7EXAMPLE"
+
+var deniedProposalActor = store.Actor{Name: "agent:blocked-actor", Email: "blocked@memdolt.invalid"}
 
 // factWrite is the shape of a memory write the M1 lanes will produce: the
 // statements that record a fact, and the same text declared for the
@@ -74,21 +77,100 @@ func TestCommitRefusesTextMatchingTheDenyListAndLeavesNothingBehind(t *testing.T
 	}
 }
 
+// TestDirectLaneActorRawIsScannedByTheDenyList covers the three direct
+// tables that persist memory.Actor.Raw. A matching raw identity is refused
+// before the transaction opens; an identity the same configured rule does
+// not match still writes normally.
+func TestDirectLaneActorRawIsScannedByTheDenyList(t *testing.T) {
+	ctx := context.Background()
+	base := baseDir(t)
+	st := migratedStoreAt(t, base)
+	writeDenyList(t, base, `AKIA[0-9A-Z]{16}`)
+
+	actor, err := memory.NormalizeActor(theSecret)
+	if err != nil {
+		t.Fatalf("normalize the actor: %v", err)
+	}
+	if strings.Contains(actor.Name, theSecret) {
+		t.Fatalf("normalized actor %q unexpectedly still matches the raw-only test rule", actor.Name)
+	}
+	blocked := memory.New(st, actor)
+	allowed := memory.New(st, memory.UserActor)
+
+	for _, tc := range []struct {
+		name  string
+		table string
+		write func(*memory.Lanes) error
+	}{
+		{
+			name:  "session note",
+			table: "session_notes",
+			write: func(lanes *memory.Lanes) error {
+				_, _, err := lanes.LogNote(ctx, "the build is green")
+				return err
+			},
+		},
+		{
+			name:  "project state",
+			table: "project_state",
+			write: func(lanes *memory.Lanes) error {
+				_, _, err := lanes.SetNarrative(ctx, memory.StateNarrative, "the build is green")
+				return err
+			},
+		},
+		{
+			name:  "project architecture",
+			table: "project_arch",
+			write: func(lanes *memory.Lanes) error {
+				_, _, err := lanes.SetNarrative(ctx, memory.ArchNarrative, "the CLI owns the store")
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := commitCount(t, st)
+			err := tc.write(blocked)
+			if !errors.Is(err, store.ErrDenied) {
+				t.Fatalf("write error = %v, want one matching store.ErrDenied", err)
+			}
+			if err != nil && strings.Contains(err.Error(), theSecret) {
+				t.Fatalf("refusal %q repeats the matched actor back to the caller", err)
+			}
+			if got := scanCount(t, st, "SELECT COUNT(*) FROM "+tc.table); got != 0 {
+				t.Fatalf("%s rows after a refused write = %d, want 0", tc.table, got)
+			}
+			if got := commitCount(t, st); got != before {
+				t.Fatalf("history after a refused write has %d commits, want %d", got, before)
+			}
+
+			if err := tc.write(allowed); err != nil {
+				t.Fatalf("write with a non-matching actor: %v", err)
+			}
+			if got := scanCount(t, st, "SELECT COUNT(*) FROM "+tc.table); got != 1 {
+				t.Fatalf("%s rows after an allowed write = %d, want 1", tc.table, got)
+			}
+			if got := commitCount(t, st); got != before+1 {
+				t.Fatalf("history after an allowed write has %d commits, want %d", got, before+1)
+			}
+		})
+	}
+}
+
 // TestStagedWritesAreScannedByTheDenyList runs the deny-list through the
 // staged-write lane of PRD §6.2, the one an untrusted agent writes with.
 //
 // Its commits do not go through Store.Commit — they are made on a proposal
 // branch, on a connection the lane holds — so a deny-list wired only into
 // Commit would leave exactly these writes unscanned. Each case here puts
-// the secret in a different agent-supplied column to check that the lane
-// declares all of them and not just the one in the commit message.
+// a matching value in a different agent-supplied column to check that the
+// lane declares all of them and not just the one in the commit message.
 func TestStagedWritesAreScannedByTheDenyList(t *testing.T) {
 	ctx := context.Background()
 	base := baseDir(t)
 	st := migratedStoreAt(t, base)
 	before := commitCount(t, st)
 
-	writeDenyList(t, base, `AKIA[0-9A-Z]{16}`)
+	writeDenyList(t, base, `AKIA[0-9A-Z]{16}`, deniedProposalActor.Name)
 
 	good := localdolt.Proposal{Rationale: "why", Actor: stagingActor, Target: localdolt.TargetRepo}
 	for name, stage := range map[string]func() (localdolt.StagedProposal, error){
@@ -104,6 +186,11 @@ func TestStagedWritesAreScannedByTheDenyList(t *testing.T) {
 		"the note to the reviewer": func() (localdolt.StagedProposal, error) {
 			return st.ProposeFact(ctx,
 				localdolt.Proposal{Rationale: "found in the log: " + theSecret, Actor: stagingActor, Target: localdolt.TargetRepo},
+				localdolt.Fact{Key: "build.tool", Value: "go 1.26"})
+		},
+		"the normalized proposal actor": func() (localdolt.StagedProposal, error) {
+			return st.ProposeFact(ctx,
+				localdolt.Proposal{Rationale: "why", Actor: deniedProposalActor, Target: localdolt.TargetRepo},
 				localdolt.Fact{Key: "build.tool", Value: "go 1.26"})
 		},
 	} {

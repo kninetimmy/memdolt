@@ -70,12 +70,12 @@ func now() time.Time { return time.Now().UTC().Truncate(time.Second) }
 // write applies one statement and records it as one Dolt commit authored
 // by the lane's actor (§3.1).
 //
-// text is what the write records in the caller's own words — a task title
-// and its notes, a note's body, a command line, a narrative body — for the
-// deny-list to match against (§11.3). Every direct lane has some, so none
-// of them declares store.CommitRequest.NoText; a lane added here that
-// passed none would be refused by the store on its first write rather than
-// committed unscanned.
+// text is every caller-originated string the write persists — a task title
+// and its notes, a note's body and raw actor, a command line, a narrative
+// body and raw actor — for the deny-list to match against (§11.3). Every
+// direct lane has some, so none of them declares store.CommitRequest.NoText;
+// a lane added here that passed none would be refused by the store on its
+// first write rather than committed unscanned.
 func (l *Lanes) write(ctx context.Context, message string, text []string, stmt store.Statement) (string, error) {
 	result, err := l.store.Commit(ctx, store.CommitRequest{
 		Statements: []store.Statement{stmt},
@@ -339,7 +339,7 @@ func (l *Lanes) LogNote(ctx context.Context, body string) (Note, string, error) 
 		Text:      body,
 		CreatedAt: now(),
 	}
-	hash, err := l.write(ctx, "note add "+summarize(note.Text), []string{note.Text}, store.Statement{
+	hash, err := l.write(ctx, "note add "+summarize(note.Text), []string{note.Text, note.ActorRaw}, store.Statement{
 		SQL: "INSERT INTO session_notes (id, actor, actor_raw, text, created_at) " +
 			"VALUES (?, ?, ?, ?, ?)",
 		Args: []any{note.ID, note.Actor, note.ActorRaw, note.Text, note.CreatedAt},
@@ -551,7 +551,7 @@ func (l *Lanes) SetNarrative(ctx context.Context, kind NarrativeKind, body strin
 		ActorRaw:  l.actor.Raw,
 		CreatedAt: now(),
 	}
-	hash, err := l.write(ctx, string(kind)+" set", []string{narrative.Body}, store.Statement{
+	hash, err := l.write(ctx, string(kind)+" set", []string{narrative.Body, narrative.ActorRaw}, store.Statement{
 		SQL: "INSERT INTO " + table + " (id, body, actor, actor_raw, created_at) " +
 			"VALUES (?, ?, ?, ?, ?)",
 		Args: []any{narrative.ID, narrative.Body, narrative.Actor, narrative.ActorRaw, narrative.CreatedAt},
