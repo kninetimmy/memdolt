@@ -12,9 +12,12 @@ import (
 //
 // It exists for this package's external test, which has to build the branch
 // shapes memdolt's own lanes cannot: a proposal branch carrying two commits,
-// or one whose head is a merge commit. Store.Query cannot do it. Measured
-// against github.com/dolthub/driver v1.88.1, the driver never reuses a
-// connection — DoltConn.IsValid reports false and DoltConn.ResetSession
+// or one whose head is a merge commit. Store.Query cannot do it. Before its
+// read-only boundary was enforced, the driver behavior below prevented the
+// branch-spanning sequence; now Query also rejects the required writes before
+// they reach the driver. Measured against github.com/dolthub/driver v1.88.1,
+// the driver never reuses a connection — DoltConn.IsValid reports false and
+// DoltConn.ResetSession
 // returns driver.ErrBadConn, "it's simpler to just throw the session away" —
 // so every pooled statement gets a fresh session on main, a CALL
 // DOLT_CHECKOUT cannot span two of them, and a branch-qualified write

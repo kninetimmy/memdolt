@@ -57,7 +57,8 @@ func (c *Client) Commit(ctx context.Context, req CommitRequest) (CommitResponse,
 	return resp, nil
 }
 
-// Query asks the owner to run a read-only statement. Its errors classify
+// Query asks the owner to run exactly one read-only SELECT or SHOW statement;
+// the owner rejects every other form before execution. Its errors classify
 // exactly as Commit's do, less the question of whether a write happened.
 func (c *Client) Query(ctx context.Context, req QueryRequest) (QueryResponse, error) {
 	var resp QueryResponse

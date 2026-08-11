@@ -165,6 +165,73 @@ func TestCommitProducesADoltCommitVisibleInDoltLog(t *testing.T) {
 	}
 }
 
+func TestQueryAllowsOnlyOneReadOnlyStatement(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t, baseDir(t), discardLogger())
+	if _, err := st.Commit(ctx, store.CommitRequest{
+		Statements: []store.Statement{
+			{SQL: "CREATE TABLE query_probe (k VARCHAR(16) PRIMARY KEY, v TEXT)"},
+			{SQL: "INSERT INTO query_probe (k, v) VALUES (?, ?)", Args: []any{"kept", "original"}},
+		},
+		NoText:  true,
+		Message: "create the query boundary probe",
+		Author:  store.Actor{Name: "user", Email: "user@memdolt.invalid"},
+	}); err != nil {
+		t.Fatalf("create probe: %v", err)
+	}
+
+	if got := scanString(t, st, "/* leading comment */ SELECT v FROM query_probe WHERE k = ?", "kept"); got != "original" {
+		t.Fatalf("bound SELECT returned %q, want %q", got, "original")
+	}
+	rows, err := st.Query(ctx, "SHOW CREATE TABLE query_probe")
+	if err != nil {
+		t.Fatalf("SHOW CREATE TABLE: %v", err)
+	}
+	if !rows.Next() {
+		t.Fatalf("SHOW CREATE TABLE returned no row: %v", rows.Err())
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close SHOW CREATE TABLE rows: %v", err)
+	}
+
+	for name, query := range map[string]string{
+		"insert":           "/* not a SELECT */ INSERT INTO query_probe (k, v) VALUES ('added', 'write')",
+		"update":           "UPDATE query_probe SET v = 'changed' WHERE k = 'kept'",
+		"delete":           "DELETE FROM query_probe WHERE k = 'kept'",
+		"ddl":              "CREATE TABLE query_created (k INT PRIMARY KEY)",
+		"session setting":  "SET @query_probe = 1",
+		"select into":      "SELECT v INTO @query_probe FROM query_probe",
+		"stored procedure": "CALL DOLT_BRANCH('query-probe')",
+		"multiple":         "SELECT v FROM query_probe; DELETE FROM query_probe",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rows, err := st.Query(ctx, query)
+			if err == nil {
+				for rows.Next() {
+				}
+				_ = rows.Close()
+				t.Fatalf("Query accepted %s", query)
+			}
+			if !strings.Contains(err.Error(), "exactly one read-only SELECT or SHOW") {
+				t.Fatalf("Query refusal %q does not describe the enforced boundary", err)
+			}
+		})
+	}
+
+	if got := scanString(t, st, "SELECT v FROM query_probe WHERE k = ?", "kept"); got != "original" {
+		t.Fatalf("probe value = %q after refusals, want %q", got, "original")
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM query_probe"); got != 1 {
+		t.Fatalf("probe row count = %d after refusals, want 1", got)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_status"); got != 0 {
+		t.Fatalf("refused queries left %d working-set change(s)", got)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_branches WHERE name = 'query-probe'"); got != 0 {
+		t.Fatalf("refused CALL created %d branch(es)", got)
+	}
+}
+
 func TestCommitRejectsAWriteWithNothingToRecord(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t, baseDir(t), discardLogger())

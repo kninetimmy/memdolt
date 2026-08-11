@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -148,6 +149,84 @@ func TestClientWritesAndReadsThroughTheOwner(t *testing.T) {
 	}
 	if value != "1.26.2" {
 		t.Fatalf("owner's store holds %q, want %q", value, "1.26.2")
+	}
+}
+
+func TestQueryEndpointEnforcesTheStoreReadOnlyBoundary(t *testing.T) {
+	ctx := context.Background()
+	base, owner, _ := startOwner(t)
+	client, err := storeipc.Dial(base)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if _, err := client.Commit(ctx, storeipc.CommitRequest{
+		Statements: []storeipc.Statement{
+			{SQL: "CREATE TABLE query_probe (k VARCHAR(16) PRIMARY KEY, v TEXT)"},
+			{SQL: "INSERT INTO query_probe (k, v) VALUES (?, ?)", Args: []any{"kept", "original"}},
+		},
+		NoText:  true,
+		Message: "create the IPC query boundary probe",
+		Author:  storeipc.Actor{Name: "user", Email: "user@memdolt.invalid"},
+	}); err != nil {
+		t.Fatalf("create probe: %v", err)
+	}
+
+	for name, query := range map[string]string{
+		"insert":           "/* not a SELECT */ INSERT INTO query_probe (k, v) VALUES ('added', 'write')",
+		"update":           "UPDATE query_probe SET v = 'changed' WHERE k = 'kept'",
+		"delete":           "DELETE FROM query_probe WHERE k = 'kept'",
+		"ddl":              "CREATE TABLE query_created (k INT PRIMARY KEY)",
+		"session setting":  "SET @query_probe = 1",
+		"select into":      "SELECT v INTO @query_probe FROM query_probe",
+		"stored procedure": "CALL DOLT_BRANCH('query-probe')",
+		"multiple":         "SELECT v FROM query_probe; DELETE FROM query_probe",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := client.Query(ctx, storeipc.QueryRequest{SQL: query})
+			if err == nil {
+				t.Fatalf("Query accepted %s", query)
+			}
+			if !storeipc.IsOwnerRefusal(err) {
+				t.Fatalf("Query refusal was reported as a transport failure: %v", err)
+			}
+			if !strings.Contains(err.Error(), "exactly one read-only SELECT or SHOW") {
+				t.Fatalf("Query refusal %q does not describe the enforced boundary", err)
+			}
+		})
+	}
+
+	grid, err := client.Query(ctx, storeipc.QueryRequest{
+		SQL:  "/* bound */ SELECT v FROM query_probe WHERE k = ?",
+		Args: []any{"kept"},
+	})
+	if err != nil {
+		t.Fatalf("bound SELECT through endpoint: %v", err)
+	}
+	if len(grid.Rows) != 1 || grid.Rows[0][0] == nil || *grid.Rows[0][0] != "original" {
+		t.Fatalf("bound SELECT result = %+v, want original", grid.Rows)
+	}
+	if _, err := client.Query(ctx, storeipc.QueryRequest{SQL: "SHOW CREATE TABLE query_probe"}); err != nil {
+		t.Fatalf("SHOW through endpoint: %v", err)
+	}
+
+	rows, err := owner.Query(ctx, "SELECT COUNT(*), MIN(v) FROM query_probe")
+	if err != nil {
+		t.Fatalf("inspect probe: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		t.Fatalf("inspect probe returned no row: %v", rows.Err())
+	}
+	var count int
+	var value string
+	if err := rows.Scan(&count, &value); err != nil {
+		t.Fatalf("scan probe: %v", err)
+	}
+	if count != 1 || value != "original" {
+		t.Fatalf("probe after refusals = (%d, %q), want (1, %q)", count, value, "original")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("inspect probe: %v", err)
 	}
 }
 

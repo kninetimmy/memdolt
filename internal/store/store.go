@@ -70,8 +70,13 @@ type Store interface {
 	// any of that, so that a lane cannot skip the deny-list by omission.
 	Commit(ctx context.Context, req CommitRequest) (CommitResult, error)
 
-	// Query runs a read-only statement. The caller closes the returned
-	// rows.
+	// Query runs exactly one read-only SELECT or SHOW statement. Every Store
+	// implementation rejects every other statement before the database
+	// executes it; this is an interface-wide boundary, not a LocalStore-only
+	// property. Before this boundary was enforced, the embedded implementation
+	// passed raw SQL through unchanged, so a caller could leave an uncommitted
+	// write for a later version-controlled commit to include. The caller closes
+	// the returned rows.
 	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 
 	// Close releases the store, including its single-owner lock. It is

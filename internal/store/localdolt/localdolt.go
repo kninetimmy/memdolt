@@ -42,6 +42,7 @@ import (
 
 	// Registers the "dolt" database/sql driver.
 	_ "github.com/dolthub/driver"
+	"github.com/dolthub/vitess/go/vt/sqlparser"
 
 	"github.com/kninetimmy/memdolt/internal/denylist"
 	"github.com/kninetimmy/memdolt/internal/layout"
@@ -336,12 +337,29 @@ func commitTx(ctx context.Context, tx *sql.Tx, req store.CommitRequest) (store.C
 	return store.CommitResult{Hash: hash, RowsAffected: affected}, nil
 }
 
-// Query runs a read-only statement against the memory database. The caller
-// closes the returned rows.
+// Query enforces store.Store's one-SELECT-or-SHOW boundary against the memory
+// database. Before this check, Query passed caller SQL to the driver unchanged,
+// so a write could remain uncommitted in Dolt's working set; now every other
+// statement is rejected before the database executes it. The caller closes the
+// returned rows.
 func (s *Store) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	db, err := s.handle()
 	if err != nil {
 		return nil, err
+	}
+	statement, err := sqlparser.Parse(query)
+	if err != nil {
+		return nil, fmt.Errorf("localdolt: query must be exactly one read-only SELECT or SHOW statement: %w", err)
+	}
+	switch statement := statement.(type) {
+	case sqlparser.SelectStatement:
+		if statement.GetInto() == nil {
+			break
+		}
+		return nil, errors.New("localdolt: query must be exactly one read-only SELECT or SHOW statement")
+	case *sqlparser.Show:
+	default:
+		return nil, errors.New("localdolt: query must be exactly one read-only SELECT or SHOW statement")
 	}
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
