@@ -3,14 +3,12 @@ package localdolt_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -1000,30 +998,35 @@ func TestReviewAcceptScansTheDenyListAgain(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+	payloadStaged, err := st.ProposeFact(ctx, localdolt.Proposal{
 		Rationale: "the deploy key rotates monthly", Actor: stagingActor, Target: localdolt.TargetRepo,
 	}, localdolt.Fact{Key: "env.token", Value: "ghp_0123456789abcdefghijklmnopqrstuvwxyz"})
 	if err != nil {
 		t.Fatalf("propose: %v", err)
 	}
-
-	// The rule arrives after the proposal was staged, which is the whole
-	// point: staging saw no deny-list at all.
-	paths, err := layout.New(base)
+	actorStaged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "the actor is stored with the proposal", Actor: deniedProposalActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "convention.actor", Value: "normalized"})
 	if err != nil {
-		t.Fatalf("layout: %v", err)
-	}
-	if err := os.WriteFile(paths.ConfigFile(),
-		[]byte("[deny_list]\npatterns = [\"ghp_[A-Za-z0-9]{36}\"]\n"), 0o600); err != nil {
-		t.Fatalf("write the deny-list config: %v", err)
+		t.Fatalf("propose with the actor later denied: %v", err)
 	}
 
-	_, err = st.AcceptProposal(ctx, staged.ID, reviewer)
-	if err == nil {
-		t.Fatal("the accept promoted text the deny-list forbids")
-	}
-	if !strings.Contains(err.Error(), "refusing to promote") || !strings.Contains(err.Error(), "deny_list.patterns[0]") {
-		t.Fatalf("refusal %q does not name the deny-list rule that stopped it", err)
+	// The rules arrive after the proposals were staged, which is the whole
+	// point: staging saw no deny-list at all.
+	writeDenyList(t, base, `ghp_[A-Za-z0-9]{36}`, deniedProposalActor.Name)
+	mainCommits := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log")
+
+	for name, staged := range map[string]localdolt.StagedProposal{
+		"proposal payload": payloadStaged,
+		"proposal actor":   actorStaged,
+	} {
+		_, err = st.AcceptProposal(ctx, staged.ID, reviewer)
+		if err == nil {
+			t.Fatalf("the accept promoted the denied %s", name)
+		}
+		if !strings.Contains(err.Error(), "refusing to promote") || !strings.Contains(err.Error(), "deny_list.patterns[") {
+			t.Fatalf("%s refusal %q does not name the deny-list rule that stopped it", name, err)
+		}
 	}
 
 	// Nothing landed and nothing was thrown away: the proposal is still
@@ -1031,10 +1034,13 @@ func TestReviewAcceptScansTheDenyListAgain(t *testing.T) {
 	if got := scanInt(t, st, "SELECT COUNT(*) FROM facts"); got != 0 {
 		t.Fatalf("main carries %d facts after a refused promotion, want 0", got)
 	}
-	requireProposalBranches(t, st, staged.Branch)
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log"); got != mainCommits {
+		t.Fatalf("main history has %d commits after refused promotions, want %d", got, mainCommits)
+	}
+	requireProposalBranches(t, st, payloadStaged.Branch, actorStaged.Branch)
 
-	// A proposal the rule does not match still promotes, so the refusal is
-	// the rule's and not the lane's.
+	// A proposal the deny-list does not match still promotes, so the
+	// refusal is the rules' and not the lane's.
 	clean, err := st.ProposeFact(ctx, localdolt.Proposal{
 		Rationale: "the linter is part of the contract", Actor: stagingActor, Target: localdolt.TargetRepo,
 	}, localdolt.Fact{Key: "convention.style", Value: "gofmt -l ."})

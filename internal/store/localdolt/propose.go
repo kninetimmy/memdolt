@@ -313,11 +313,11 @@ type stagedWrite struct {
 	// statements are the row writes, already in the order §6.1 requires.
 	statements []store.Statement
 
-	// text is what the proposed row says, for the deny-list to match
-	// against (PRD §11.3). Every free-text column an agent supplied is in
-	// it, evidence pointers included: a URL is as good a place to leak a
-	// token as a value is, and a proposal is written by the untrusted
-	// writer of PRD §7.
+	// text is what the proposed rows say, for the deny-list to match
+	// against (PRD §11.3). Every caller-originated string is in it, evidence
+	// pointers included, along with the proposal rationale and normalized
+	// actor; a URL is as good a place to leak a token as a value is, and a
+	// proposal is written by the untrusted writer of PRD §7.
 	text []string
 
 	// supersededID, when set, is the live fact the first statement links.
@@ -347,9 +347,10 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 		return StagedProposal{}, fmt.Errorf("localdolt: propose %s: %w", w.kind, err)
 	}
 
-	// The reviewer's rationale rides in the same commit as the row it
-	// explains, and an agent wrote it, so the deny-list scans it too.
-	w.text = append(slices.Clone(w.text), w.proposal.Rationale)
+	// The reviewer's rationale and normalized actor ride in the same commit
+	// as the row it explains, and an agent supplied both, so the deny-list
+	// scans them too.
+	w.text = append(slices.Clone(w.text), w.proposal.Rationale, w.proposal.Actor.Name)
 
 	id := newID()
 	branch := ProposalBranch(id)

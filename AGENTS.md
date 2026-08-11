@@ -147,10 +147,24 @@ and it concludes with a `DOLT_COMMIT` and no `CommitRequest`. Nothing
 failed loudly; it simply wrote. Its coverage is a second, hand-maintained
 scan in `internal/store/localdolt/review.go`, over prose read from the
 proposal branch's own diff, listing the columns in `scannedColumns` —
-which has to be kept in step with `Fact.text`/`Decision.text` in
-`propose.go` by hand, since nothing checks it. That diff is the head
-commit's, so the scan covers the whole of what merges only because
-`requireOneCommit` refuses to promote a branch carrying anything else.
+which has to be kept in step with `Fact.text`/`Decision.text` and the
+proposal rationale/actor declarations in `propose.go` by hand, since
+nothing checks it. That diff is the head commit's, so the scan covers the
+whole of what merges only because `requireOneCommit` refuses to promote a
+branch carrying anything else.
+
+**That sentence used to name only `Fact.text`/`Decision.text`.** Before,
+actor values were the exception it failed to name: the note and narrative
+lanes persisted `Actor.Raw` in `actor_raw` without adding it to their
+`CommitRequest.Text`, while proposal staging persisted `Actor.Name` in
+`proposals.actor` and the proposed row's `source` without declaring it,
+and review accept omitted `proposals.actor` from `scannedColumns`. After,
+those two direct-lane callers explicitly add `Actor.Raw`, proposal staging
+explicitly adds `Actor.Name`, and accept explicitly reads
+`proposals.actor`. These obligations bind those named seams alone, not all
+columns of their kind: `CommitRequest` scans only the text each caller
+declares, and review accept scans only `scannedColumns`; a future persisted
+string elsewhere still needs its own declaration.
 **A future lane that writes to `main` without a `CommitRequest` owes the
 same, and will get no warning if it forgets.**
 
