@@ -61,10 +61,12 @@ func newDoctorCommand() *cobra.Command {
 			"                  ownership record, or absent\n" +
 			"  ipc             whether a live owner answers on its loopback endpoint\n" +
 			"  schema-version  whether the store's schema is newer than this binary\n\n" +
-			"doctor changes nothing and creates nothing: run against a directory with no\n" +
-			"store it reports that, rather than initializing one. It exits nonzero when a\n" +
-			"check fails, and zero for a condition memdolt clears by itself (a stale lock\n" +
-			"record, an orphaned pidfile), which it reports as a warning.",
+			"Against a directory with no store, doctor reports that rather than initializing\n" +
+			"one or creating its directory. With no live owner, it opens an existing store\n" +
+			"directly to read its schema; this briefly takes the ownership lock and may\n" +
+			"create .memdolt/LOCK, but makes no durable database change. It exits\n" +
+			"nonzero when a check fails, and zero for a condition memdolt clears by itself\n" +
+			"(a stale lock record, an orphaned pidfile), which it reports as a warning.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runDoctor(cmd, dir)
