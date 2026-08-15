@@ -3,6 +3,7 @@ package localdolt
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/kninetimmy/memdolt/internal/store"
 )
@@ -53,4 +54,26 @@ func (s *Store) RunOnBranch(ctx context.Context, branch string, statements ...st
 		return err
 	}
 	return nil
+}
+
+// StageUntilCanceled drives stage past branch creation and then blocks in its
+// write until ctx is canceled. It exposes the otherwise hard-to-reach failed
+// restore cleanup path to the external regression test; checkedOut closes only
+// after DOLT_CHECKOUT has completed.
+func (s *Store) StageUntilCanceled(ctx context.Context, checkedOut chan<- struct{}) error {
+	_, err := s.stage(ctx, stagedWrite{
+		kind:     KindFact,
+		proposal: Proposal{Rationale: "cleanup probe", Actor: store.Actor{Name: "agent:test", Email: "test@memdolt.invalid"}, Target: TargetRepo},
+		rowID:    newID(),
+		now:      time.Now().UTC(),
+		message:  "probe canceled proposal cleanup",
+		statements: []store.Statement{{
+			SQL: "SELECT SLEEP(1)",
+		}},
+		text: []string{"cleanup probe"},
+		afterCheckout: func() {
+			close(checkedOut)
+		},
+	})
+	return err
 }

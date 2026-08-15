@@ -44,6 +44,7 @@ type Migration struct {
 var migrations = []Migration{
 	{Version: 1, Name: "initial schema", Statements: initialSchema},
 	{Version: 2, Name: "proposals metadata", Statements: proposalsSchema},
+	{Version: 3, Name: "require proposal metadata", Statements: requireProposalMetadata},
 }
 
 // Migrations returns the schema history the binary ships, oldest first.
@@ -234,4 +235,17 @@ var proposalsSchema = []Statement{
   created_at DATETIME,
   target ENUM('repo','global')
 )`},
+}
+
+// requireProposalMetadata closes the nullable-column gap in migration 2.
+// Before this migration, application validation kept memdolt's own staging
+// calls from writing NULL rationale, actor or target values, but the table did
+// not enforce that contract. After it, every writer of proposals is subject to
+// the same database constraint. This is a new migration rather than an edit to
+// proposalsSchema because schema history is append-only.
+var requireProposalMetadata = []Statement{
+	{SQL: `ALTER TABLE proposals
+  MODIFY rationale TEXT NOT NULL,
+  MODIFY actor VARCHAR(64) NOT NULL,
+  MODIFY target ENUM('repo','global') NOT NULL`},
 }

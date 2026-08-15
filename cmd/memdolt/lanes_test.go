@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/store"
 )
 
 // TestTaskLaneRoundTrip covers the tasks lane end to end: a task can be
@@ -201,6 +205,61 @@ func TestCommandLaneRoundTrip(t *testing.T) {
 	}
 }
 
+func TestConcurrentCommandRecordingsDoNotLoseCounters(t *testing.T) {
+	base := initStore(t)
+	st := openInitializedStore(t, base)
+	defer func() { _ = st.Close() }()
+	lanes := memory.New(st, memory.UserActor)
+
+	const recordings = 20
+	type result struct {
+		index   int
+		command memory.Command
+		err     error
+	}
+	results := make(chan result, recordings)
+	var wg sync.WaitGroup
+	for i := range recordings {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Construct a separate Lanes for every caller so the guarantee is
+			// not accidentally scoped to one wrapper instance.
+			command, _, err := memory.New(st, memory.UserActor).RecordCommand(
+				context.Background(), "test", fmt.Sprintf("go test ./... #%d", i), i%2)
+			results <- result{index: i, command: command, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var totals []int
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("recording %d: %v", result.index, result.err)
+		}
+		if want := fmt.Sprintf("go test ./... #%d", result.index); result.command.Cmdline != want {
+			t.Errorf("recording %d returned command line %q, want %q", result.index, result.command.Cmdline, want)
+		}
+		totals = append(totals, result.command.SuccessCount+result.command.FailCount)
+	}
+	sort.Ints(totals)
+	for i, total := range totals {
+		if total != i+1 {
+			t.Fatalf("returned counter totals = %v, want every completed state from 1 through %d", totals, recordings)
+		}
+	}
+
+	persisted, err := lanes.Command(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("read recorded command: %v", err)
+	}
+	if persisted.SuccessCount != recordings/2 || persisted.FailCount != recordings/2 {
+		t.Fatalf("persisted counters = %d success/%d failure, want %d/%d",
+			persisted.SuccessCount, persisted.FailCount, recordings/2, recordings/2)
+	}
+}
+
 // TestNarrativeLanesRoundTrip covers project_state and project_arch:
 // setting a narrative appends a version, reading it returns the newest,
 // and the two tables are independent (acceptance criteria 1 and 4).
@@ -369,6 +428,35 @@ func TestLaneCommandsRefuseAnUninitializedStore(t *testing.T) {
 	err := runMemdoltErr(t, "task", "add", "a task", "--dir", base)
 	if !strings.Contains(err, "memdolt init") {
 		t.Fatalf("writing to an uninitialized store said %q, want it to name `memdolt init`", err)
+	}
+}
+
+func TestDirectAndReviewLanesRefuseAStaleSchema(t *testing.T) {
+	base := initStore(t)
+	st := openInitializedStore(t, base)
+	stale := strconv.Itoa(store.LatestSchemaVersion() - 1)
+	if _, err := st.Commit(context.Background(), store.CommitRequest{
+		Statements: []store.Statement{{
+			SQL: "UPDATE meta SET v = ? WHERE k = ?", Args: []any{stale, store.SchemaVersionKey},
+		}},
+		NoText: true, Message: "simulate a store behind the binary", Author: cliActor,
+	}); err != nil {
+		t.Fatalf("mark store stale: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close stale store: %v", err)
+	}
+
+	for _, args := range [][]string{
+		{"task", "add", "must migrate first", "--dir", base},
+		{"review", "list", "--dir", base},
+	} {
+		err := runMemdoltErr(t, args...)
+		for _, want := range []string{"schema v" + stale, "memdolt init", "missing migrations"} {
+			if !strings.Contains(err, want) {
+				t.Errorf("`memdolt %s` refusal %q does not mention %q", strings.Join(args, " "), err, want)
+			}
+		}
 	}
 }
 
