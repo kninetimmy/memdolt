@@ -3,6 +3,7 @@ package localdolt_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -183,6 +184,48 @@ func TestProposeFactStagesOneCommitOnItsOwnBranch(t *testing.T) {
 	if got := commitsOn(t, st, localdolt.MainBranch); got != mainCommits+1 {
 		t.Fatalf("main has %d commits after one durable write, want %d", got, mainCommits+1)
 	}
+}
+
+func TestProposeFactCollisionHasAStableTypedError(t *testing.T) {
+	ctx := context.Background()
+	st := migratedStore(t)
+	if _, err := st.Commit(ctx, store.CommitRequest{
+		Statements: []store.Statement{{SQL: "INSERT INTO facts (id, `key`, value, created_at) VALUES (?, ?, ?, ?)", Args: []any{
+			"01J000000000000000000LIVE", "build.command", "go test ./...", "2026-08-15 12:00:00",
+		}}},
+		Text: []string{"build.command", "go test ./..."}, Message: "seed live fact", Author: stagingActor,
+	}); err != nil {
+		t.Fatalf("seed live fact: %v", err)
+	}
+
+	_, err := st.ProposeFact(ctx,
+		localdolt.Proposal{Rationale: "update it", Actor: stagingActor, Target: localdolt.TargetRepo},
+		localdolt.Fact{Key: "build.command", Value: "go test -race ./..."})
+	if !errors.Is(err, localdolt.ErrFactKeyExists) {
+		t.Fatalf("collision error = %v, want one matching ErrFactKeyExists", err)
+	}
+	for _, want := range []string{"build.command", "supersede", "different key", "cancel"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("collision error %q does not mention %q", err, want)
+		}
+	}
+	requireProposalBranches(t, st)
+}
+
+func TestCanceledStageCleansBranchAfterRestoreFails(t *testing.T) {
+	st := migratedStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	err := st.StageUntilCanceled(ctx)
+	if err == nil {
+		t.Fatal("canceled staging succeeded")
+	}
+	if !strings.Contains(err.Error(), "could not return") {
+		t.Fatalf("error %q does not report the failed branch restore", err)
+	}
+	requireProposalBranches(t, st)
+	requireOnMain(t, st)
 }
 
 // TestProposeDecisionStagesTheDecisionRow covers §6.2's other insert: a

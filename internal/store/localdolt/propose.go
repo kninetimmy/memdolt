@@ -2,6 +2,7 @@ package localdolt
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -60,8 +61,15 @@ const stagedDecisionStatus = "active"
 // PRD §6.1 keys every agent-writable table with a CHAR(26) ULID exactly so
 // that two machines inserting between syncs cannot collide on a merge, the
 // way an AUTO_INCREMENT would. internal/memory mints the direct lanes' ids
-// the same way.
-func newID() string { return ulid.Make().String() }
+// the same way, from the operating system's cryptographic random source.
+func newID() string {
+	return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
+}
+
+// ErrFactKeyExists reports that a new fact would collide with the one live
+// fact the schema permits under a key. The wrapping error names the key and
+// the operator's available next steps.
+var ErrFactKeyExists = errors.New("a live fact already exists under this key")
 
 // Proposal is the review metadata a staged write records in PRD §6.2's
 // proposals table.
@@ -221,6 +229,7 @@ func (s *Store) ProposeFact(ctx context.Context, p Proposal, f Fact) (StagedProp
 		message:    "propose fact " + f.Key,
 		statements: []store.Statement{insertFact(rowID, f, p.Actor, now)},
 		text:       f.text(),
+		newFactKey: f.Key,
 	})
 }
 
@@ -323,6 +332,11 @@ type stagedWrite struct {
 	// supersededID, when set, is the live fact the first statement links.
 	// stage verifies it is live on the branch before anything is written.
 	supersededID string
+
+	// newFactKey is set only by ProposeFact. A plain fact insert must not
+	// collide with a live key; supersede deliberately transfers that key and
+	// therefore does not set it.
+	newFactKey string
 }
 
 // stage is the staged-write lane of PRD §3.1: one proposal, one branch cut
@@ -396,10 +410,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 		// main.
 		discardConn(conn)
 		return StagedProposal{}, errors.Join(stageErr,
-			fmt.Errorf("localdolt: the session that staged %q could not return to %q: %w", branch, origin, restoreErr))
+			fmt.Errorf("localdolt: the session that staged %q could not return to %q: %w", branch, origin, restoreErr),
+			deleteBranchFromPool(context.WithoutCancel(ctx), db, branch))
 	}
 	if stageErr != nil {
-		return StagedProposal{}, errors.Join(stageErr, deleteBranch(ctx, conn, branch))
+		return StagedProposal{}, errors.Join(stageErr, deleteBranch(context.WithoutCancel(ctx), conn, branch))
 	}
 
 	return StagedProposal{
@@ -413,6 +428,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 
 // stageOnBranch writes the proposal on the branch conn is checked out to.
 func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite, statements []store.Statement) (store.CommitResult, error) {
+	if w.newFactKey != "" {
+		if err := requireUnusedFactKey(ctx, conn, w.newFactKey); err != nil {
+			return store.CommitResult{}, err
+		}
+	}
 	if w.supersededID != "" {
 		if err := requireLiveFact(ctx, conn, w.supersededID); err != nil {
 			return store.CommitResult{}, err
@@ -426,16 +446,33 @@ func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite
 	})
 }
 
+func requireUnusedFactKey(ctx context.Context, conn *sql.Conn, key string) error {
+	var live int
+	if err := conn.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM facts WHERE live_key = ?", key).Scan(&live); err != nil {
+		return fmt.Errorf("localdolt: look for a live fact under key %q: %w", key, err)
+	}
+	if live > 0 {
+		return fmt.Errorf("localdolt: fact key %q: %w; choose supersede, keep both under a different key, or cancel",
+			key, ErrFactKeyExists)
+	}
+	return nil
+}
+
 // requireCleanWorkingSet refuses an operation that would commit uncommitted work.
 // DOLT_COMMIT('-A') stages every table, so anything sitting in the working
 // set would ride into the proposal's one commit and be promoted with it on
 // accept — the commit has to hold the proposed row and its metadata and
 // nothing else (PRD §6.2).
 //
-// The sweep belongs to commitTx, so every write path shares it, including
-// Store.Commit and the migration runner. This guard binds the staged-write
-// lane, where the contents of one commit are the contract review reads; it
-// changes nothing about what Store.Commit accepts.
+// The staged-write and accept paths both call this guard because their
+// DOLT_COMMIT('-A') must contain only the reviewed payload. The restriction
+// binds those two call sites, not every Store.Commit: a direct-lane commit
+// still owns the statements it passes to the store.
+//
+// The future M3 note batch is intentionally not permission to relax this
+// guard. It must commit only its accumulated session_notes rows through a
+// narrowed commit seam; LogNote remains the CLI's one-note/one-commit API.
 func requireCleanWorkingSet(ctx context.Context, conn *sql.Conn, operation string) error {
 	var dirty int
 	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_status").Scan(&dirty); err != nil {
@@ -469,6 +506,9 @@ func requireLiveFact(ctx context.Context, conn *sql.Conn, id string) error {
 }
 
 func checkoutBranch(ctx context.Context, conn *sql.Conn, branch string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("localdolt: check out %q: %w", branch, err)
+	}
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_CHECKOUT(?)", branch); err != nil {
 		return fmt.Errorf("localdolt: check out %q: %w", branch, err)
 	}
@@ -483,6 +523,19 @@ func deleteBranch(ctx context.Context, conn *sql.Conn, branch string) error {
 		return fmt.Errorf("localdolt: delete the abandoned proposal branch %q: %w", branch, err)
 	}
 	return nil
+}
+
+// deleteBranchFromPool removes an abandoned branch through a fresh session.
+// It is used when the staging session cannot return to its origin and is no
+// longer trustworthy; deleting the branch from the session still checked out
+// to it would fail because a branch cannot delete itself.
+func deleteBranchFromPool(ctx context.Context, db *sql.DB, branch string) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("localdolt: acquire a fresh session to clean up %q: %w", branch, err)
+	}
+	defer func() { _ = conn.Close() }()
+	return deleteBranch(ctx, conn, branch)
 }
 
 // discardConn marks a connection unusable so the pool closes it instead of

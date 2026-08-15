@@ -21,10 +21,12 @@ package memory
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -42,6 +44,14 @@ type Lanes struct {
 	actor Actor
 }
 
+// commandMu keeps every command recording's atomic upsert and read-back
+// together, including recordings through distinct Lanes over the same store,
+// so the returned row is the one persisted when that operation completes.
+// SQL still performs the increment atomically for defense in depth.
+// ponytail: process-global because command writes are rare; key locks by store
+// if unrelated stores ever need concurrent command throughput in one process.
+var commandMu sync.Mutex
+
 // New returns the direct lanes of st. Writes are attributed to actor, both
 // in the Dolt commit's authorship and in the actor columns of the rows
 // that carry them (§6.1).
@@ -58,8 +68,11 @@ func (l *Lanes) Actor() Actor { return l.actor }
 // merge, which an AUTO_INCREMENT would. Minting client-side is also what
 // makes an at-least-once write inspectable: the id exists before the
 // statement runs, so a caller that has to retry knows which row it was
-// writing (M0 rig 1, docs/spikes/m0-rig1.md).
-func newID() string { return ulid.Make().String() }
+// writing (M0 rig 1, docs/spikes/m0-rig1.md). The random component comes
+// directly from the operating system's cryptographic source.
+func newID() string {
+	return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
+}
 
 // now is the timestamp a write stamps its rows with. It is truncated to
 // the second because §6.1's DATETIME columns carry no fractional part:
@@ -324,8 +337,11 @@ type Note struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// LogNote records a session note and returns it with the hash of the
-// commit that carried it.
+// LogNote is the short-lived CLI seam: it records one session note in one
+// commit and returns both. The future M3 server must not call LogNote once per
+// row: it accumulates note rows and commits that narrowed set on session end or
+// the five-minute timer. It must not reuse a general DOLT_COMMIT('-A') path or
+// weaken the clean-working-set guards around proposal staging and review.
 func (l *Lanes) LogNote(ctx context.Context, body string) (Note, string, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -405,12 +421,11 @@ type Command struct {
 // RecordCommand records how a command of one kind ran: its command line,
 // its exit code, and a tick on the success or failure tally.
 //
-// The tallies are read, incremented here and written as values rather than
-// incremented in SQL, so that the row this returns is the row that was
-// written. The read and the write are not one transaction, which is safe
-// for the reason §5.2's single-owner lock exists: within a machine this
-// process is the only writer. Across machines the two paths would be
-// equally conflicted, since both write the same cell.
+// The upsert increments counters in SQL, so concurrent goroutines cannot read
+// the same old value and overwrite one another. commandMu covers the commit
+// and read-back across Lanes, making each returned value agree with the row
+// persisted at that operation's completion. Across machines the writes still
+// touch the same cells and therefore retain the existing merge-conflict shape.
 func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCode int) (Command, string, error) {
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	if err := validate("command kind", kind, CommandKinds); err != nil {
@@ -420,18 +435,14 @@ func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCod
 		return Command{}, "", errors.New("a recorded command needs a command line")
 	}
 
-	command, err := l.Command(ctx, kind)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return Command{}, "", err
-	}
-	command.Kind = kind
-	command.Cmdline = cmdline
-	command.LastExitCode = exitCode
-	command.LastRunAt = now()
+	commandMu.Lock()
+	defer commandMu.Unlock()
+
+	command := Command{Kind: kind, Cmdline: cmdline, LastExitCode: exitCode, LastRunAt: now()}
 	if exitCode == 0 {
-		command.SuccessCount++
+		command.SuccessCount = 1
 	} else {
-		command.FailCount++
+		command.FailCount = 1
 	}
 
 	hash, err := l.write(ctx,
@@ -441,7 +452,7 @@ func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCod
 			SQL: "INSERT INTO commands (kind, cmdline, last_exit_code, last_run_at, success_count, fail_count) " +
 				"VALUES (?, ?, ?, ?, ?, ?) " +
 				"ON DUPLICATE KEY UPDATE cmdline = ?, last_exit_code = ?, last_run_at = ?, " +
-				"success_count = ?, fail_count = ?",
+				"success_count = success_count + ?, fail_count = fail_count + ?",
 			Args: []any{
 				command.Kind, command.Cmdline, command.LastExitCode, command.LastRunAt,
 				command.SuccessCount, command.FailCount,
@@ -452,7 +463,11 @@ func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCod
 	if err != nil {
 		return Command{}, "", fmt.Errorf("record %s command: %w", kind, err)
 	}
-	return command, hash, nil
+	persisted, err := l.Command(ctx, kind)
+	if err != nil {
+		return Command{}, "", fmt.Errorf("read back %s command after commit %s: %w", kind, hash, err)
+	}
+	return persisted, hash, nil
 }
 
 // Command returns the recorded command of one kind.

@@ -243,10 +243,10 @@ func TestMigratedSchemaMatchesThePRDSchema(t *testing.T) {
 			ulidPK,
 			"PRIMARY KEY (id)",
 			"kind enum('fact','decision','supersede')",
-			"rationale text",
-			"actor varchar(64)",
+			"rationale text NOT NULL",
+			"actor varchar(64) NOT NULL",
 			"created_at datetime",
-			"target enum('repo','global')",
+			"target enum('repo','global') NOT NULL",
 		}},
 	} {
 		ddl := showCreateTable(t, st, want.table)
@@ -256,6 +256,64 @@ func TestMigratedSchemaMatchesThePRDSchema(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestProposalMetadataNullabilityIsEnforcedOnFreshAndUpgradedStores(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		store func(*testing.T) *localdolt.Store
+	}{
+		{name: "fresh", store: migratedStore},
+		{name: "upgraded from migration 2", store: storeAtMigrationTwoThenUpgrade},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := tc.store(t)
+			for _, column := range []string{"rationale", "actor", "target"} {
+				values := map[string]any{
+					"rationale": "why",
+					"actor":     "agent:test",
+					"target":    "repo",
+				}
+				values[column] = nil
+				_, err := st.Commit(context.Background(), store.CommitRequest{
+					Statements: []store.Statement{{
+						SQL:  "INSERT INTO proposals (id, kind, rationale, actor, created_at, target) VALUES (?, 'fact', ?, ?, '2026-08-15 12:00:00', ?)",
+						Args: []any{"01J000000000000000000NULL", values["rationale"], values["actor"], values["target"]},
+					}},
+					NoText: true, Message: "probe proposal nullability", Author: stagingActor,
+				})
+				if err == nil {
+					t.Errorf("proposals.%s accepted NULL", column)
+				}
+			}
+		})
+	}
+}
+
+func storeAtMigrationTwoThenUpgrade(t *testing.T) *localdolt.Store {
+	t.Helper()
+	ctx := context.Background()
+	st := openStore(t, baseDir(t), discardLogger())
+	for _, migration := range store.Migrations()[:2] {
+		statements := append([]store.Statement{}, migration.Statements...)
+		version := strconv.Itoa(migration.Version)
+		statements = append(statements, store.Statement{
+			SQL:  "INSERT INTO meta (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = ?",
+			Args: []any{store.SchemaVersionKey, version, version},
+		})
+		if _, err := st.Commit(ctx, store.CommitRequest{
+			Statements: statements, NoText: true,
+			Message: fmt.Sprintf("apply legacy migration %d", migration.Version), Author: stagingActor,
+		}); err != nil {
+			t.Fatalf("apply migration %d: %v", migration.Version, err)
+		}
+	}
+	if result, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("upgrade migration-2 store: %v", err)
+	} else if len(result.Applied) != 1 || result.Applied[0].Version != 3 {
+		t.Fatalf("upgrade applied %+v, want migration 3 only", result.Applied)
+	}
+	return st
 }
 
 // TestOpenRefusesAStoreNewerThanTheBinary covers PRD §6.4's version-skew

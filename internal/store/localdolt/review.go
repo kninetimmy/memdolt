@@ -35,6 +35,10 @@ import (
 // name is looked up here before it is ever formatted into SQL, and a name
 // Dolt reports that is not a key of this map is refused rather than
 // interpolated.
+//
+// This allow-list is hand-maintained and binds reviewedLaneTables alone, not
+// every table with an id column. A new reviewed-lane table must be added here
+// explicitly or accept will fail closed when Dolt reports it.
 var reviewedLaneTables = map[string]string{
 	"facts":     "id",
 	"decisions": "id",
@@ -239,10 +243,9 @@ func (s *Store) ProposalDiff(ctx context.Context, id string) (ProposalDiff, erro
 	return diff, nil
 }
 
-// RejectProposal deletes a proposal's branch, leaving main exactly where it
-// was (PRD §3.1: reject is a branch deletion, and it is the one path in
-// this lane that discards unmerged data — by the operator's explicit
-// instruction, naming one proposal).
+// RejectProposal deletes a proposal's unmerged branch, leaving main exactly
+// where it was (PRD §3.1). Rejection discards one operator-named proposal;
+// expiry is the other discard path and sweeps old proposal branches by age.
 func (s *Store) RejectProposal(ctx context.Context, id string) (PendingProposal, error) {
 	db, err := s.handle()
 	if err != nil {
@@ -269,10 +272,10 @@ func (s *Store) RejectProposal(ctx context.Context, id string) (PendingProposal,
 }
 
 // ExpireProposals deletes every proposal branch whose staging commit is
-// older than before, and reports what it removed (PRD §12: expiry is a
-// branch age sweep). It reads the branch list rather than the proposals
-// metadata, so a branch whose metadata row cannot be read is swept rather
-// than left behind forever.
+// older than before, discarding its unmerged data, and reports what it removed
+// (PRD §12: expiry is a branch age sweep). It reads the branch list rather
+// than the proposals metadata, so a branch whose metadata row cannot be read
+// is swept rather than left behind forever.
 func (s *Store) ExpireProposals(ctx context.Context, before time.Time) ([]PendingProposal, error) {
 	db, err := s.handle()
 	if err != nil {

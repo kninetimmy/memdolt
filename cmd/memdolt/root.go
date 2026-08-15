@@ -4,7 +4,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kninetimmy/memdolt/internal/memory"
-	"github.com/kninetimmy/memdolt/internal/store"
 )
 
 // jsonOutput backs the --json persistent flag shared by every memdolt
@@ -18,7 +17,7 @@ var jsonOutput bool
 // command, so it is PRD §3.1's plain "user" rather than an agent. The
 // address is in .invalid (RFC 2606) because memdolt asserts an identity
 // for dolt_log and dolt_blame, not a mailbox.
-var cliActor = store.Actor{Name: "user", Email: "user@memdolt.invalid"}
+var cliActor = memory.UserActor.CommitAuthor()
 
 // newRootCommand builds the memdolt root command and wires up its
 // subcommands. It is a constructor (rather than a package-level var) so
