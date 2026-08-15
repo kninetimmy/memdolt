@@ -261,7 +261,7 @@ func newReviewExpireCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&olderThan, "older-than", defaultExpireAfter,
-		"how old a proposal has to be before it is swept")
+		"Go duration (for example 720h); default: 720h0m0s (30 days)")
 
 	return flags.bind(cmd)
 }
@@ -296,7 +296,7 @@ func newReviewStaleCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&olderThan, "older-than", defaultStaleAfter,
-		"how old a proposal has to be before the audit reports it")
+		"Go duration (for example 168h); default: 168h0m0s (7 days)")
 
 	return flags.bind(cmd)
 }

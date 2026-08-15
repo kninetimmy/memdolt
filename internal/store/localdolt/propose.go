@@ -372,7 +372,7 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	if err != nil {
 		return StagedProposal{}, err
 	}
-	if err := requireCleanWorkingSet(ctx, conn); err != nil {
+	if err := requireCleanWorkingSet(ctx, conn, "stage a proposal"); err != nil {
 		return StagedProposal{}, err
 	}
 
@@ -426,7 +426,7 @@ func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite
 	})
 }
 
-// requireCleanWorkingSet refuses to stage on top of uncommitted work.
+// requireCleanWorkingSet refuses an operation that would commit uncommitted work.
 // DOLT_COMMIT('-A') stages every table, so anything sitting in the working
 // set would ride into the proposal's one commit and be promoted with it on
 // accept — the commit has to hold the proposed row and its metadata and
@@ -436,15 +436,15 @@ func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite
 // Store.Commit and the migration runner. This guard binds the staged-write
 // lane, where the contents of one commit are the contract review reads; it
 // changes nothing about what Store.Commit accepts.
-func requireCleanWorkingSet(ctx context.Context, conn *sql.Conn) error {
+func requireCleanWorkingSet(ctx context.Context, conn *sql.Conn, operation string) error {
 	var dirty int
 	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_status").Scan(&dirty); err != nil {
 		return fmt.Errorf("localdolt: read the working set: %w", err)
 	}
 	if dirty > 0 {
 		return fmt.Errorf(
-			"localdolt: refusing to stage a proposal over %d uncommitted table change(s); "+
-				"the proposal's commit stages every table and would carry them along", dirty)
+			"localdolt: refusing to %s over %d uncommitted table change(s); "+
+				"the commit stages every table and would carry them along", operation, dirty)
 	}
 	return nil
 }

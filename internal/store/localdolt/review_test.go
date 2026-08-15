@@ -908,8 +908,8 @@ func TestReviewAcceptRefusesToPromoteOverUncommittedWork(t *testing.T) {
 		"VALUES ('01J000000000000000000NOTE', 'user', 'uncommitted', '2026-08-02 12:00:00')")
 	if _, err := st.AcceptProposal(ctx, staged.ID, reviewer); err == nil {
 		t.Fatal("accepted a proposal over uncommitted work")
-	} else if !strings.Contains(err.Error(), "uncommitted") {
-		t.Fatalf("refusal %q does not say what is in the way", err)
+	} else if !strings.Contains(err.Error(), "refusing to promote a proposal") || strings.Contains(err.Error(), "stage a proposal") {
+		t.Fatalf("refusal %q does not accurately describe blocked promotion", err)
 	}
 	requireProposalBranches(t, st, staged.Branch)
 

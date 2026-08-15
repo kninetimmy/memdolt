@@ -366,7 +366,7 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 	// DOLT_COMMIT('-A') concludes the merge by staging every table, so
 	// anything already sitting in the working set would be promoted along
 	// with the proposal.
-	if err := requireCleanWorkingSet(ctx, conn); err != nil {
+	if err := requireCleanWorkingSet(ctx, conn, "promote a proposal"); err != nil {
 		return AcceptResult{}, err
 	}
 
@@ -750,7 +750,7 @@ func readViolations(ctx context.Context, tx *sql.Tx, table, key string) ([]viola
 // race alike, and with --all it fails outright on any table carrying a
 // FULLTEXT key ("attempted to purge `dolt_facts_ft_facts_0_fts_position`
 // during Full-Text merge but it could not be found") — which under PRD
-// §6.1 is every reviewed-lane table with data in it. The index's own
+// §6.1 is facts and decisions, but not proposals. The index's own
 // question, asked of the merged rows, does discriminate.
 func requireConstraintHolds(ctx context.Context, tx *sql.Tx, table, constraint string) error {
 	columns, err := uniqueIndexColumns(ctx, tx, table, constraint)
