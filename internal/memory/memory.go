@@ -421,11 +421,12 @@ type Command struct {
 // RecordCommand records how a command of one kind ran: its command line,
 // its exit code, and a tick on the success or failure tally.
 //
-// The upsert increments counters in SQL, so concurrent goroutines cannot read
-// the same old value and overwrite one another. commandMu covers the commit
-// and read-back across Lanes, making each returned value agree with the row
-// persisted at that operation's completion. Across machines the writes still
-// touch the same cells and therefore retain the existing merge-conflict shape.
+// Before, this method read counters and upserted absolute values, so concurrent
+// calls could read the same old value and lose an increment. After, the upsert
+// increments in SQL, and commandMu covers the commit and read-back across
+// Lanes, making each returned value agree with the row persisted at that
+// operation's completion. Across machines the writes still touch the same
+// cells and therefore retain the existing merge-conflict shape.
 func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCode int) (Command, string, error) {
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	if err := validate("command kind", kind, CommandKinds); err != nil {
