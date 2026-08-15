@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -117,31 +120,37 @@ func TestReviewCLIRejectAndExpire(t *testing.T) {
 }
 
 func TestReviewAgeHelpUsesGoDurations(t *testing.T) {
+	unsupportedDayDuration := regexp.MustCompile(`\b\d+d\b`)
 	for _, tc := range []struct {
 		name string
 		cmd  *cobra.Command
-		want []string
 	}{
 		{
 			name: "expire",
 			cmd:  newReviewExpireCommand(),
-			want: []string{"Go duration", "720h", "720h0m0s", "30 days"},
 		},
 		{
 			name: "stale",
 			cmd:  newReviewStaleCommand(),
-			want: []string{"Go duration", "168h", "168h0m0s", "7 days"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			help := tc.cmd.UsageString()
-			for _, want := range tc.want {
-				if !strings.Contains(help, want) {
-					t.Fatalf("help %q does not contain %q", help, want)
-				}
+			flag := tc.cmd.Flags().Lookup("older-than")
+			if flag == nil {
+				t.Fatal("--older-than flag is missing")
 			}
-			if strings.Contains(help, "30d") {
-				t.Fatalf("help %q suggests unsupported day duration syntax", help)
+			defaultAge, err := time.ParseDuration(flag.DefValue)
+			if err != nil {
+				t.Fatalf("--older-than default %q is not a Go duration: %v", flag.DefValue, err)
+			}
+			want := fmt.Sprintf("Go duration (for example %dh); default: %s (%d days)",
+				int(defaultAge.Hours()), flag.DefValue, int(defaultAge.Hours()/24))
+			if !strings.Contains(help, want) {
+				t.Fatalf("help %q does not contain %q", help, want)
+			}
+			if unsupported := unsupportedDayDuration.FindString(help); unsupported != "" {
+				t.Fatalf("help %q suggests unsupported day duration syntax %q", help, unsupported)
 			}
 		})
 	}
