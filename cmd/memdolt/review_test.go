@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -111,6 +113,37 @@ func TestReviewCLIRejectAndExpire(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	if got := queryString(t, st, "SELECT COUNT(*) FROM facts"); got != "0" {
 		t.Fatalf("main carries %s facts after a reject and an expiry, want 0", got)
+	}
+}
+
+func TestReviewAgeHelpUsesGoDurations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  *cobra.Command
+		want []string
+	}{
+		{
+			name: "expire",
+			cmd:  newReviewExpireCommand(),
+			want: []string{"Go duration", "720h", "720h0m0s", "30 days"},
+		},
+		{
+			name: "stale",
+			cmd:  newReviewStaleCommand(),
+			want: []string{"Go duration", "168h", "168h0m0s", "7 days"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			help := tc.cmd.UsageString()
+			for _, want := range tc.want {
+				if !strings.Contains(help, want) {
+					t.Fatalf("help %q does not contain %q", help, want)
+				}
+			}
+			if strings.Contains(help, "30d") {
+				t.Fatalf("help %q suggests unsupported day duration syntax", help)
+			}
+		})
 	}
 }
 
