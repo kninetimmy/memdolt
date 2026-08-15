@@ -58,9 +58,9 @@ func (s *Store) RunOnBranch(ctx context.Context, branch string, statements ...st
 
 // StageUntilCanceled drives stage past branch creation and then blocks in its
 // write until ctx is canceled. It exposes the otherwise hard-to-reach failed
-// restore cleanup path to the external regression test without adding a
-// production hook.
-func (s *Store) StageUntilCanceled(ctx context.Context) error {
+// restore cleanup path to the external regression test; checkedOut closes only
+// after DOLT_CHECKOUT has completed.
+func (s *Store) StageUntilCanceled(ctx context.Context, checkedOut chan<- struct{}) error {
 	_, err := s.stage(ctx, stagedWrite{
 		kind:     KindFact,
 		proposal: Proposal{Rationale: "cleanup probe", Actor: store.Actor{Name: "agent:test", Email: "test@memdolt.invalid"}, Target: TargetRepo},
@@ -71,6 +71,9 @@ func (s *Store) StageUntilCanceled(ctx context.Context) error {
 			SQL: "SELECT SLEEP(1)",
 		}},
 		text: []string{"cleanup probe"},
+		afterCheckout: func() {
+			close(checkedOut)
+		},
 	})
 	return err
 }

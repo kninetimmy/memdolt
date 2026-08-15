@@ -218,14 +218,13 @@ func TestCanceledStageCleansBranchAfterRestoreFails(t *testing.T) {
 	defer cancel()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- st.StageUntilCanceled(ctx) }()
+	checkedOut := make(chan struct{})
+	go func() { errCh <- st.StageUntilCanceled(ctx, checkedOut) }()
 
-	deadline := time.Now().Add(10 * time.Second)
-	for scanInt(t, st, "SELECT COUNT(*) FROM dolt_branches WHERE name LIKE 'proposal/%'") == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("staging did not create its proposal branch")
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-checkedOut:
+	case <-time.After(10 * time.Second):
+		t.Fatal("staging did not check out its proposal branch")
 	}
 	cancel()
 

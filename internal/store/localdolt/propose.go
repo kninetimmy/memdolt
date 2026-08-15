@@ -62,8 +62,12 @@ const stagedDecisionStatus = "active"
 // that two machines inserting between syncs cannot collide on a merge, the
 // way an AUTO_INCREMENT would. internal/memory mints the direct lanes' ids
 // the same way, from the operating system's cryptographic random source.
-func newID() string {
-	return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
+var idEntropy = &ulid.LockedMonotonicReader{MonotonicReader: ulid.Monotonic(rand.Reader, 0)}
+
+func newID() string { return newIDAt(time.Now()) }
+
+func newIDAt(t time.Time) string {
+	return ulid.MustNew(ulid.Timestamp(t), idEntropy).String()
 }
 
 // ErrFactKeyExists reports that a new fact would collide with the one live
@@ -337,6 +341,10 @@ type stagedWrite struct {
 	// collide with a live key; supersede deliberately transfers that key and
 	// therefore does not set it.
 	newFactKey string
+
+	// afterCheckout synchronizes the cleanup regression after this write's
+	// session is definitely on its proposal branch. Production writes leave it nil.
+	afterCheckout func()
 }
 
 // stage is the staged-write lane of PRD §3.1: one proposal, one branch cut
@@ -399,6 +407,9 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 		return StagedProposal{}, errors.Join(
 			fmt.Errorf("localdolt: check out proposal branch %q: %w", branch, err),
 			deleteBranch(ctx, conn, branch))
+	}
+	if w.afterCheckout != nil {
+		w.afterCheckout()
 	}
 
 	result, stageErr := s.stageOnBranch(ctx, conn, w, statements)

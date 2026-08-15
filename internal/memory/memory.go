@@ -70,8 +70,12 @@ func (l *Lanes) Actor() Actor { return l.actor }
 // statement runs, so a caller that has to retry knows which row it was
 // writing (M0 rig 1, docs/spikes/m0-rig1.md). The random component comes
 // directly from the operating system's cryptographic source.
-func newID() string {
-	return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
+var idEntropy = &ulid.LockedMonotonicReader{MonotonicReader: ulid.Monotonic(rand.Reader, 0)}
+
+func newID() string { return newIDAt(time.Now()) }
+
+func newIDAt(t time.Time) string {
+	return ulid.MustNew(ulid.Timestamp(t), idEntropy).String()
 }
 
 // now is the timestamp a write stamps its rows with. It is truncated to
