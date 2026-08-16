@@ -34,13 +34,17 @@ func TestMigrationsAreContiguousAndNumbered(t *testing.T) {
 	}
 }
 
-// TestMigrationsIsNotAliasedToTheBinarysOwnHistory checks that a caller
-// cannot rewrite the shipped schema history through the returned slice.
-func TestMigrationsIsNotAliasedToTheBinarysOwnHistory(t *testing.T) {
+// TestMigrationsAreNotAliasedToTheBinarysOwnHistory checks that a caller
+// cannot rewrite the shipped schema history through either returned slice.
+func TestMigrationsAreNotAliasedToTheBinarysOwnHistory(t *testing.T) {
 	migrations := store.Migrations()
 	migrations[0].Version = 99
+	migrations[0].Statements[0].SQL = "SELECT 'caller mutation'"
 	if store.Migrations()[0].Version != 1 {
 		t.Fatal("mutating the returned slice rewrote the shipped migration history")
+	}
+	if store.Migrations()[0].Statements[0].SQL == migrations[0].Statements[0].SQL {
+		t.Fatal("mutating a returned statement rewrote the shipped migration history")
 	}
 }
 
