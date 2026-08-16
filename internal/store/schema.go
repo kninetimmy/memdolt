@@ -48,7 +48,19 @@ var migrations = []Migration{
 }
 
 // Migrations returns the schema history the binary ships, oldest first.
-func Migrations() []Migration { return slices.Clone(migrations) }
+// The returned migrations and their statements are independent copies: this
+// immutability guarantee belongs to every migration returned here, not only
+// the current initial-schema migration.
+func Migrations() []Migration {
+	result := slices.Clone(migrations)
+	for i := range result {
+		result[i].Statements = slices.Clone(result[i].Statements)
+		for j := range result[i].Statements {
+			result[i].Statements[j].Args = slices.Clone(result[i].Statements[j].Args)
+		}
+	}
+	return result
+}
 
 // LatestSchemaVersion is the newest schema version this binary knows how to
 // produce — the version a freshly initialized store ends up at.

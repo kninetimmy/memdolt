@@ -108,6 +108,31 @@ func TestMigrateAppliesTheSchemaAsOneTaggedCommitPerMigration(t *testing.T) {
 	if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_tags"); got != latest {
 		t.Fatalf("second migrate changed the tags to %d, want %d", got, latest)
 	}
+
+	// A tag-only failure is repaired in place: migration 1's tag is put
+	// back on its original commit without replaying the migration.
+	missingTag := store.MigrationTag(1)
+	missingCommit := result.Applied[0].Commit
+	execQuery(t, st, "CALL DOLT_TAG('-d', ?)", missingTag)
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_tags"); got != latest-1 {
+		t.Fatalf("deleting %q left %d tags, want %d", missingTag, got, latest-1)
+	}
+	repaired, err := st.Migrate(ctx)
+	if err != nil {
+		t.Fatalf("migrate with missing tag: %v", err)
+	}
+	if len(repaired.Applied) != 0 {
+		t.Fatalf("missing-tag repair applied %d migrations, want 0", len(repaired.Applied))
+	}
+	if got := scanString(t, st, "SELECT tag_hash FROM dolt_tags WHERE tag_name = ?", missingTag); got != missingCommit {
+		t.Fatalf("repaired tag %q names commit %q, want original commit %q", missingTag, got, missingCommit)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log"); got != wantCommits {
+		t.Fatalf("missing-tag repair changed the history to %d commits, want %d", got, wantCommits)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_tags"); got != latest {
+		t.Fatalf("missing-tag repair left %d tags, want %d", got, latest)
+	}
 }
 
 // TestMigratedSchemaMatchesThePRDSchema covers PRD §6.1: the tables the
@@ -125,6 +150,11 @@ func TestMigratedSchemaMatchesThePRDSchema(t *testing.T) {
 	// commands is keyed by its kind enum and meta by its k string; neither
 	// takes a ULID, and both are listed below with the key they do carry.
 	const ulidPK = "id char(26) NOT NULL"
+	if got := scanString(t, st,
+		"SELECT column_type FROM information_schema.columns WHERE table_schema = ? AND table_name = 'facts' AND column_name = 'key'",
+		localdolt.DatabaseName); got != "varchar(255)" {
+		t.Fatalf("facts.key type = %q, want varchar(255)", got)
+	}
 
 	for _, want := range []struct {
 		table     string
@@ -133,7 +163,6 @@ func TestMigratedSchemaMatchesThePRDSchema(t *testing.T) {
 		{"facts", []string{
 			ulidPK,
 			"PRIMARY KEY (id)",
-			"key varchar(255)",
 			"value text",
 			"source varchar(64) DEFAULT 'user'",
 			"kind varchar(64)",
@@ -301,12 +330,14 @@ func storeAtMigrationTwoThenUpgrade(t *testing.T) *localdolt.Store {
 			SQL:  "INSERT INTO meta (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = ?",
 			Args: []any{store.SchemaVersionKey, version, version},
 		})
-		if _, err := st.Commit(ctx, store.CommitRequest{
+		commit, err := st.Commit(ctx, store.CommitRequest{
 			Statements: statements, NoText: true,
-			Message: fmt.Sprintf("apply legacy migration %d", migration.Version), Author: stagingActor,
-		}); err != nil {
+			Message: fmt.Sprintf("migrate schema to v%d (%s)", migration.Version, migration.Name), Author: stagingActor,
+		})
+		if err != nil {
 			t.Fatalf("apply migration %d: %v", migration.Version, err)
 		}
+		execQuery(t, st, "CALL DOLT_TAG(?, ?)", store.MigrationTag(migration.Version), commit.Hash)
 	}
 	if result, err := st.Migrate(ctx); err != nil {
 		t.Fatalf("upgrade migration-2 store: %v", err)
@@ -490,9 +521,9 @@ func normalizeDDL(ddl string) string {
 	return strings.ReplaceAll(ddl, ", ", ",")
 }
 
-func execQuery(t *testing.T, st *localdolt.Store, query string) {
+func execQuery(t *testing.T, st *localdolt.Store, query string, args ...any) {
 	t.Helper()
-	if err := st.RunOnBranch(context.Background(), localdolt.MainBranch, store.Statement{SQL: query}); err != nil {
+	if err := st.RunOnBranch(context.Background(), localdolt.MainBranch, store.Statement{SQL: query, Args: args}); err != nil {
 		t.Fatalf("%s: %v", query, err)
 	}
 }

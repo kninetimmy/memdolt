@@ -39,8 +39,10 @@ type MigrationResult struct {
 	Version int
 
 	// Applied lists the migrations this call applied, oldest first. An
-	// empty Applied means the store was already at Version: Migrate wrote
-	// nothing and added no commit to the Dolt history.
+	// empty Applied means the store was already at Version and Migrate added
+	// no commit to the Dolt history. Before missing-tag repair, it also meant
+	// Migrate wrote no tag; after repair, Migrate may have restored a missing
+	// tag to an existing migration commit.
 	Applied []AppliedMigration
 }
 
@@ -49,8 +51,14 @@ type MigrationResult struct {
 //
 // It is idempotent and keyed on meta.schema_version: every migration newer
 // than that value is applied in order, each as exactly one Dolt commit
-// tagged migration/<n>, and a store already at the newest version is left
-// untouched — no statement runs, no commit is created.
+// tagged migration/<n>. Before missing-tag repair, a store already at the
+// newest version was left wholly untouched. After repair, Migrate restores
+// any absent tag for an already-applied migration to that migration's
+// existing commit; when all tags are present, no statement runs, no commit
+// is created and no tag is added. This reconciliation covers every shipped
+// migration at or below meta.schema_version. It belongs to Migrate alone:
+// SchemaVersion and the open-time version guard do not inspect migration
+// tags.
 //
 // Two refusals, both loud:
 //
@@ -89,6 +97,9 @@ func (s *Store) Migrate(ctx context.Context) (MigrationResult, error) {
 	result := MigrationResult{Version: current}
 	for _, migration := range store.Migrations() {
 		if migration.Version <= current {
+			if err := ensureMigrationTag(ctx, db, migration); err != nil {
+				return result, err
+			}
 			continue
 		}
 		applied, err := s.applyMigration(ctx, db, migration)
@@ -145,7 +156,7 @@ func (s *Store) applyMigration(ctx context.Context, db *sql.DB, migration store.
 		// config that cannot be evaluated must not stand between an
 		// operator and `memdolt init`.
 		NoText:  true,
-		Message: fmt.Sprintf("migrate schema to v%s (%s)", version, migration.Name),
+		Message: migrationCommitMessage(migration),
 		Author:  s.cfg.Actor,
 	})
 	if err != nil {
@@ -160,6 +171,37 @@ func (s *Store) applyMigration(ctx context.Context, db *sql.DB, migration store.
 	}
 
 	return AppliedMigration{Version: migration.Version, Name: migration.Name, Commit: result.Hash}, nil
+}
+
+func ensureMigrationTag(ctx context.Context, db *sql.DB, migration store.Migration) error {
+	tag := store.MigrationTag(migration.Version)
+	var tags int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_tags WHERE tag_name = ?", tag).Scan(&tags); err != nil {
+		return fmt.Errorf("localdolt: look for migration tag %q: %w", tag, err)
+	}
+	if tags != 0 {
+		return nil
+	}
+
+	var count int
+	var hash sql.NullString
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*), MIN(commit_hash) FROM dolt_log WHERE message = ?",
+		migrationCommitMessage(migration)).Scan(&count, &hash); err != nil {
+		return fmt.Errorf("localdolt: find commit for missing migration tag %q: %w", tag, err)
+	}
+	if count != 1 || !hash.Valid {
+		return fmt.Errorf("localdolt: cannot restore migration tag %q: found %d commits with message %q, want exactly one",
+			tag, count, migrationCommitMessage(migration))
+	}
+	if _, err := db.ExecContext(ctx, "CALL DOLT_TAG(?, ?)", tag, hash.String); err != nil {
+		return fmt.Errorf("localdolt: restore migration tag %q to commit %s: %w", tag, hash.String, err)
+	}
+	return nil
+}
+
+func migrationCommitMessage(migration store.Migration) string {
+	return fmt.Sprintf("migrate schema to v%d (%s)", migration.Version, migration.Name)
 }
 
 // discardUncommitted throws away everything uncommitted on the current

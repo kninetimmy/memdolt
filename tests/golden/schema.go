@@ -8,23 +8,22 @@ import (
 	"fmt"
 )
 
-// schemaDDL is this rig's own disposable copy of the schema, not the one
-// memdolt ships: store.Migrations() carries that, and `memdolt init`
-// applies it. The copy stays because the rig deviates from it deliberately
-// (see the scope column below) and because a retrieval gate that built its
-// fixture through the migration runner would gate the runner too. Keep the
-// FULLTEXT column orders here identical to the shipped ones — they decide
-// which filters work (PRD §6.1) — and expect no other drift to be caught
-// automatically.
+// schemaDDL is this rig's own disposable, deliberately divergent subset of
+// PRD §6.1's schema, not the one memdolt ships: store.Migrations() carries
+// that, and `memdolt init` applies it. The copy stays because a retrieval
+// gate that built its fixture through the migration runner would gate the
+// runner too. Keep the FULLTEXT column orders here identical to the shipped
+// ones — they decide which filters work (PRD §6.1) — and expect no other
+// drift to be caught automatically.
 //
-// schemaDDL is PRD §6.1's schema, trimmed to the tables this rig's golden
-// queries actually touch (facts, decisions, tasks, session_notes,
-// documents, doc_chunks — the five FULLTEXT-bearing source types plus
-// doc_chunks' documents parent). One deviation from §6.1, explicitly
-// licensed by this issue's acceptance criteria: a `scope` column on facts
-// and decisions, so a global-store row can be seeded as a scope-tagged row
-// in this same disposable store instead of standing up real global-store
-// plumbing — M0 gates the retrieval math, not that plumbing.
+// It is trimmed to the tables this rig's golden queries actually touch
+// (facts, decisions, tasks, session_notes, documents, doc_chunks — the five
+// FULLTEXT-bearing source types plus doc_chunks' documents parent). Its one
+// deviation from §6.1, explicitly licensed by this issue's acceptance
+// criteria, is a `scope` column on facts and decisions, so a global-store row
+// can be seeded as a scope-tagged row in this same disposable store instead
+// of standing up real global-store plumbing — M0 gates the retrieval math,
+// not that plumbing.
 var schemaDDL = []string{
 	`CREATE TABLE facts (
 		id CHAR(26) PRIMARY KEY,

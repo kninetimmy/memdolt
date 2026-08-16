@@ -13,43 +13,12 @@ import (
 func TestFactKeyPrefixAndFulltextContract(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t, baseDir(t), discardLogger())
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate contract schema: %v", err)
+	}
 
 	_, err := st.Commit(ctx, store.CommitRequest{
 		Statements: []store.Statement{
-			{SQL: `CREATE TABLE facts (
-				id CHAR(26) PRIMARY KEY,
-				` + "`key`" + ` VARCHAR(255),
-				value TEXT,
-				superseded_by CHAR(26) NULL,
-				live_key VARCHAR(255) GENERATED ALWAYS AS
-					(IF(superseded_by IS NULL, ` + "`key`" + `, NULL)) STORED,
-				UNIQUE KEY uk_fact_live_key (live_key),
-				FULLTEXT KEY ft_facts (value, ` + "`key`" + `)
-			)`},
-			{SQL: `CREATE TABLE decisions (
-				id CHAR(26) PRIMARY KEY,
-				title VARCHAR(512),
-				rationale TEXT,
-				status ENUM('active','superseded','draft'),
-				FULLTEXT KEY ft_decisions (title, rationale)
-			)`},
-			{SQL: `CREATE TABLE tasks (
-				id CHAR(26) PRIMARY KEY,
-				title VARCHAR(512),
-				notes TEXT,
-				FULLTEXT KEY ft_tasks (title, notes)
-			)`},
-			{SQL: `CREATE TABLE session_notes (
-				id CHAR(26) PRIMARY KEY,
-				text TEXT,
-				FULLTEXT KEY ft_notes (text)
-			)`},
-			{SQL: `CREATE TABLE doc_chunks (
-				id CHAR(26) PRIMARY KEY,
-				heading_path VARCHAR(1024),
-				body TEXT,
-				FULLTEXT KEY ft_chunks (heading_path, body)
-			)`},
 			{SQL: `INSERT INTO facts (id, ` + "`key`" + `, value, superseded_by) VALUES
 				('fact-build-old', 'build.command', 'legacy cargo command', 'fact-build-new'),
 				('fact-build-new', 'build.command', 'current cargo command', NULL),
@@ -69,7 +38,7 @@ func TestFactKeyPrefixAndFulltextContract(t *testing.T) {
 		Author:  store.Actor{Name: "agent:codex", Email: "codex@memdolt.invalid"},
 	})
 	if err != nil {
-		t.Fatalf("creating and seeding contract schema: %v", err)
+		t.Fatalf("seeding contract schema: %v", err)
 	}
 
 	requireIDs(t, st, []string{"fact-build-new", "fact-build-old"},
