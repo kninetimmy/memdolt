@@ -56,10 +56,11 @@ func (s *Store) RunOnBranch(ctx context.Context, branch string, statements ...st
 	return nil
 }
 
-// StageUntilCanceled drives stage past branch creation and then blocks in its
-// write until ctx is canceled. It exposes the otherwise hard-to-reach failed
-// restore cleanup path to the external regression test; checkedOut closes only
-// after DOLT_CHECKOUT has completed.
+// StageUntilCanceled drives stage past branch creation and then holds it
+// there until ctx is canceled, so the write lane runs on a dead context and
+// the restore back to origin fails with it. It exposes the otherwise
+// hard-to-reach failed restore cleanup path to the external regression test;
+// checkedOut closes only after DOLT_CHECKOUT has completed.
 func (s *Store) StageUntilCanceled(ctx context.Context, checkedOut chan<- struct{}) error {
 	_, err := s.stage(ctx, stagedWrite{
 		kind:     KindFact,
@@ -67,12 +68,10 @@ func (s *Store) StageUntilCanceled(ctx context.Context, checkedOut chan<- struct
 		rowID:    newID(),
 		now:      time.Now().UTC(),
 		message:  "probe canceled proposal cleanup",
-		statements: []store.Statement{{
-			SQL: "SELECT SLEEP(1)",
-		}},
-		text: []string{"cleanup probe"},
+		text:     []string{"cleanup probe"},
 		afterCheckout: func() {
 			close(checkedOut)
+			<-ctx.Done()
 		},
 	})
 	return err
