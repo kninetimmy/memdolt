@@ -441,3 +441,124 @@ fetch/stage instructions rig 2 documents (`tests/inference.RequireEnv`,
 shared code — see docs/spikes/m0-rig2.md §9). `retrieval_golden.json`'s
 query count is drift-guarded (`TestRetrievalGolden` fails loudly if it
 isn't exactly 22) the same way memhub's own hermetic test guards its copy.
+
+## 11. Scale re-run: 1021 rows with deterministic hard negatives (2026-08-22)
+
+This section is additive (issue #71) and changes no claim above it: the
+gate itself — `TestRetrievalGolden`, §1's verdict, every number in §1–§10 —
+is untouched, and passed unchanged immediately before and after the run
+below. What is new is `tests/golden/scale_test.go`
+(`TestRetrievalGoldenAtScale`, behind the same `golden` tag): the original
+22-query golden set, unmodified, run against the hermetic fixture **plus
+1000 synthetic hard-negative rows** — 1021 embedded rows total, one order
+of magnitude past `rerankPoolSize = 20`, at the low end of PRD §17 R2's own
+"memory scale" band (~10³). It measures what §8 said the 21-row fixture
+could not: whether gatherer choice changes any query's top-3 outcome once
+the rerank pool actually excludes rows a query wants. It asserts nothing
+about retrieval quality — numbers are logged whatever they are; the only
+pass conditions are infrastructural (no pipeline/gather error, each
+match-kind query mapping to exactly one wanted fixture row).
+
+### The scale corpus
+
+`scale_fixture.go` derives every negative mechanically from the fixture's
+own target rows (`seedRows()`): row *i* takes a wrap-around word window
+over two targets (primary `i mod 21`, secondary at fixed stride), so
+negatives share the golden queries' vocabulary — which is what makes them
+hard for the lexical step — while their scrambled phrasing stays
+semantically empty. Determinism contract: template constants plus integer
+arithmetic only; no RNG, no clock, no filesystem, no map-iteration order in
+generation. Two screens keep the measurement honest: generated text is
+enforced unique (duplicate text would embed identically and hand exact ties
+to the fusion sort tiebreak), and no negative may satisfy any match-kind
+matcher (checked against `hitMatches`; a matcher-satisfying negative could
+steal a top-3 slot and count as a recall pass with the real target absent).
+Negatives are ordinary `corpusRow` values, so they get the fixture's exact
+persist-side treatment (`embedText`/`rerankText`, §6.1-shaped inserts);
+they spread evenly across fact/decision/task/doc_chunk (250 each), with
+generated facts reusing title as key (the uniqueness screen satisfies
+facts' `UNIQUE(live_key)`), and generated chunks continuing the shared
+document's `ord` sequence past the fixture's 0–2.
+
+### Measured results
+
+Corpus build + embedding of all 1021 rows: ~23 s. Each configuration then
+runs the same 22 queries through the unchanged pipeline
+(`fusedPool`, extracted verbatim from `runQuery` steps 1–6 so the test can
+read the pre-truncation ordering without reimplementing fusion):
+
+| Gatherer (step 1) | Recall@3 | Match passes | Wanted targets outside top-20 pool | Safety failures | Query-loop wall time |
+|---|---|---|---|---|---|
+| Dolt FULLTEXT | **0.8571** | 18/21 | **3/21** | 0 | ~10.2 s |
+| BM25 contingency | **0.8571** | 18/21 | **3/21** | 0 | ~5.6 s |
+| Vector-only control | **1.0000** | 21/21 | **0/21** | 0 | ~5.3 s |
+
+Evicted queries, per gatherer (a miss and an eviction coincide 1:1 in every
+configuration — see finding 2):
+
+- FULLTEXT: `fact-build-command`, `fact-test-command`,
+  `semantic-doc-code-style-error-handling`
+- BM25: `semantic-decision-read-only-audit`,
+  `semantic-decision-machine-local`,
+  `semantic-doc-code-style-error-handling`
+- vector-only: none
+
+### Findings
+
+1. **Yes — gatherer choice now changes top-3 outcomes, and the small
+   fixture's ranking inverted.** At 21 rows (§1) the vector-only control
+   tied both lexical configurations at 100%; at 1021 rows the control is
+   the *only* configuration that keeps all 21 targets in its top-3, while
+   both lexical paths lose 3 targets apiece off the end of their pools.
+   The mechanism is the one this corpus is built to exercise: negatives
+   repeat a query's tokens more densely than the coherent target does (a
+   window like `build command cargo build fts5` sits nearly verbatim in a
+   negative's title), so the lexical half of the fused score lifts crowds
+   of negatives past the target before truncation; pure cosine keeps the
+   coherent original above its scrambled relatives. This is measured
+   outcome, not a quality judgment of shipped defaults — see the caveats
+   below.
+2. **Pool eviction fully accounts for every loss.** In all three
+   configurations the set of failing queries equals the set of evicted
+   queries: once a target survives into the top-20 pool, the cross-encoder
+   and floors never drop it out of the top 3 — even with 250 same-document
+   chunk competitors and 750 other distractors. At this scale, Recall@3 is
+   decided entirely at the `rerankPoolSize` cut.
+3. **FULLTEXT and BM25 are now measurably different gatherers.** They evict
+   disjoint pairs of decision/fact queries (overlapping only on the
+   `semantic-doc` paraphrase): FULLTEXT loses the short-keyword `fact-*`
+   targets whose vocabulary the negatives copy most literally; BM25 loses
+   two `semantic-decision-*` paraphrase targets instead. Which questions §7
+   said could not be answered at 21 rows; at 1021 rows the two lexical
+   implementations rank differently under real pool pressure, though at
+   this corpus neither clears the gate worse than the other (both 18/21).
+4. **The safety probe held at scale.** `negative-nonsense-tokens` returned
+   an empty bundle in all three configurations, including vector-only,
+   where all 250 floor-0.0 doc_chunk negatives were candidate-eligible.
+   Gibberish still reaches no result past the floors.
+
+### What this does not claim
+
+The corpus is *derived adversarially from the golden targets themselves* —
+that is the point (pool pressure concentrated exactly where the queries
+look), but it also means these numbers are a stress shape, not a natural
+project-memory distribution; they bound behavior, they do not predict a
+real repo's recall. One platform, one machine, single run per configuration
+(§2's caveat stands; query-loop wall times above are indicative). No pass/
+fail threshold was added anywhere — `TestRetrievalGoldenAtScale` logs and
+passes regardless of retrieval values, and no PRD confidence marker moved
+on the strength of this section. One environment note recorded for honesty:
+parity-test wall time drifted 7.6 s → ~17–22 s across today's runs with
+byte-identical inputs and code (confirmed by stashing the diff and re-running),
+so machine state, not any change here, owns that variance.
+
+Reproducing this section:
+
+```sh
+export CGO_ENABLED=1
+export GOFLAGS=-tags=gms_pure_go
+export MEMDOLT_PARITY_MODEL_DIR=<staged model dir>
+export ONNXRUNTIME_SHARED_LIBRARY_PATH=<path to an onnxruntime 1.26.0 shared library>
+
+go test -tags golden,gms_pure_go ./tests/golden/... -v -timeout 30m -run 'TestRetrievalGolden'
+```
