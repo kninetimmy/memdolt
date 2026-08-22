@@ -2,6 +2,7 @@ package localdolt_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -789,6 +790,65 @@ func TestReviewExpireSweepsByAgeAndStaleOnlyReports(t *testing.T) {
 	}
 }
 
+// TestReviewAgingIsStableAcrossReaderTimezones covers the N7 question about
+// expiry's clock: age is measured from latest_commit_date as the driver
+// reports it into branchRecord.stagedAt, so whether a branch can be
+// mis-aged is a question about how that value crosses the driver boundary.
+// A commit's instant does not depend on the zone it was written under —
+// time.Now is the same instant whatever time.Local says — but a zone-naive
+// parse on the way out would not be, so this stages under one forced
+// offset, reads and expires under the opposite one, and requires the
+// reported staging time to stay inside the wall-clock window the staging
+// call took. An hour-scale mis-age cannot fit that window.
+func TestReviewAgingIsStableAcrossReaderTimezones(t *testing.T) {
+	ctx := context.Background()
+	st := migratedStore(t)
+
+	original := time.Local
+	t.Cleanup(func() { time.Local = original })
+
+	// Stage under UTC+13.
+	time.Local = time.FixedZone("probe+13", 13*3600)
+	stageStarted := time.Now()
+	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "aged across a timezone change", Actor: stagingActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "convention.style", Value: "gofmt -l ."})
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	stageEnded := time.Now()
+
+	// Read and expire under UTC-11.
+	time.Local = time.FixedZone("probe-11", -11*3600)
+	pending, err := st.PendingProposals(ctx)
+	if err != nil {
+		t.Fatalf("list pending proposals under the shifted reader clock: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != staged.ID {
+		t.Fatalf("pending proposals are %+v, want the staged one", pending)
+	}
+
+	windowStart := stageStarted.Add(-time.Minute)
+	windowEnd := stageEnded.Add(time.Minute)
+	if reported := pending[0].StagedAt; reported.Before(windowStart) || reported.After(windowEnd) {
+		t.Fatalf("staging time reported as %s under a shifted reader clock, "+
+			"want an instant inside [%s, %s]: latest_commit_date did not survive the driver as the instant it was committed as",
+			reported, windowStart, windowEnd)
+	}
+	if age := pending[0].Age(time.Now()); age < 0 || age > time.Hour {
+		t.Fatalf("proposal age = %s, want a small non-negative duration", age)
+	}
+
+	swept, err := st.ExpireProposals(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("expire under the shifted reader clock: %v", err)
+	}
+	if len(swept) != 1 || swept[0].ID != staged.ID {
+		t.Fatalf("expiry swept %+v under the shifted reader clock, want the staged proposal", swept)
+	}
+	requireProposalBranches(t, st)
+}
+
 // TestReviewRefusalsAreLoud covers the errors the review verbs owe rather
 // than swallow, including the two that are boundaries: an id that is not a
 // ULID never reaches the SQL text of an AS OF clause, and a global-target
@@ -1049,5 +1109,144 @@ func TestReviewAcceptScansTheDenyListAgain(t *testing.T) {
 	}
 	if _, err := st.AcceptProposal(ctx, clean.ID, reviewer); err != nil {
 		t.Fatalf("accept a proposal the deny-list does not match: %v", err)
+	}
+}
+
+// TestReviewSupersedeScanSparesUnchangedDurableProse covers one direction
+// of the accept-time scan's narrowing: it matches what a proposal's commit
+// adds or changes, never prose main already carries. A supersede is the
+// case that forced the distinction — its UPDATE touches superseded_by
+// alone, so the superseded row's key and value ride through the diff
+// unchanged on both sides. Before the narrowing every scanned-column value
+// on a To side went to the deny-list whatever the diff said, so a rule
+// written after an earlier review had made that text durable refused an
+// unrelated supersede of that row.
+func TestReviewSupersedeScanSparesUnchangedDurableProse(t *testing.T) {
+	ctx := context.Background()
+	base := baseDir(t)
+	st := openStore(t, base, discardLogger())
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// The durable fact predates any rule: its value was accepted by an
+	// earlier review of a store with no deny-list configured.
+	const supersededID = "01J0000000000000000000FACT"
+	if _, err := st.Commit(ctx, store.CommitRequest{
+		Statements: []store.Statement{{
+			SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+			Args: []any{supersededID, "aws.access_key", theSecret, "user", "2026-08-02 12:00:00"},
+		}},
+		Text:    []string{"aws.access_key", theSecret},
+		Message: "record the durable access key",
+		Author:  reviewer,
+	}); err != nil {
+		t.Fatalf("seed the durable fact: %v", err)
+	}
+
+	// The rule names exactly what main already carries, and nothing in the
+	// replacement row or the proposal metadata.
+	writeDenyList(t, base, `AKIA[0-9A-Z]{16}`)
+
+	staged, err := st.ProposeSupersede(ctx, localdolt.Proposal{
+		Rationale: "rotate the key into the secret manager",
+		Actor:     stagingActor,
+		Target:    localdolt.TargetRepo,
+	}, supersededID, localdolt.Fact{Key: "aws.access_key", Value: "read from AWS Secrets Manager"})
+	if err != nil {
+		t.Fatalf("propose supersede: %v", err)
+	}
+
+	// Show renders whole rows either way — including the unchanged value
+	// the promotion no longer re-matches — because its job is to show the
+	// operator everything the branch holds.
+	diff, err := st.ProposalDiff(ctx, staged.ID)
+	if err != nil {
+		t.Fatalf("show a supersede under a rule matching its unchanged durable prose: %v", err)
+	}
+	renderedUnchanged := false
+	for _, change := range diff.Changes {
+		if change.Table == "facts" && change.Type == "modified" && change.To["value"] == theSecret {
+			renderedUnchanged = true
+		}
+	}
+	if !renderedUnchanged {
+		t.Fatalf("show did not render the superseded row's unchanged value: %+v", diff.Changes)
+	}
+
+	// And the accept promotes: the rule binds staged prose, not history.
+	if _, err := st.AcceptProposal(ctx, staged.ID, reviewer); err != nil {
+		t.Fatalf("accept a supersese whose diff leaves denied durable prose unchanged: %v", err)
+	}
+	old := readStagedFact(t, st, localdolt.MainBranch, supersededID)
+	if old.supersededBy.String != staged.RowID || old.liveKey.Valid || old.value != theSecret {
+		t.Fatalf("the superseded row on main is %+v, want it linked, live-keyed off and otherwise untouched", old)
+	}
+	replacement := readStagedFact(t, st, localdolt.MainBranch, staged.RowID)
+	if replacement.value != "read from AWS Secrets Manager" || replacement.liveKey.String != "aws.access_key" {
+		t.Fatalf("the replacement row on main is %+v, want it live under the transferred key", replacement)
+	}
+	requireProposalBranches(t, st)
+	requireOnMain(t, st)
+}
+
+// TestReviewAcceptStillRefusesDeniedStagedProse covers the other direction
+// of that narrowing: a rule matching prose the proposal actually stages
+// still stops the promotion, even though the same rule leaves the rows
+// around it alone. It also pins that show never scans — rendering a refused
+// proposal is how the operator sees what matched.
+func TestReviewAcceptStillRefusesDeniedStagedProse(t *testing.T) {
+	ctx := context.Background()
+	base := baseDir(t)
+	st := openStore(t, base, discardLogger())
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	const supersededID = "01J0000000000000000000FACT"
+	if _, err := st.Commit(ctx, store.CommitRequest{
+		Statements: []store.Statement{{
+			SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+			Args: []any{supersededID, "build.command", "go test ./...", "user", "2026-08-02 12:00:00"},
+		}},
+		Text:    []string{"build.command", "go test ./..."},
+		Message: "record the durable build command",
+		Author:  reviewer,
+	}); err != nil {
+		t.Fatalf("seed the durable fact: %v", err)
+	}
+
+	// Staged before any rule exists, so staging could not have caught this.
+	staged, err := st.ProposeSupersede(ctx, localdolt.Proposal{
+		Rationale: "the race lane replaced the plain one",
+		Actor:     stagingActor,
+		Target:    localdolt.TargetRepo,
+	}, supersededID, localdolt.Fact{Key: "build.command", Value: "go test -race against " + theSecret})
+	if err != nil {
+		t.Fatalf("propose supersede: %v", err)
+	}
+
+	writeDenyList(t, base, `AKIA[0-9A-Z]{16}`)
+	mainCommits := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log")
+
+	_, err = st.AcceptProposal(ctx, staged.ID, reviewer)
+	if !errors.Is(err, store.ErrDenied) {
+		t.Fatalf("accept error = %v, want one matching store.ErrDenied", err)
+	}
+	if !strings.Contains(err.Error(), "refusing to promote") || strings.Contains(err.Error(), theSecret) {
+		t.Fatalf("refusal %q neither names the promotion nor keeps the matched text out", err)
+	}
+
+	// Show still renders the refused proposal, and nothing landed or left:
+	// the operator can look at what matched before fixing the rule.
+	if _, err := st.ProposalDiff(ctx, staged.ID); err != nil {
+		t.Fatalf("show the refused proposal: %v", err)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log"); got != mainCommits {
+		t.Fatalf("main history has %d commits after a refused promotion, want %d", got, mainCommits)
+	}
+	requireProposalBranches(t, st, staged.Branch)
+	if _, err := st.RejectProposal(ctx, staged.ID); err != nil {
+		t.Fatalf("reject the refused proposal: %v", err)
 	}
 }

@@ -156,6 +156,21 @@ nothing checks it. That diff is the head commit's, so the scan covers the
 whole of what merges only because `requireOneCommit` refuses to promote a
 branch carrying anything else.
 
+**That scan used to read whole row images off the diff.** Before,
+`proposalText` appended every scanned-column value present on a diff row's
+To side, whatever the diff said had happened to it; after, an added row is
+still scanned whole (it has no From side to compare against), a modified row
+contributes only the columns whose value moved, and a removed row has no To
+side and never contributed. What stopped being scanned is unchanged durable
+text: a supersede's UPDATE touches `superseded_by` alone, so its diff
+presented the superseded row's key and value — prose an earlier review had
+already made durable — and a rule written after that refused an unrelated
+supersede of the very row it matched. Every durable string reached main
+through one of these scans when it was first written; what the narrowing
+gives up is re-matching history, not scanning new prose. That diff is still
+the head commit's, so the narrowed scan still covers everything that merges,
+because `requireOneCommit` refuses to promote a branch carrying anything else.
+
 **That sentence used to name only `Fact.text`/`Decision.text`.** Before,
 actor values were the exception it failed to name: the note and narrative
 lanes persisted `Actor.Raw` in `actor_raw` without adding it to their

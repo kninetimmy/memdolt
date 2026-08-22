@@ -56,6 +56,14 @@ var reviewedLaneTables = map[string]string{
 // proposal is staged and not when it is made durable. The actor is also
 // stored as the proposed fact or decision's source; proposals.actor is the
 // one scan source for that duplicated value.
+//
+// The two scans over these columns differ in scope. Staging matches every
+// declared value whole, because at that moment none of it exists anywhere
+// else. The accept-time promotion matches only what the staging commit adds
+// or changes: a supersede rewrites superseded_by on a row whose key, value,
+// kind and evidence are already durable under earlier reviews, and those
+// cells stopped being scanned at accept when the narrowing landed — see
+// proposalText for the before-and-after.
 var scannedColumns = map[string][]string{
 	"facts":     {"key", "value", "kind", "evidence"},
 	"decisions": {"title", "rationale", "summary", "alternatives_rejected", "evidence"},
@@ -407,6 +415,11 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 	// that an edited rule binds the next one. A rule added after an agent
 	// staged something would otherwise be silently skipped by exactly the
 	// lane the review gate exists to police.
+	//
+	// What binds here is what that commit writes: proposalText reads the
+	// commit's diff and takes only added or changed values from the scanned
+	// columns, so an edited rule does not reach back past text main has
+	// carried since an earlier review accepted it.
 	text, err := s.proposalText(ctx, conn, record)
 	if err != nil {
 		return AcceptResult{}, err
@@ -435,6 +448,17 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 // read out of the branch's own diff rather than out of the merged working
 // set, so that it is the proposal's rows that are scanned and not whatever
 // else happens to be on main.
+//
+// It scans exactly what the commit adds or changes, and nothing it leaves
+// alone. Before the supersede lane made this distinction matter, every To
+// value of a scanned column went to the deny-list whatever the diff said;
+// that scanned unchanged durable text too, so a rule written after a fact
+// became durable refused an unrelated supersede of that fact. Now an added
+// row is scanned whole (it has no From side to compare against), and a
+// modified row contributes only columns whose value moved — a supersede's
+// UPDATE touches superseded_by alone, so the row's key, value, kind and
+// evidence are already-durable prose no rule re-matches here. A removed row
+// has no To side and never contributed.
 func (s *Store) proposalText(ctx context.Context, q branchQuerier, record branchRecord) ([]string, error) {
 	parent, err := commitParent(ctx, q, record)
 	if err != nil {
@@ -448,9 +472,14 @@ func (s *Store) proposalText(ctx context.Context, q branchQuerier, record branch
 		}
 		for _, change := range changes {
 			for _, column := range scannedColumns[table] {
-				if value, ok := change.To[column]; ok {
-					text = append(text, value)
+				value, ok := change.To[column]
+				if !ok {
+					continue
 				}
+				if before, hadBefore := change.From[column]; hadBefore && before == value {
+					continue
+				}
+				text = append(text, value)
 			}
 		}
 	}
