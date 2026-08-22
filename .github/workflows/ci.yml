@@ -65,9 +65,11 @@ jobs:
       - name: go test
         run: go test ./...
 
-  # A separate lane rather than a fourth entry in the matrix above: the race
-  # detector needs cgo (set workflow-wide) and an x86-64 host, so it runs on
-  # ubuntu-latest only.
+  # A separate lane rather than a fourth entry in the matrix above: a new
+  # matrix dimension would re-render the protected status-check names the test
+  # job produces (`Test (ubuntu-latest)` etc.) and silently break branch
+  # protection. The race detector needs only cgo, which is set workflow-wide;
+  # it supports every OS in the matrix.
   race:
     name: Test (race)
     runs-on: ubuntu-latest
