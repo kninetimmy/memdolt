@@ -32,10 +32,12 @@ func TestMain(m *testing.M) {
 // setupPipelineHarness stages the ONNX models (reusing tests/parity's
 // SHA-256-pinned model files — model_pins.json is not duplicated, see
 // pipeline.go's doc comment), seeds a disposable embedded Dolt store with
-// the hermetic fixture corpus, and builds an embedding for every seeded row
-// through the rig-2 inference path. Returns a harness whose lexical field
-// is left unset; callers plug in fulltextGatherer or bm25Gatherer.
-func setupPipelineHarness(t *testing.T) *pipelineHarness {
+// the hermetic fixture corpus plus any extraRows appended after it (the
+// scale rig passes its synthetic hard negatives — see scale_test.go), and
+// builds an embedding for every seeded row through the rig-2 inference
+// path. Returns a harness whose lexical field is left unset; callers plug
+// in fulltextGatherer or bm25Gatherer.
+func setupPipelineHarness(t *testing.T, extraRows ...corpusRow) *pipelineHarness {
 	t.Helper()
 	ctx := context.Background()
 
@@ -88,7 +90,7 @@ func setupPipelineHarness(t *testing.T) *pipelineHarness {
 		t.Fatalf("creating schema: %v", err)
 	}
 
-	seeded := seedRows()
+	seeded := append(seedRows(), extraRows...)
 	if err := insertRows(ctx, db, seeded); err != nil {
 		t.Fatalf("seeding rows: %v", err)
 	}

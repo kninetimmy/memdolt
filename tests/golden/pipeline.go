@@ -190,9 +190,14 @@ type resultHit struct {
 	score      float64
 }
 
-// runQuery executes PRD §8.1's pipeline for one query against h's corpus
-// and returns the truncated, ranked result set.
-func runQuery(ctx context.Context, h *pipelineHarness, query string) ([]resultHit, error) {
+// fusedPool assembles PRD §8.1's steps 1–6 for one query against h's
+// corpus — per-source-type lexical gather, brute-force cosine vector
+// gather, candidate union, fusion, and the blended-score sort — and
+// returns every candidate in that order, untruncated. runQuery applies the
+// rerankPoolSize cut itself; TestRetrievalGoldenAtScale reads this ordering
+// directly to count wanted targets evicted by the cut (docs/spikes/
+// m0-rig3.md §11).
+func fusedPool(ctx context.Context, h *pipelineHarness, query string) ([]scoredHit, error) {
 	// Step 1: lexical gather, per source type, limited to
 	// perSourceFTSLimit each.
 	fts := make(map[rowKey]float64)
@@ -273,6 +278,16 @@ func runQuery(ctx context.Context, h *pipelineHarness, query string) ([]resultHi
 		}
 		return scored[i].row.id < scored[j].row.id
 	})
+	return scored, nil
+}
+
+// runQuery executes PRD §8.1's pipeline for one query against h's corpus
+// and returns the truncated, ranked result set.
+func runQuery(ctx context.Context, h *pipelineHarness, query string) ([]resultHit, error) {
+	scored, err := fusedPool(ctx, h, query)
+	if err != nil {
+		return nil, err
+	}
 
 	// Step 7: rerank over the top-20 pool, with floors, then truncate.
 	reranked := len(scored) > 1
