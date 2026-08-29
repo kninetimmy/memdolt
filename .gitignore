@@ -20,3 +20,4 @@ agent_docs/PROJECT_LEDGER.md
 /tests/parity/fixturegen/target/
 .codex/agents/
 .claude/agents/
+.opencode/agents/
