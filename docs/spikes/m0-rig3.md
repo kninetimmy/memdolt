@@ -562,3 +562,80 @@ export ONNXRUNTIME_SHARED_LIBRARY_PATH=<path to an onnxruntime 1.26.0 shared lib
 
 go test -tags golden,gms_pure_go ./tests/golden/... -v -timeout 30m -run 'TestRetrievalGolden'
 ```
+
+## 12. M2 candidate strategy sweep (2026-08-29)
+
+This section is additive (issue #87). It does not rewrite §7's M0
+FULLTEXT-first decision or any result in §§1–11. It supplies the real-scale
+follow-up that §7 said would be needed before production retrieval depended
+on that choice.
+
+### Method
+
+`TestRetrievalGoldenAtScale` now checks in the candidate-pool sweep
+`20 / 40 / 80` and reports Recall@3, match passes, safety failures, wanted
+targets outside each pool, and query-loop time for FULLTEXT, BM25, and
+vector-only retrieval. `runQuery` still uses the production-default pool of
+20; the scale rig alone calls `runQueryWithPoolSize` for larger values. The
+original `retrieval_golden.json`, its 22 queries, the 21-row hermetic fixture,
+and the original FULLTEXT assertion in `TestRetrievalGolden` are unchanged.
+The selected strategy gets an additional assertion on both fixtures.
+
+The run used the §2 machine/toolchain and the same pinned models, with Go
+1.26.5 and ONNX Runtime 1.26.0. Building and embedding the deterministic
+1,021-row corpus took 10 s. Query-loop time starts after corpus setup and is
+one wall-clock observation per configuration/pool, so treat it as indicative
+cost rather than a benchmark.
+
+### Results
+
+| Gatherer | Candidate pool | Recall@3 | Match passes | Safety failures | Wanted-target evictions | Query-loop time |
+|---|---:|---:|---:|---:|---:|---:|
+| Dolt FULLTEXT | 20 | 0.8571 | 18/21 | 0 | 3/21 | 4.135 s |
+| Dolt FULLTEXT | 40 | 0.9048 | 19/21 | 0 | 2/21 | 5.229 s |
+| Dolt FULLTEXT | 80 | 0.9524 | 20/21 | 0 | 1/21 | 7.493 s |
+| BM25 contingency | 20 | 0.8571 | 18/21 | 0 | 3/21 | 1.581 s |
+| BM25 contingency | 40 | 0.9048 | 19/21 | 0 | 2/21 | 2.678 s |
+| BM25 contingency | 80 | **1.0000** | **21/21** | **0** | **0/21** | 4.848 s |
+| Vector-only | **20** | **1.0000** | **21/21** | **0** | **0/21** | **1.557 s** |
+| Vector-only | 40 | 1.0000 | 21/21 | 0 | 0/21 | 2.699 s |
+| Vector-only | 80 | 1.0000 | 21/21 | 0 | 0/21 | 4.705 s |
+
+The original hermetic fixture also remains 21/21 with zero safety failures
+under the selected vector-only/pool-20 configuration (as it does under the
+preserved FULLTEXT gate). The 1,021-row result is now asserted rather than
+logged only: a regression in the selected configuration fails the scale test;
+the alternatives remain diagnostic measurements.
+
+### Decision and rejected alternatives
+
+**Select vector-only candidate gather with `rerank_candidate_pool = 20` for
+M2 recall.** It is the smallest candidate pool measured, the only pool-20
+strategy that clears both fixtures, and the fastest scale query loop measured.
+It also requires no second in-process lexical index. This changes recall
+candidate assembly only; it does not remove the Dolt FULLTEXT schema or the
+text-search use it serves.
+
+- **Reject FULLTEXT fusion for M2 recall candidates:** it still misses one
+  target at pool 80, after reranking four times as many candidates and taking
+  4.8× the selected query-loop time.
+- **Reject BM25-at-80:** it clears quality, but needs four times the candidate
+  pool, an additional in-process index, and 3.1× the selected query-loop time.
+- **Reject vector-only pools 40/80:** neither improves quality or safety over
+  pool 20; they only increase rerank work and measured time.
+
+### MD5 before and after
+
+**Before (M0, §7):** choose Dolt FULLTEXT first because it was the PRD default
+and shipped less code than BM25; the 21-row fixture supplied no quality reason
+to prefer any gatherer. **After (M2):** the deterministic 1,021-row fixture
+creates the missing pool pressure and inverts that result: vector-only/pool-20
+stays 21/21 while FULLTEXT/pool-20 falls to 18/21, and even pool 80 reaches only
+20/21. MD5 is therefore superseded for recall candidate assembly by the
+vector-only/pool-20 strategy. The earlier decision and its evidence remain
+above as the explicit before-state rather than being deleted.
+
+The §11 caveat remains load-bearing: these hard negatives are derived
+adversarially from the targets and are not a natural-distribution quality
+claim. The decision is the smallest strategy that clears the two checked-in
+fixtures, not a claim that lexical retrieval is generally harmful.
