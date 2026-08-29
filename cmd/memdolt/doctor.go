@@ -57,7 +57,8 @@ func newDoctorCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Report store ownership, IPC reachability, schema skew, and empty recalls",
-		Long: "Run the M1 health checks of PRD §5.2 and §6.4 against this repository:\n\n" +
+		Long: "Run the store-health checks of PRD §5.2 and §6.4 plus the empty-recall\n" +
+			"observability check of PRD §8.1 against this repository:\n\n" +
 			"  store-lock      who, if anyone, owns the store — held, an orphaned\n" +
 			"                  ownership record, or absent\n" +
 			"  ipc             whether a live owner answers on its loopback endpoint\n" +
