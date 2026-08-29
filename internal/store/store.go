@@ -84,6 +84,15 @@ type Store interface {
 	Close() error
 }
 
+// EmbeddingSource is one committed source-of-truth row rendered exactly as
+// the production embedding model consumes it. Vectors and hashes are derived
+// from Text and live outside this package's versioned store (PRD §8.2).
+type EmbeddingSource struct {
+	SourceType string
+	SourceID   string
+	Text       string
+}
+
 // ErrLocked reports that another live process owns the store. It is the
 // same sentinel the single-owner lock uses, re-exported so that callers
 // programming against Store need not know how ownership is enforced.

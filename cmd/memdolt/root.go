@@ -34,6 +34,7 @@ func newRootCommand() *cobra.Command {
 		"emit machine-readable JSON on stdout instead of human-readable text")
 
 	root.AddCommand(newDoctorCommand())
+	root.AddCommand(newIndexCommand())
 	root.AddCommand(newInitCommand())
 	root.AddCommand(newVersionCommand())
 

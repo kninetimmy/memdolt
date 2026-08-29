@@ -320,6 +320,56 @@ Port memhub's pipeline with the storage swapped underneath. Same models, same fu
 - Cost: a fresh clone needs one index build (batch-16 embedding, seconds-to-minutes at memory scale) — the `stale_embeddings` machinery already handles the interim gracefully. Same lifecycle as the code index.
 - Dolt vector indexes are explicitly not production-ready (alpha; "too slow for us to recommend using it in production" **[V]**, custom Proximity-Map ANN). When they mature, revisit as an optimization for topology B only.
 
+**M2 side-store handoff (2026-08-29).** Before this change, this section
+specified the derived store while production inference stopped at
+`internal/embedding.Engine`; the golden rig held vectors in a Go map and no
+production rebuild or status lifecycle existed. After it,
+`.memdolt/embeddings.sqlite` is the production side-store, backed by
+`modernc.org/sqlite`, and `memdolt index rebuild|status` owns its lifecycle.
+No prior runtime behavior is removed. The structural blast radius is explicit:
+
+- `internal/layout.Paths.EmbeddingsFile` is the shared path for every
+  repository embedding-side-store caller; the existing base, Dolt, lock,
+  pidfile, and config paths behave as before. This rule binds that embedding
+  path, not every derived store: the code index retains its distinct §5.3 path.
+- `store.EmbeddingSource` carries rendered source text, and the concrete
+  `localdolt.Store.EmbeddingSources` reads committed `main` `HEAD` only. It
+  returns every row in `facts`, `decisions`, `tasks`, and `doc_chunks`, including
+  superseded facts/decisions and done/blocked tasks; proposal-branch and
+  uncommitted rows remain ineligible. That four-table eligibility belongs to
+  this named reader alone, not to every durable table or every future
+  `Store` implementation. The `Store` interface, its one-SELECT-or-SHOW
+  `Query` boundary, the Dolt schema/migrations, source rows, working set, and
+  commit graph all retain their prior behavior.
+- `internal/embedding.EmbeddingModelName` exports the same BGE model identity
+  `Open` already used; checksum provisioning, tokenizer normalization,
+  `Engine.Embed`, reranking, and client-only ONNX placement behave as before.
+  `Rebuild` alone writes the SQLite side-store: it inserts missing vectors,
+  refreshes only hash/dimension/byte-length-stale rows, skips current rows
+  without inference or SQL updates, and removes rows whose source disappeared.
+  `Status` never writes or creates the file; it classifies current, missing,
+  content-hash-mismatched, wrong-byte-length, and orphaned rows and points to
+  `memdolt index rebuild`. The write restriction belongs to `Rebuild`, not to
+  every symbol in `internal/embedding`.
+- The `embeddings` SQLite table has primary key
+  `(source_type, source_id, model_name)` and stores `vector`, `content_hash`,
+  and `dimension`; fp32 bytes are little-endian and remain outside Dolt. The
+  CLI root help now lists the new `index` command; existing subcommands'
+  execution, flags, and JSON payloads behave as before. Lifecycle tests use
+  disposable repositories
+  and assert exact Dolt source rows, working-set status, and commit hashes
+  before and after every rebuild/status call. `modernc.org/sqlite` is the sole
+  new direct dependency. Selecting v1.57.0 also raises the existing
+  `golang.org/x/text`, `x/crypto`, `x/mod`, `x/net`, `x/sync`, `x/sys`,
+  `x/telemetry`, `x/term`, and `x/tools` selections plus
+  `github.com/mattn/go-isatty`, and adds modernc's indirect libc/memory/math
+  runtime graph and checksums; the tokenizer normalization, networking,
+  terminal, and tooling behavior those existing modules supplied still holds,
+  as exercised by the unchanged full test, vet, and lint surfaces. Those
+  transitive pure-Go dependencies do not introduce a second storage
+  implementation. Dolt vector indexes and hub-side inference remain out of
+  scope exactly as before.
+
 ### 8.3 Models & inference
 
 - BGE-small-en-v1.5 fp32 ONNX (384-dim, CLS pooling, ~127MB) + ms-marco-MiniLM-L-6-v2 int8 (~22MB) — memhub's exact pair, same pinned upstream revisions.
