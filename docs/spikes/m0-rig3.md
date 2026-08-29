@@ -73,6 +73,11 @@ query kind the golden set exercises passed: keyword-style queries,
 (seeded as scope-tagged rows in the same store per this issue's license —
 see §3), and the one `kind: empty` safety probe.
 
+That path name records the M0 structure. Before M2, `tests/inference` was the
+shared build-tagged implementation. After M2, it was removed and both rigs use
+production `internal/embedding`; the tokenizer, pooling, normalization, logits,
+fixtures, and tolerances described here did not change.
+
 It does **not** say Dolt FULLTEXT's lexical quality was validated against
 BM25's, or against no lexical gather at all — the vector-only control above
 means this golden set cannot support that claim at its current size. It

@@ -15,7 +15,8 @@
 //!     ms-marco-MiniLM-L-6-v2/ subdirs, memhub's build.rs OUT_DIR layout>
 //!   cargo run --manifest-path tests/parity/fixturegen/Cargo.toml
 //!
-//! and commit the regenerated tests/parity/testdata/*.json.
+//! The staged bytes are verified against production models/manifest.json;
+//! commit the regenerated tests/parity/testdata/*.json.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -122,14 +123,14 @@ fn main() -> Result<()> {
          tokenizer_config.json (memhub build.rs's OUT_DIR staging layout, \
          e.g. memhub's target/debug/build/memhub-*/out/). If those files are \
          not staged locally, fetch them from the pinned Hugging Face URLs in \
-         tests/parity/testdata/model_pins.json and verify each SHA-256 \
+         models/manifest.json and verify each SHA-256 \
          before use.",
     )?;
     let model_dir = PathBuf::from(model_dir);
 
     let pins: ModelPins = serde_json::from_str(
-        &fs::read_to_string(testdata_dir.join("model_pins.json"))
-            .context("reading tests/parity/testdata/model_pins.json")?,
+        &fs::read_to_string(worktree_root.join("models").join("manifest.json"))
+            .context("reading models/manifest.json")?,
     )?;
 
     let corpus: Corpus = serde_json::from_str(
@@ -293,7 +294,7 @@ fn main() -> Result<()> {
         generated_at_unix_seconds: generated_at,
         fastembed_version: FASTEMBED_VERSION,
         generator_source: "tests/parity/fixturegen/src/main.rs",
-        model_pins_source: "tests/parity/testdata/model_pins.json (copied from memhub's build.rs)",
+        model_pins_source: "models/manifest.json (production pins; model hashes copied from memhub's build.rs)",
         model_dir: model_dir.display().to_string(),
         bundles: provenance_bundles,
         note: "Re-run with `MEMDOLT_PARITY_MODEL_DIR=<dir> cargo run --manifest-path tests/parity/fixturegen/Cargo.toml` from the memdolt worktree root to regenerate every fixture in this directory.",
