@@ -142,13 +142,10 @@ type lexicalGatherer interface {
 	Name() string
 }
 
-// noLexicalGatherer is a control, not a §8.1 lexical gather implementation:
-// it returns zero hits for every query, so runQuery's candidate pool is
-// vector-gather-only. It exists to answer one question the FULLTEXT-vs-BM25
-// comparison alone cannot: does the lexical step matter at all on this
-// golden set, or does the rerank pool end up holding the whole corpus
-// regardless of what step 1 does? See docs/spikes/m0-rig3.md §4/§7 for what
-// this measured.
+// noLexicalGatherer returns zero hits for every query, so runQuery's
+// candidate pool is vector-gather-only. It began as the M0 control that
+// isolated the lexical step; the M2 scale sweep selected that configuration
+// for recall candidate assembly (docs/spikes/m0-rig3.md §12).
 type noLexicalGatherer struct{}
 
 func (noLexicalGatherer) Name() string { return "VECTOR-ONLY (control, no lexical gather)" }
@@ -281,19 +278,25 @@ func fusedPool(ctx context.Context, h *pipelineHarness, query string) ([]scoredH
 	return scored, nil
 }
 
-// runQuery executes PRD §8.1's pipeline for one query against h's corpus
-// and returns the truncated, ranked result set.
+// runQuery executes PRD §8.1's pipeline with the production-default rerank
+// pool and returns the truncated, ranked result set.
 func runQuery(ctx context.Context, h *pipelineHarness, query string) ([]resultHit, error) {
+	return runQueryWithPoolSize(ctx, h, query, rerankPoolSize)
+}
+
+// runQueryWithPoolSize lets the scale rig measure larger candidate pools
+// without changing the production-default path exercised by runQuery.
+func runQueryWithPoolSize(ctx context.Context, h *pipelineHarness, query string, poolSize int) ([]resultHit, error) {
 	scored, err := fusedPool(ctx, h, query)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 7: rerank over the top-20 pool, with floors, then truncate.
+	// Step 7: rerank over the candidate pool, with floors, then truncate.
 	reranked := len(scored) > 1
 	if reranked {
-		if len(scored) > rerankPoolSize {
-			scored = scored[:rerankPoolSize]
+		if len(scored) > poolSize {
+			scored = scored[:poolSize]
 		}
 		type rerankedPair struct {
 			idx   int

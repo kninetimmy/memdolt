@@ -153,11 +153,11 @@ func logSummary(t *testing.T, s evalSummary) {
 // TestRetrievalGolden is PRD §16's rig-3 gate: memdolt's retrieval pipeline
 // must reproduce memhub's recorded baseline (Recall@3 = 100%, 21/21, 0
 // safety failures) on the same 22-query golden set and hermetic fixture
-// shape. MD5 (§19) decided Dolt FULLTEXT as the shipped lexical gather, so
-// this test's pass/fail gate binds to the FULLTEXT configuration only — a
-// run where FULLTEXT stops carrying the gate must fail loudly, not pass
-// silently on the BM25 contingency. BM25 and the vector-only control (no
-// lexical gather at all) are still measured and logged on every run, both
+// shape. MD5's M0 before-state (§19) chose Dolt FULLTEXT, so this test keeps
+// that original pass/fail assertion: a run where FULLTEXT stops carrying the
+// gate must fail loudly, not pass silently on the BM25 contingency. BM25 and
+// the vector-only configuration (no lexical gather at all) are still measured
+// and logged on every run, both
 // because §8.1 R2's contingency needs to stay proven working and because
 // the FULLTEXT-vs-BM25-vs-vector-only comparison is itself a recorded
 // finding — see docs/spikes/m0-rig3.md §1/§4/§7 for what it showed.
@@ -194,8 +194,14 @@ func TestRetrievalGolden(t *testing.T) {
 			"evicts one of %d seeded rows on every query regardless of the lexical step, but never a top-3 "+
 			"target on this golden set (recall@3=%.4f); see docs/spikes/m0-rig3.md §1/§8", rerankPoolSize, len(h.rows), vecSummary.recallAtK)
 	}
+	if vecSummary.matchPasses != 21 || vecSummary.safetyFailures != 0 {
+		t.Errorf("selected M2 vector-only pool=%d strategy: recall@3=%.4f (%d/%d), safety_failures=%d",
+			rerankPoolSize, vecSummary.recallAtK, vecSummary.matchPasses, vecSummary.matchQueries, vecSummary.safetyFailures)
+	}
 
-	// The actual gate: FULLTEXT only (MD5's shipped choice).
+	// Preserve the original FULLTEXT gate as well as the selected M2 check
+	// above: the scale decision is additive to the M0 evidence, not a reason
+	// to weaken its regression coverage.
 	if ftSummary.matchQueries != 21 || ftSummary.emptyQueries != 1 {
 		t.Fatalf("golden query mix drifted: match=%d empty=%d, want 21/1",
 			ftSummary.matchQueries, ftSummary.emptyQueries)
