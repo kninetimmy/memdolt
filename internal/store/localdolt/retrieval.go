@@ -130,9 +130,14 @@ LIMIT ?`, query, query, limit)
 	hits := []store.DecisionSearchHit{}
 	for rows.Next() {
 		var hit store.DecisionSearchHit
-		if err := rows.Scan(&hit.DecisionID, &hit.Title, &hit.Rationale, &hit.DecidedAt, &hit.Score); err != nil {
+		var title, rationale sql.NullString
+		var decidedAt sql.NullTime
+		if err := rows.Scan(&hit.DecisionID, &title, &rationale, &decidedAt, &hit.Score); err != nil {
 			return nil, fmt.Errorf("localdolt: scan decision search hit: %w", err)
 		}
+		hit.Title = title.String
+		hit.Rationale = rationale.String
+		hit.DecidedAt = timeValue(decidedAt)
 		hits = append(hits, hit)
 	}
 	if err := rows.Err(); err != nil {
