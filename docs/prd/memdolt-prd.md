@@ -3,7 +3,7 @@
 **Document type:** PRD, written to be handed to a fresh agent as the starting authority for a new repository.
 **Status:** design. Side project. memhub remains the operator's daily driver; nothing here changes memhub.
 **Date:** 2026-07-29.
-**Provenance:** synthesized from (a) the memhub repository at v0.2.0 (full feature inventory, the parity baseline), (b) live research against github.com/dolthub/dolt, docs.dolthub.com, and the DoltHub blog, and (c) the memhub r2 MCP spec (`memhub-mcp-implementation-spec-r2.md`, 2026-07-29) whose upgrades this PRD absorbs natively. Source URLs in §18.
+**Provenance:** synthesized from (a) the memhub repository at v0.2.0 (full feature inventory, the broad parity baseline), (b) the narrowly audited memhub v0.2.2 OpenCode 2 compatibility behavior (§11.4, §12; a supplement, not a full v0.2.1/v0.2.2 baseline), (c) live research against github.com/dolthub/dolt, docs.dolthub.com, and the DoltHub blog, and (d) the memhub r2 MCP spec (`memhub-mcp-implementation-spec-r2.md`, 2026-07-29) whose upgrades this PRD absorbs natively. Source URLs in §18.
 
 ---
 
@@ -25,6 +25,7 @@ memdolt is a local-first CLI + MCP server, written in Go, that gives coding agen
 ### 0.3 Relationship to memhub
 
 - memhub (Rust + SQLite) is the **parity baseline and reference implementation**. Where this PRD says "as memhub does," the memhub source is the spec of record.
+- v0.2.0 remains the broad parity baseline. The v0.2.2 material is only the named OpenCode 2 supplement in §11.4 and §12; it does not assert that all v0.2.1 or v0.2.2 behavior was audited.
 - memdolt is a **separate product in a separate repo**. No shared code, no shared on-disk state, no requirement that the two interoperate live.
 - One-way migration IS in scope: memdolt must import a `memhub export` JSON bundle (§15).
 - The memhub r2 spec's upgrades (MCP `2026-07-28`, elicitation confirmations, hub topology, backup discipline, migration runbooks) are absorbed here as native requirements, not future work — with the parts Dolt makes obsolete explicitly retired (§13).
@@ -212,7 +213,9 @@ tasks(id CHAR(26) PK, title VARCHAR(512), status ENUM('open','done','blocked'),
       notes TEXT NULL, created_at DATETIME, updated_at DATETIME,
       FULLTEXT KEY ft_tasks (title, notes))
 session_notes(id CHAR(26) PK, actor VARCHAR(64), actor_raw VARCHAR(255),
-      text TEXT, created_at DATETIME, FULLTEXT KEY ft_notes (text))
+       text TEXT, session_id VARCHAR(255) NULL, agent_id VARCHAR(255) NULL,
+       provider_id VARCHAR(255) NULL, model_id VARCHAR(255) NULL, variant VARCHAR(255) NULL,
+       created_at DATETIME, FULLTEXT KEY ft_notes (text))
 commands(kind ENUM('build','test','run','lint','other') PK, cmdline TEXT,
       last_exit_code INT, last_run_at DATETIME, success_count INT, fail_count INT)
 project_state(id CHAR(26) PK, body TEXT, actor VARCHAR(64), actor_raw VARCHAR(255), created_at DATETIME)
@@ -231,6 +234,7 @@ Notes:
 - `decisions.summary` deliberately not in the FULLTEXT key (memhub parity — summaries are rerank food, not match targets).
 - Git-ingest tables (`commits`/`files`/`commit_files`) are **derived local data** and live in the code-index SQLite, not the versioned repo (each machine's git clone can differ; same §4 principle). This is a placement change from memhub. **[design]**
 - Metrics and transcript-pointer tables also stay out of the versioned repo (machine-local; §12 matrix).
+- `session_notes` carries nullable session, agent, provider, model, and variant provenance. These are opaque metadata attached to the note, not free-form note text or inputs to actor/source derivation; ordinary notes may omit them, while verified OpenCode wrap-up notes use them (§11.4).
 - `facts.evidence` / `decisions.evidence`: a nullable free-form pointer (file path, `file:line`, commit hash, PR number, or URL) an agent or reviewer can attach when proposing or promoting a row. Its purpose is content-based re-verification — checking whether the pointed-at file/commit/PR still says what the fact or decision claims — extending the same `path`+`content_hash` pattern `documents` already uses for ingested reference docs down to individual facts/decisions. **[design]**
 - `decisions.alternatives_rejected`: nullable TEXT recording what was considered and passed over. `propose_decision` (§11.1) names it directly so the tool schema prompts agents to fill it in, not just the choice made. **[design]**
 - `facts.confidence` is **removed** (memhub carries it). It is asserted once at write time and read by nothing downstream — no query, ranking, or filter consults it. `commands.success_count`/`fail_count` remain the system's only *observed* confidence mechanism (§6.1 `commands` table); an unread, asserted number is vestigial and the review gate (§7) is the trust mechanism this schema actually relies on. **[design]**
@@ -357,9 +361,9 @@ A `global` Dolt database on the hub, cloned to `~/.memdolt/global/` on each mach
 
 ### 11.1 MCP server
 
-`modelcontextprotocol/go-sdk` ≥ v1.7.0 **[V]** (2026-07-28 support; MRTR↔legacy elicitation shims both directions). stdio transport, spawned per session, registered via committed `.mcp.json` at repo root (zero-setup registration — memhub parity).
+`modelcontextprotocol/go-sdk` ≥ v1.7.0 **[V]** (2026-07-28 support; MRTR↔legacy elicitation shims both directions). stdio transport, spawned per session, registered through host-specific committed files: Claude's `.mcp.json` and OpenCode V2's `opencode.json`; neither replaces the other.
 
-**Native `2026-07-28` behaviors (r2 §3 absorbed):** per-request `_meta` clientInfo attribution with legacy-`initialize` fallback, fail-closed to `agent:unknown`; `server/discover`; `ttlMs` on `tools/list` (static tool set, long TTL).
+**Native `2026-07-28` behaviors (r2 §3 absorbed):** per-request `_meta` clientInfo attribution with legacy-`initialize` fallback, fail-closed to `agent:unknown`; `server/discover`; `ttlMs` on `tools/list` (static tool set, long TTL). OpenCode V2's raw MCP client identity `cli` normalizes to canonical `opencode` for actors and rollups, while provenance retains the raw `cli` value.
 
 **Tool surface (parity + replacements):**
 
@@ -385,9 +389,46 @@ Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `me
 
 `.memdolt/config.toml` mirrors memhub's structure where semantics survive: `[deny_list]`, `[render]`, `[retrieval]` + `[retrieval.scoring]` (identical knobs/defaults), `[code_index]`, `[doc] allowed_dirs`, `[global]`, `[audit]`, `[wrap_up]`. Replaced: `[sync]` → `[repo] remote_url, topology = "clone" | "live" | "local", auto_pull_on_session_start (bool)`. Machine config `~/.memdolt/config.toml` holds hub defaults + known-projects registry (upgrade enumeration — never a filesystem scan; memhub parity).
 
+### 11.4 OpenCode 2 compatibility supplement (memhub v0.2.2)
+
+This is the narrow v0.2.2 supplement to the v0.2.0 parity baseline, not a claim of general v0.2.1/v0.2.2 parity.
+
+**Registration, doctor, and attribution.** OpenCode uses its native V2 configuration shape in the tracked repo `opencode.json` and, where an operator chooses user registration, in user `opencode.json` or `opencode.jsonc`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "memdolt": {
+        "type": "local",
+        "command": ["memdolt", "serve"],
+        "disabled": false
+      }
+    }
+  },
+  "commands": {
+    "wrap-up": {
+      "description": "Wrap up this memdolt session",
+      "template": "Use the memdolt wrap-up skill. Arguments: $ARGUMENTS"
+    }
+  },
+  "skills": ["templates/skills/opencode"]
+}
+```
+
+`commands` is the plural command-object map and `skills` is a path array. Doctor recognizes a registration only after parsing a repo or user `opencode.json`/`opencode.jsonc`: native `mcp.servers.memdolt` and officially supported V1 `mcp.memdolt` count; JSONC comments and trailing commas are accepted before a real JSON parse; malformed files and similarly named unsupported paths do not count.
+
+**Wrap-up provenance.** An OpenCode wrap-up takes its current session id only from host context — never a session list, title, active-session heuristic, or filesystem — then independently verifies it with `opencode2 api get "/api/session/<id>"`. It parses `data` as `Session.Info` and requires the returned `data.id` to exactly equal the host-supplied id. An unavailable id, failed API call, malformed response, missing returned id, or mismatch stops before every durable memory write, render, or sync. On success the session note stores `session_id` plus nullable `data.agent` (`agent_id`) and, when present, `data.model.providerID` (`provider_id`), `data.model.id` (`model_id`), and `data.model.variant` (`variant`); they never enter free-form text or derive actor/source values.
+
+**Transcript archive.** Transcript mode requires a separate explicit approval that warns the archive is unredacted. It reuses the already verified current id and never discovers or guesses another one. Before any process invocation, validate an OpenCode id as `ses` followed by a nonempty ASCII alphanumeric, underscore, or hyphen suffix. Invoke `opencode2 api v2.session.export --param sessionID=<id> --param sanitize=false` through argument-based process APIs (on Windows, fall back to `opencode2.cmd` only when the bare program is unavailable). Before opening the project or writing, require a JSON object `data`, object `data.info`, exact `data.info.id`, and array `data.messages`. Archive the exact complete, unsanitized response bytes as `.json.zst` and retain one replaceable local pointer per session. Archive and pointer data are excluded from recall, embeddings, and every export; `[wrap_up].transcript_retention_days` governs retention, and expiry removes the local archive and its pointer.
+
+**Skills and upgrade.** Hibernated `metrics` and `viz` may remain in source for feature builds but are absent from normal OpenCode `skills` and command discovery. Additive wrapper sync never creates an absent agent directory, overwrites an unowned file, or automatically deletes stale or hibernated wrappers. It reports stale or unowned wrappers as actionable orphans for manual review/removal and leaves user files unchanged.
+
 ---
 
-## 12. Feature parity matrix (memhub v0.2.0 → memdolt)
+## 12. Feature parity matrix (memhub v0.2.0 baseline + v0.2.2 OpenCode 2 supplement → memdolt)
+
+Every ordinary row uses v0.2.0 as its baseline. Rows explicitly labeled v0.2.2 are the narrow OpenCode 2 supplement only, not a claim that all intervening memhub behavior was audited.
 
 | memhub feature | memdolt disposition |
 |---|---|
@@ -414,6 +455,10 @@ Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `me
 | session transcripts archive (zstd, fail-closed) | port (klauspost/compress zstd), M6 |
 | wrapup-policy text renderer | port (one source of truth for 3 skill flavors) |
 | skills (14 × 3 CLIs) | port the memhub-analogous set; catch-up skill becomes trivial (`pull`) |
+| OpenCode V2 registration, doctor, and raw `cli` identity (v0.2.2 supplement) | native config, parsed repo/user JSON or JSONC recognition, and canonical `opencode` attribution (§11.4) |
+| OpenCode session-note provenance and memhub export-v1 import (v0.2.2 supplement) | port nullable verified session metadata without changing note text or actor/source semantics (§6.1, §11.4, §15) |
+| OpenCode complete unredacted transcript export (v0.2.2 supplement) | port the separately approved, validated, local-only `.json.zst` archive; never recall, embed, or export it (§11.4) |
+| OpenCode hibernated discovery and wrapper resync (v0.2.2 supplement) | keep hibernated surfaces undiscovered; report-only actionable orphans, never overwrite or delete user files (§11.4) |
 
 ---
 
@@ -446,6 +491,7 @@ Every client clone is a full-history replica — the 3-2-1 baseline exists by co
 
 Dolt storage grows with history (~4KB/update-transaction/indexed-column rule of thumb **[V]**); at memory-scale write volume this is years of headroom, but notes need policy:
 - Retention sweep deletes `session_notes` older than `transcript_retention_days`-style config; deleted rows persist in history until GC.
+- Transcript archives are unredacted, machine-local, and governed by `[wrap_up].transcript_retention_days`: expiry removes the archive and its one-per-session pointer without making either retrievable or exportable (§11.4).
 - `memdolt gc --deep` runs Dolt's full collection (blocks writes; scheduled, never in a request path). Exact `dolt gc --full`/`--shallow` semantics **[L/verify]** — pin during M0.
 - Hard-forget (a secret accidentally committed) = history rewrite, documented as the exceptional, manual, git-filter-branch-class operation it is. PRD stance: keep secrets out via deny-list (port memhub's) rather than promising deletion. **[design]**
 
@@ -501,7 +547,7 @@ memdolt/
 
 ## 15. Migration from memhub (one-way, optional)
 
-`memdolt import --from-memhub <export.json>`: consume memhub's export v1 JSON (facts, decisions, tasks, commands, session_notes, project_state/arch, pending_writes → recreated as proposal branches; writes_log → imported as a single annotated genesis note, not fake history). Docs re-ingested from source files (export excludes them by design). Embeddings and code index rebuild locally. Follow with `eval retrieval` against the ported golden set before trusting recall. The operator's own migration, if ever, follows the r2 §13.1 discipline: converge memhub first, lowest-stakes project first, one week soak, quarantine (`.memhub` renamed, not deleted), old state retained a month.
+`memdolt import --from-memhub <export.json>`: consume memhub's export v1 JSON (facts, decisions, tasks, commands, session_notes while preserving nullable `session_id`, `agent_id`, `provider_id`, `model_id`, and `variant`, project_state/arch, pending_writes → recreated as proposal branches; writes_log → imported as a single annotated genesis note, not fake history). Docs re-ingested from source files (export excludes them by design). Embeddings and code index rebuild locally. Follow with `eval retrieval` against the ported golden set before trusting recall. The operator's own migration, if ever, follows the r2 §13.1 discipline: converge memhub first, lowest-stakes project first, one week soak, quarantine (`.memhub` renamed, not deleted), old state retained a month.
 
 ---
 
@@ -512,10 +558,10 @@ memdolt/
 | **M0 — Spike (go/no-go)** | Embedded-driver soak: MCP-server-owns-store + CLI-routes-through-IPC under concurrent load, incl. unclean-kill/stale-LOCK recovery. ONNX-in-Go: embeddings + rerank scores match memhub within tolerance on a probe corpus (tokenizer ids byte-identical). Retrieval rig: golden set on Dolt FULLTEXT + brute-force cosine. Hub rig: sql-server + remotesapi on the Pi or Linux box, clone/pull/push/merge round trip over Tailscale from two machines. Resolve every **[verify]**: ARM64 release asset, gc flag semantics, shallow clones, Linux-AMD64 onnxruntime bundling, tokenizer lib, current vector-index status. | Recall@K ≥ memhub baseline (or the BM25 contingency proves it); zero data-loss events in the concurrency soak; push/pull round trip clean. **Fail → project stops; write up findings.** **Decided 2026-08-02: GO** — all three conditions met, each in a narrower scope than its wording suggests, and two of the scope column's six `[verify]` items (gc flag semantics, shallow clones) did not complete. Condition-by-condition evidence, the limits the GO carries, and the obligations it leaves open: `docs/spikes/m0-gate.md` |
 | **M1 — Core** | init, schema+migrations, CRUD all lanes, proposal branches, review CLI (accept/reject/expire/stale, contradiction probe), commit conventions, doctor basics, deny-list. | Lifecycle test suite green; a full propose→review→merge cycle audited via `dolt_log`. |
 | **M2 — Retrieval** | Embedding side-store, hybrid recall + warnings, rerank, eval harness, staleness machinery, `search`. | Golden gate green in CI (hermetic fixture). |
-| **M3 — MCP** | Full tool surface, 2026-07-28 behaviors, elicitation review loop + fact-key conflict flow, server instructions, `.mcp.json`, skills for 3 agent CLIs. | End-to-end session from real Claude Code: recall, propose, elicited review, task ops. |
+| **M3 — MCP** | Full tool surface, 2026-07-28 behaviors, elicitation review loop + fact-key conflict flow, server instructions, `.mcp.json`, native OpenCode V2 registration/doctor/identity, verified OpenCode wrap-up provenance, skills for 3 agent CLIs. | End-to-end session from real Claude Code: recall, propose, elicited review, task ops. |
 | **M4 — Hub & repo ops** | remotes config, pull/push/repo-status + conflict elicitation, hub init/systemd docs, auth setup, version-skew guards, topology config; `Store` remote impl (topology B) if time allows. | Two-machine round-trip acceptance test (r2 §13.6 analogue): fixture data, write from both machines, merge, verify counts/hashes; re-open with plain local memdolt — no conversion (D13 gate). |
-| **M5 — Parity long tail** | docs ingestion, code index + locate + eval, render, global store, import-from-memhub, audit md, ingest-git. | Parity matrix (§12) fully dispositioned; locate golden gate green. |
-| **M6 — Ops polish** | backups + doctor --hub, gc/retention, upgrade machinery, token accounting (gated), transcripts, README/status discipline. | Quarterly-drill-style restore test documented and executed once. |
+| **M5 — Parity long tail** | docs ingestion, code index + locate + eval, render, global store, import-from-memhub including session-note provenance, audit md, ingest-git. | Parity matrix (§12) fully dispositioned; locate golden gate green. |
+| **M6 — Ops polish** | backups + doctor --hub, gc/retention, upgrade machinery with safe wrapper resync, token accounting (gated), validated unredacted OpenCode transcripts, README/status discipline. | Quarterly-drill-style restore test documented and executed once. |
 
 ---
 
