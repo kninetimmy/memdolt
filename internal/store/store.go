@@ -120,6 +120,16 @@ type LexicalHit struct {
 	Score      float64
 }
 
+// DecisionSearchHit is one committed decision matched by the text-search
+// surface. Score is Dolt's higher-is-better natural-language relevance.
+type DecisionSearchHit struct {
+	DecisionID string
+	Title      string
+	Rationale  string
+	DecidedAt  time.Time
+	Score      float64
+}
+
 // CommitProvenance is the dolt_blame metadata for the commit that last
 // changed a durable row.
 type CommitProvenance struct {

@@ -34,9 +34,11 @@ func newRootCommand() *cobra.Command {
 		"emit machine-readable JSON on stdout instead of human-readable text")
 
 	root.AddCommand(newDoctorCommand())
+	root.AddCommand(newEvalCommand())
 	root.AddCommand(newIndexCommand())
 	root.AddCommand(newInitCommand())
 	root.AddCommand(newRecallCommand())
+	root.AddCommand(newSearchCommand())
 	root.AddCommand(newVersionCommand())
 
 	// The direct lanes of PRD §3.1.

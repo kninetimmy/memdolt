@@ -82,6 +82,15 @@ export GOFLAGS=-tags=gms_pure_go
   lexical fallback. `--source-type`, `--max-results`, `--accepted-only`,
   `--include-stale`, `--no-rerank`, `--min-rerank-score`, and `--provenance`
   narrow or annotate one call; `--json` emits the complete response object.
+- Search committed decisions (PRD §8): `go run ./cmd/memdolt search <query>`
+  accepts plain text or a memhub-compatible decision prefix and uses Dolt
+  FULLTEXT over decision titles and rationales. `search file:<path>` refuses
+  with the M5 code-index/git-ingest remedy until that corpus exists.
+- Evaluate retrieval (PRD §8.4): `go run ./cmd/memdolt eval retrieval` runs
+  the committed golden JSON through production hybrid recall, reports every
+  match/empty outcome plus Recall@3 and safety failures, and exits nonzero
+  below the recorded 100% baseline. `--mode fts`, `--golden`, `--dir`, and
+  `--json` provide the corresponding explicit overrides and output forms.
 - Write and read the direct lanes (PRD §3.1): `memdolt task add|done|block|list`,
   `memdolt note add|list`, `memdolt command record|get`, `memdolt state set|show`
   and `memdolt arch set|show`. Each write is one Dolt commit on `main`, authored

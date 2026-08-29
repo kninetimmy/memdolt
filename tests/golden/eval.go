@@ -3,51 +3,18 @@
 package golden
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"strings"
+	"github.com/kninetimmy/memdolt/internal/retrieval"
 )
 
-// goldenQuery and goldenFile mirror memhub's src/commands/eval.rs
-// GoldenQuery/GoldenFile shape exactly (field-for-field), so
-// retrieval_golden.json parses unmodified.
-type goldenQuery struct {
-	ID            string   `json:"id"`
-	Query         string   `json:"query"`
-	Kind          string   `json:"kind"` // "match" or "empty"
-	SourceType    string   `json:"source_type"`
-	TitleContains []string `json:"title_contains"`
-	BodyContains  []string `json:"body_contains"`
-	Notes         string   `json:"notes"`
-}
-
-type goldenFile struct {
-	Version     int           `json:"version"`
-	Description string        `json:"description"`
-	Queries     []goldenQuery `json:"queries"`
-}
+// The rig and the user-facing evaluator share one golden parser and matcher.
+type goldenQuery = retrieval.GoldenQuery
+type goldenFile = retrieval.GoldenFile
 
 func loadGoldenFile(path string) (*goldenFile, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
-	}
-	var gf goldenFile
-	if err := json.Unmarshal(raw, &gf); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
-	}
-	if gf.Version != 1 {
-		return nil, fmt.Errorf("unsupported golden file version %d in %s; expected 1", gf.Version, path)
-	}
-	if len(gf.Queries) == 0 {
-		return nil, fmt.Errorf("golden file %s has zero queries", path)
-	}
-	return &gf, nil
+	golden, err := retrieval.LoadGolden(path)
+	return &golden, err
 }
 
-// queryOutcome mirrors memhub's eval.rs QueryOutcome (the fields this rig
-// needs: match/empty pass, and a human-readable failure reason).
 type queryOutcome struct {
 	id            string
 	kind          string
@@ -56,77 +23,31 @@ type queryOutcome struct {
 	failureReason string
 }
 
-// evaluateQuery mirrors memhub's src/commands/eval.rs evaluate_query and
-// hit_matches exactly: kind=empty passes iff the result set is empty;
-// kind=match passes iff some hit within the top min(k, len(results)) has
-// the expected source_type (when given) and contains every
-// title_contains/body_contains substring, case-insensitive.
-func evaluateQuery(q goldenQuery, hits []resultHit, k int) queryOutcome {
-	returned := len(hits)
-	if q.Kind == "empty" {
-		if returned == 0 {
-			return queryOutcome{id: q.ID, kind: q.Kind, passed: true, returnedCount: returned}
-		}
-		leaked := make([]string, 0, len(hits))
-		for _, h := range hits {
-			if len(leaked) >= min(k, 3) {
-				break
-			}
-			leaked = append(leaked, fmt.Sprintf("%s#%s", h.sourceType, h.id))
-		}
-		return queryOutcome{
-			id: q.ID, kind: q.Kind, passed: false, returnedCount: returned,
-			failureReason: fmt.Sprintf("expected empty bundle but recall returned %d hit(s): %s",
-				returned, strings.Join(leaked, ", ")),
+func evaluateQuery(query goldenQuery, hits []resultHit, k int) queryOutcome {
+	productionHits := make([]retrieval.Hit, len(hits))
+	for i, hit := range hits {
+		productionHits[i] = retrieval.Hit{
+			Rank: hit.rank, SourceType: hit.sourceType, SourceID: hit.id,
+			Title: hit.title, Body: hit.body, Score: hit.score,
 		}
 	}
-
-	limit := min(k, returned)
-	for _, h := range hits[:limit] {
-		if hitMatches(q, h) {
-			return queryOutcome{id: q.ID, kind: q.Kind, passed: true, returnedCount: returned}
-		}
+	outcome := retrieval.EvaluateQuery(query, productionHits, k)
+	failure := ""
+	if outcome.FailureReason != nil {
+		failure = *outcome.FailureReason
 	}
-	reason := "recall returned no results"
-	if returned > 0 {
-		top := make([]string, 0, limit)
-		for _, h := range hits[:limit] {
-			top = append(top, fmt.Sprintf("%s#%s:%s", h.sourceType, h.id, truncate(h.title, 40)))
-		}
-		reason = fmt.Sprintf("no top-%d hit matched (returned %d): %s", k, returned, strings.Join(top, " | "))
+	return queryOutcome{
+		id: outcome.ID, kind: string(outcome.Kind), passed: outcome.Passed,
+		returnedCount: outcome.ReturnedCount, failureReason: failure,
 	}
-	return queryOutcome{id: q.ID, kind: q.Kind, passed: false, returnedCount: returned, failureReason: reason}
 }
 
-func hitMatches(q goldenQuery, h resultHit) bool {
-	if q.SourceType != "" && h.sourceType != q.SourceType {
-		return false
-	}
-	titleLower := strings.ToLower(h.title)
-	for _, needle := range q.TitleContains {
-		if !strings.Contains(titleLower, strings.ToLower(needle)) {
-			return false
-		}
-	}
-	bodyLower := strings.ToLower(h.body)
-	for _, needle := range q.BodyContains {
-		if !strings.Contains(bodyLower, strings.ToLower(needle)) {
-			return false
-		}
-	}
-	return true
+func hitMatches(query goldenQuery, hit resultHit) bool {
+	return retrieval.HitMatches(query, retrieval.Hit{
+		SourceType: hit.sourceType, SourceID: hit.id, Title: hit.title, Body: hit.body,
+	})
 }
 
-func truncate(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max]) + "…"
-}
-
-// evalSummary mirrors memhub's eval.rs EvalSummary (the fields this rig's
-// gate needs).
 type evalSummary struct {
 	gathererName   string
 	matchQueries   int
@@ -139,33 +60,29 @@ type evalSummary struct {
 }
 
 func summarize(name string, outcomes []queryOutcome) evalSummary {
-	s := evalSummary{gathererName: name, outcomes: outcomes}
-	for _, o := range outcomes {
-		switch o.kind {
+	summary := evalSummary{gathererName: name, outcomes: outcomes}
+	for _, outcome := range outcomes {
+		switch outcome.kind {
 		case "match":
-			s.matchQueries++
-			if o.passed {
-				s.matchPasses++
+			summary.matchQueries++
+			if outcome.passed {
+				summary.matchPasses++
 			}
 		case "empty":
-			s.emptyQueries++
-			if o.passed {
-				s.emptyPasses++
+			summary.emptyQueries++
+			if outcome.passed {
+				summary.emptyPasses++
 			} else {
-				s.safetyFailures++
+				summary.safetyFailures++
 			}
 		}
 	}
-	if s.matchQueries > 0 {
-		s.recallAtK = float64(s.matchPasses) / float64(s.matchQueries)
+	if summary.matchQueries > 0 {
+		summary.recallAtK = float64(summary.matchPasses) / float64(summary.matchQueries)
 	}
-	return s
+	return summary
 }
 
-// meetsGate reports whether s clears the PRD §16 gate: Recall@K at least
-// memhub's recorded baseline (100%, 21/21 on this 22-query golden set) and
-// zero safety failures.
-func meetsGate(s evalSummary) bool {
-	const baselineRecall = 1.0
-	return s.recallAtK >= baselineRecall && s.safetyFailures == 0
+func meetsGate(summary evalSummary) bool {
+	return summary.recallAtK >= retrieval.BaselineRecallAt3 && summary.safetyFailures == 0
 }

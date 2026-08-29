@@ -62,8 +62,19 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Cache checksum-pinned inference artifacts
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/cache@v4
+        with:
+          path: ~/.memdolt/models
+          key: ${{ runner.os }}-${{ runner.arch }}-memdolt-inference-${{ hashFiles('models/manifest.json') }}
+
       - name: go test
         run: go test ./...
+
+      - name: Golden retrieval gate
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -tags golden,gms_pure_go ./tests/golden/... -v -timeout 30m -run TestRetrievalGolden
 
   # A separate lane rather than a fourth entry in the matrix above: a new
   # matrix dimension would re-render the protected status-check names the test

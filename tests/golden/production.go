@@ -104,20 +104,21 @@ func setupProductionHarness(t *testing.T, engine *embedding.Engine) *productionH
 
 func runProductionGoldenEval(t *testing.T, h *productionHarness, golden *goldenFile) evalSummary {
 	t.Helper()
-	outcomes := make([]queryOutcome, 0, len(golden.Queries))
-	for _, query := range golden.Queries {
-		response, err := retrieval.Recall(h.ctx, h.store, h.path, h.engine, h.config, retrieval.Options{Query: query.Query})
-		if err != nil {
-			t.Fatalf("production query %s: %v", query.ID, err)
+	summary, err := retrieval.EvaluateGolden(h.ctx, h.store, h.path, h.engine, h.config, *golden,
+		retrieval.EvalOptions{GoldenPath: "retrieval_golden.json", Mode: retrieval.ModeHybrid})
+	if err != nil {
+		t.Fatalf("production golden evaluator: %v", err)
+	}
+	outcomes := make([]queryOutcome, len(summary.Outcomes))
+	for i, outcome := range summary.Outcomes {
+		failure := ""
+		if outcome.FailureReason != nil {
+			failure = *outcome.FailureReason
 		}
-		hits := make([]resultHit, len(response.Results))
-		for i, hit := range response.Results {
-			hits[i] = resultHit{
-				rank: hit.Rank, sourceType: hit.SourceType, scope: "repo", id: hit.SourceID,
-				title: hit.Title, body: hit.Body, score: hit.Score,
-			}
+		outcomes[i] = queryOutcome{
+			id: outcome.ID, kind: string(outcome.Kind), passed: outcome.Passed,
+			returnedCount: outcome.ReturnedCount, failureReason: failure,
 		}
-		outcomes = append(outcomes, evaluateQuery(query, hits, 3))
 	}
 	return summarize("PRODUCTION vector-only hybrid", outcomes)
 }

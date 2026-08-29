@@ -39,6 +39,9 @@ type Options struct {
 	UseReranker    *bool
 	MinRerankScore *float32
 	Provenance     bool
+	// SkipObservability keeps evaluator and fixture calls out of the local
+	// empty-recall signal; ordinary recall calls leave it false.
+	SkipObservability bool
 }
 
 type Warning struct {
@@ -87,7 +90,7 @@ type resolvedOptions struct {
 	includeStale, acceptedOnly, useReranker  bool
 	minRerankScore, docMinRerankScore        float32
 	docsViaDefault, explicitlyDocumentScoped bool
-	provenance                               bool
+	provenance, skipObservability            bool
 }
 
 type sourceKey struct{ sourceType, sourceID string }
@@ -336,8 +339,10 @@ func Recall(ctx context.Context, st *localdolt.Store, embeddingsPath string, inf
 			availableDocs = 0
 		}
 	}
-	if err := embedding.RecordRecall(ctx, embeddingsPath, len(results) == 0); err != nil {
-		return Response{}, err
+	if !resolved.skipObservability {
+		if err := embedding.RecordRecall(ctx, embeddingsPath, len(results) == 0); err != nil {
+			return Response{}, err
+		}
 	}
 	matcher := resolved.matcher
 	if reranked {
@@ -429,6 +434,7 @@ func resolve(cfg Config, options Options) (resolvedOptions, error) {
 		acceptedOnly: acceptedOnly, useReranker: useReranker, minRerankScore: minScore,
 		docMinRerankScore: cfg.Scoring.DocMinRerankScore, docsViaDefault: docsViaDefault,
 		explicitlyDocumentScoped: explicitDoc, provenance: options.Provenance,
+		skipObservability: options.SkipObservability,
 	}, nil
 }
 

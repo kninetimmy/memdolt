@@ -103,6 +103,49 @@ func (s *Store) RecallFTS(ctx context.Context, query string, sourceTypes []strin
 	return hits, nil
 }
 
+// SearchDecisions returns committed decision title/rationale matches in a
+// stable relevance order. The query and limit are always bound values.
+func (s *Store) SearchDecisions(ctx context.Context, query string, limit int) ([]store.DecisionSearchHit, error) {
+	conn, err := s.committedMainConn(ctx, "decision search")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+
+	rows, err := conn.QueryContext(ctx, `SELECT id, title, rationale, decided_at, MAX(score) AS score
+FROM (
+  SELECT id, title, rationale, decided_at,
+    MATCH(title, rationale) AGAINST (? IN NATURAL LANGUAGE MODE) AS score
+  FROM decisions AS OF 'HEAD'
+  WHERE MATCH(title, rationale) AGAINST (? IN NATURAL LANGUAGE MODE)
+) AS matches
+GROUP BY id, title, rationale, decided_at
+ORDER BY score DESC, decided_at DESC, id
+LIMIT ?`, query, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("localdolt: search decisions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	hits := []store.DecisionSearchHit{}
+	for rows.Next() {
+		var hit store.DecisionSearchHit
+		var title, rationale sql.NullString
+		var decidedAt sql.NullTime
+		if err := rows.Scan(&hit.DecisionID, &title, &rationale, &decidedAt, &hit.Score); err != nil {
+			return nil, fmt.Errorf("localdolt: scan decision search hit: %w", err)
+		}
+		hit.Title = title.String
+		hit.Rationale = rationale.String
+		hit.DecidedAt = timeValue(decidedAt)
+		hits = append(hits, hit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("localdolt: read decision search hits: %w", err)
+	}
+	return hits, nil
+}
+
 // LastChanged returns optional row-level provenance from the matching
 // dolt_blame table. The table switch is the allowlist; no caller text is ever
 // interpolated into SQL.

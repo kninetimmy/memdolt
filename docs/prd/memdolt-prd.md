@@ -460,6 +460,33 @@ of `sugarme/tokenizer` elsewhere.
 
 Port `eval retrieval` + `eval locate` and the golden JSON format verbatim (substring matchers, `match`/`empty` kinds, Recall@K, K=3). Seed `tests/golden/retrieval_golden.json` from memhub's file. Hermetic fixture runner in CI. **The M0/M2 gate: memdolt Recall@K ≥ memhub's baseline on the same golden set, same fixture data.**
 
+**M2 completion (2026-08-29, issue #91).** `memdolt search <query>` now
+ships the M2 text-search surface: plain text falls back to decision search,
+memhub's decision prefixes select it explicitly, and Dolt FULLTEXT ranks
+committed decision titles and rationales with stable JSON. Empty and
+punctuation-only queries are refused before search SQL. An explicit
+`file:<path>` request fails loudly with the M5 code-index/git-ingest remedy;
+it does not pretend that a missing history corpus produced an empty match.
+
+`memdolt eval retrieval [--golden <path>] [--mode hybrid|fts]` loads the
+committed version-1 golden format and runs every `match` and `empty` query
+through the same production `retrieval.Recall` path as the CLI. Its human and
+JSON outputs include every outcome, Recall@3, and empty-query safety failures;
+the command exits nonzero below the recorded 100% baseline or on any safety
+failure. The selected hybrid run remains vector-only candidate ordering with
+the 20-row rerank pool (§8.1): the exact hermetic result is **21/21 matches,
+Recall@3 = 100%, and zero safety failures**.
+
+The gate runs under the existing protected `Test (ubuntu-latest)` matrix
+check, not an advisory job. GitHub Actions caches `~/.memdolt/models` by the
+committed `models/manifest.json` hash; `internal/embedding.Open` re-verifies
+the cached model files, official runtime archive/extracted-library pins as
+applicable, and the runtime library before ONNX initialization, so an
+unverified cache entry is never used. MCP exposure remains M3. Actual global
+store merging, document ingestion, the code index, git-ingested file history,
+`locate`, `eval locate`, and their golden corpus remain M5; M2's hermetic
+fixture rows exercise retrieval scoring without claiming those surfaces ship.
+
 ---
 
 ## 9. Code index & `locate`
