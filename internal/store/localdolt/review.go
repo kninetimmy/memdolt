@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -19,8 +20,12 @@ import (
 // into durable truth in the reviewed lane. Accept is where PRD §6.3's
 // fail-closed merge protocol lives.
 //
-// The accept-time contradiction probe of §7.4 is deliberately not here; it
-// needs the cross-encoder of §8.3, which arrives with M2's retrieval stack.
+// Before M3, the accept-time contradiction probe of §7.4 was deliberately not
+// here because it needed §8.3's cross-encoder. After M2 shipped that model,
+// AcceptProposal runs the probe before its merge transaction can change main.
+// The restriction binds AcceptProposal alone, not every review verb: list,
+// show, reject, expire and stale do not promote durable claims and do not run
+// inference.
 
 // reviewedLaneTables are the tables an accept may merge, mapped to the
 // column that identifies a row in them. A proposal's single commit writes
@@ -76,6 +81,12 @@ var scannedColumns = map[string][]string{
 // removed only where that check comes back clean. Any other violation_type
 // Dolt reports blocks the merge.
 const clearableViolation = "unique index"
+
+// contradictionThreshold is the fixed cross-encoder relevance logit at or
+// above which PRD §7.4 blocks an ordinary fact or decision accept. It is not a
+// retrieval-config knob: only a supersede proposal or AcceptOptions.Force may
+// bypass it.
+const contradictionThreshold = float32(2.0)
 
 // crockfordAlphabet is ULID's base32 alphabet (PRD §6.1's CHAR(26) keys).
 const crockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -190,6 +201,50 @@ type AcceptResult struct {
 	// merge protocol removed, if any.
 	Cleared []ClearedViolation `json:"cleared_violations,omitempty"`
 }
+
+// ContradictionScorer is the shipped cross-encoder surface AcceptProposal
+// consumes. Close belongs to the gate: a scorer that cannot be opened, used or
+// closed fails before the proposal is merged.
+type ContradictionScorer interface {
+	Rerank(query, passage string) (float32, error)
+	Close() error
+}
+
+// AcceptOptions are the contradiction-guard inputs for one promotion.
+//
+// These requirements bind AcceptProposal alone, not every Store method or
+// every review verb. Every non-forced fact or decision accept must validate
+// model configuration and, when durable same-kind rows exist, open a scorer;
+// nil callbacks fail closed. Supersede proposals and explicit Force accepts
+// deliberately skip both callbacks and still use the same merge flow.
+type AcceptOptions struct {
+	Force                       bool
+	ValidateContradictionConfig func() error
+	OpenContradictionScorer     func(context.Context) (ContradictionScorer, error)
+}
+
+// ErrContradiction is matched by an accept refused at PRD §7.4's fixed
+// cross-encoder threshold.
+var ErrContradiction = errors.New("proposal contradicts durable reviewed memory")
+
+// ContradictionError names the durable row whose cross-encoder score blocked
+// a proposal.
+type ContradictionError struct {
+	ProposalID string
+	SourceType string
+	SourceID   string
+	Label      string
+	Score      float32
+}
+
+func (e *ContradictionError) Error() string {
+	return fmt.Sprintf(
+		"accept blocked: proposal %s looks like it contradicts durable %s %s (cross-encoder score %.3f >= %.3f); "+
+			"accept a supersede proposal where that lane applies, or rerun `memdolt review accept %s --force` to keep both",
+		e.ProposalID, e.SourceType, e.Label, e.Score, contradictionThreshold, e.ProposalID)
+}
+
+func (e *ContradictionError) Unwrap() error { return ErrContradiction }
 
 // PendingProposals lists every proposal awaiting review, oldest branch
 // name first. A proposal is pending exactly while its branch exists
@@ -342,7 +397,14 @@ func (s *Store) ExpireProposals(ctx context.Context, before time.Time) ([]Pendin
 // inside an explicit transaction. Rolling that transaction back is
 // therefore also the abort: main does not move, the working set is clean,
 // both surfaces are empty and the proposal branch is untouched.
-func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Actor) (AcceptResult, error) {
+func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Actor, options AcceptOptions) (AcceptResult, error) {
+	// Two reviewed claims must not both probe the same old main and then land
+	// behind each other's backs. One Store owns the repository, so serializing
+	// this one promotion method makes the second accept compare against the
+	// first accept's durable result.
+	s.acceptMu.Lock()
+	defer s.acceptMu.Unlock()
+
 	db, err := s.handle()
 	if err != nil {
 		return AcceptResult{}, err
@@ -427,8 +489,22 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 	if err := s.checkDenyList(text); err != nil {
 		return AcceptResult{}, fmt.Errorf("localdolt: refusing to promote proposal %s: %w", id, err)
 	}
+	if proposal.Kind == KindSupersede {
+		if err := requireSupersedeShape(ctx, conn, record); err != nil {
+			return AcceptResult{}, fmt.Errorf("localdolt: refusing contradiction bypass for proposal %s: %w", id, err)
+		}
+	}
+	probe := proposal.Kind != KindSupersede && !options.Force
+	if probe {
+		if options.ValidateContradictionConfig == nil {
+			return AcceptResult{}, fmt.Errorf("localdolt: refusing to promote proposal %s: contradiction probe configuration validator is unavailable", id)
+		}
+		if err := options.ValidateContradictionConfig(); err != nil {
+			return AcceptResult{}, fmt.Errorf("localdolt: refusing to promote proposal %s: contradiction probe configuration: %w", id, err)
+		}
+	}
 
-	result, err := s.acceptInTx(ctx, conn, proposal, reviewer)
+	result, err := s.acceptInTx(ctx, conn, record, proposal, reviewer, options, probe)
 	if err != nil {
 		return AcceptResult{}, err
 	}
@@ -488,13 +564,27 @@ func (s *Store) proposalText(ctx context.Context, q branchQuerier, record branch
 
 // acceptInTx runs the merge and PRD §6.3's protocol in one transaction,
 // which either concludes with the merge commit or leaves main untouched.
-func (s *Store) acceptInTx(ctx context.Context, conn *sql.Conn, proposal PendingProposal, reviewer store.Actor) (AcceptResult, error) {
+func (s *Store) acceptInTx(
+	ctx context.Context,
+	conn *sql.Conn,
+	record branchRecord,
+	proposal PendingProposal,
+	reviewer store.Actor,
+	options AcceptOptions,
+	probe bool,
+) (AcceptResult, error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return AcceptResult{}, fmt.Errorf("localdolt: begin the accept transaction: %w", err)
 	}
 
-	result, err := s.merge(ctx, tx, proposal, reviewer)
+	if probe {
+		err = requireNoContradiction(ctx, tx, record, proposal, options.OpenContradictionScorer)
+	}
+	var result AcceptResult
+	if err == nil {
+		result, err = s.merge(ctx, tx, proposal, reviewer)
+	}
 	if err != nil {
 		// Rolling back is the abort: nothing is auto-resolved, main does
 		// not move, and the proposal branch and every row on both sides
@@ -509,6 +599,251 @@ func (s *Store) acceptInTx(ctx context.Context, conn *sql.Conn, proposal Pending
 		return AcceptResult{}, fmt.Errorf("localdolt: conclude the accept transaction: %w", err)
 	}
 	return result, nil
+}
+
+type contradictionClaim struct {
+	sourceType string
+	text       string
+}
+
+type contradictionCandidate struct {
+	sourceType string
+	sourceID   string
+	text       string
+	label      string
+}
+
+func requireNoContradiction(
+	ctx context.Context,
+	tx *sql.Tx,
+	record branchRecord,
+	proposal PendingProposal,
+	open func(context.Context) (ContradictionScorer, error),
+) error {
+	claims, err := proposalContradictionClaims(ctx, tx, record)
+	if err != nil {
+		return err
+	}
+	if len(claims) == 0 {
+		return fmt.Errorf("localdolt: proposal %s is a %s proposal but its staging commit carries no fact or decision prose to check", proposal.ID, proposal.Kind)
+	}
+
+	candidates := map[string][]contradictionCandidate{}
+	for _, claim := range claims {
+		if _, ok := candidates[claim.sourceType]; ok {
+			continue
+		}
+		candidates[claim.sourceType], err = durableContradictionCandidates(ctx, tx, claim.sourceType)
+		if err != nil {
+			return err
+		}
+	}
+	hasCandidates := false
+	for _, rows := range candidates {
+		hasCandidates = hasCandidates || len(rows) > 0
+	}
+	if !hasCandidates {
+		return nil
+	}
+	if open == nil {
+		return fmt.Errorf("localdolt: contradiction probe model opener is unavailable")
+	}
+	scorer, err := open(ctx)
+	if err != nil {
+		return fmt.Errorf("localdolt: open the contradiction probe model: %w", err)
+	}
+	if scorer == nil {
+		return fmt.Errorf("localdolt: open the contradiction probe model: opener returned no scorer")
+	}
+
+	var best *ContradictionError
+	for _, claim := range claims {
+		for _, candidate := range candidates[claim.sourceType] {
+			score, scoreErr := scorer.Rerank(claim.text, candidate.text)
+			if scoreErr != nil {
+				err = fmt.Errorf("localdolt: score proposal %s against durable %s %s: %w",
+					proposal.ID, candidate.sourceType, candidate.label, scoreErr)
+				break
+			}
+			if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
+				err = fmt.Errorf("localdolt: score proposal %s against durable %s %s: inference returned non-finite score %v",
+					proposal.ID, candidate.sourceType, candidate.label, score)
+				break
+			}
+			if score >= contradictionThreshold && (best == nil || score > best.Score) {
+				best = &ContradictionError{
+					ProposalID: proposal.ID,
+					SourceType: candidate.sourceType,
+					SourceID:   candidate.sourceID,
+					Label:      candidate.label,
+					Score:      score,
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if closeErr := scorer.Close(); closeErr != nil {
+		err = errors.Join(err, fmt.Errorf("localdolt: close the contradiction probe model: %w", closeErr))
+	}
+	if err != nil {
+		return err
+	}
+	if best != nil {
+		return best
+	}
+	return nil
+}
+
+func requireSupersedeShape(ctx context.Context, q branchQuerier, record branchRecord) error {
+	parent, err := commitParent(ctx, q, record)
+	if err != nil {
+		return err
+	}
+	facts, err := tableChanges(ctx, q, "facts", parent, record.commit)
+	if err != nil {
+		return err
+	}
+	decisions, err := tableChanges(ctx, q, "decisions", parent, record.commit)
+	if err != nil {
+		return err
+	}
+	return validateSupersedeChanges(facts, decisions)
+}
+
+func validateSupersedeChanges(facts, decisions []ProposalChange) error {
+	if len(decisions) != 0 {
+		return fmt.Errorf("a fact supersede proposal also changes %d decision row(s)", len(decisions))
+	}
+	if len(facts) != 2 {
+		return fmt.Errorf("a fact supersede proposal must modify its old row and add its replacement; found %d fact change(s)", len(facts))
+	}
+	var old, replacement *ProposalChange
+	for i := range facts {
+		switch facts[i].Type {
+		case "modified":
+			if old != nil {
+				return fmt.Errorf("a fact supersede proposal modifies more than one old row")
+			}
+			old = &facts[i]
+		case "added":
+			if replacement != nil {
+				return fmt.Errorf("a fact supersede proposal adds more than one replacement row")
+			}
+			replacement = &facts[i]
+		default:
+			return fmt.Errorf("a fact supersede proposal contains an unsupported %q fact change", facts[i].Type)
+		}
+	}
+	if old == nil || replacement == nil {
+		return fmt.Errorf("a fact supersede proposal must contain one modified old row and one added replacement row")
+	}
+
+	oldID, replacementID := old.From["id"], replacement.To["id"]
+	if oldID == "" || replacementID == "" || old.To["id"] != oldID {
+		return fmt.Errorf("a fact supersede proposal must preserve the old row id and give its replacement an id")
+	}
+	if old.From["superseded_by"] != "" || old.To["superseded_by"] != replacementID {
+		return fmt.Errorf("the old fact %s must be live and link to replacement %s", oldID, replacementID)
+	}
+	key := old.From["key"]
+	if key == "" || replacement.To["key"] != key || old.From["live_key"] != key || old.To["live_key"] != "" {
+		return fmt.Errorf("the replacement fact must take the old live fact's key")
+	}
+	if replacement.To["superseded_by"] != "" || replacement.To["live_key"] != key {
+		return fmt.Errorf("the replacement fact %s must be live", replacementID)
+	}
+
+	columns := map[string]struct{}{}
+	for column := range old.From {
+		columns[column] = struct{}{}
+	}
+	for column := range old.To {
+		columns[column] = struct{}{}
+	}
+	for column := range columns {
+		if column == "superseded_by" || column == "live_key" {
+			continue
+		}
+		if old.From[column] != old.To[column] {
+			return fmt.Errorf("a fact supersede proposal also changes old row column %q", column)
+		}
+	}
+	return nil
+}
+
+func proposalContradictionClaims(ctx context.Context, q branchQuerier, record branchRecord) ([]contradictionClaim, error) {
+	parent, err := commitParent(ctx, q, record)
+	if err != nil {
+		return nil, err
+	}
+	var claims []contradictionClaim
+	for _, table := range []string{"facts", "decisions"} {
+		changes, err := tableChanges(ctx, q, table, parent, record.commit)
+		if err != nil {
+			return nil, err
+		}
+		for _, change := range changes {
+			if change.To == nil {
+				continue
+			}
+			switch table {
+			case "facts":
+				claims = append(claims, contradictionClaim{
+					sourceType: "fact",
+					text:       factSemanticText(change.To["key"], change.To["value"]),
+				})
+			case "decisions":
+				claims = append(claims, contradictionClaim{
+					sourceType: "decision",
+					text: decisionSemanticText(
+						change.To["title"], change.To["rationale"], change.To["summary"]),
+				})
+			}
+		}
+	}
+	return claims, nil
+}
+
+func durableContradictionCandidates(ctx context.Context, tx *sql.Tx, sourceType string) ([]contradictionCandidate, error) {
+	var query string
+	switch sourceType {
+	case "fact":
+		query = "SELECT id, COALESCE(`key`, ''), COALESCE(value, ''), '' FROM facts " +
+			"WHERE superseded_by IS NULL ORDER BY id"
+	case "decision":
+		query = "SELECT id, COALESCE(title, ''), COALESCE(rationale, ''), COALESCE(summary, '') FROM decisions " +
+			"WHERE superseded_by IS NULL AND status = 'active' ORDER BY id"
+	default:
+		return nil, fmt.Errorf("localdolt: unsupported contradiction source type %q", sourceType)
+	}
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("localdolt: read durable %s rows for the contradiction probe: %w", sourceType, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var candidates []contradictionCandidate
+	for rows.Next() {
+		var id, first, second, third string
+		if err := rows.Scan(&id, &first, &second, &third); err != nil {
+			return nil, fmt.Errorf("localdolt: scan durable %s row for the contradiction probe: %w", sourceType, err)
+		}
+		candidate := contradictionCandidate{sourceType: sourceType, sourceID: id}
+		if sourceType == "fact" {
+			candidate.text = factSemanticText(first, second)
+			candidate.label = fmt.Sprintf("%q (%s)", first, id)
+		} else {
+			candidate.text = decisionSemanticText(first, second, third)
+			candidate.label = fmt.Sprintf("%q (%s)", strings.Join(strings.Fields(first), " "), id)
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("localdolt: read durable %s rows for the contradiction probe: %w", sourceType, err)
+	}
+	return candidates, nil
 }
 
 // merge is the body of PRD §6.3's protocol, inside the accept transaction.
