@@ -509,6 +509,9 @@ func sourceAge(source store.RecallSource, now time.Time, staleAfterDays int64) (
 	default:
 		return false, nil
 	}
+	if timestamp == nil {
+		return false, nil
+	}
 	days := now.Sub(timestamp.UTC()).Hours() / 24
 	if days < 0 {
 		days = 0

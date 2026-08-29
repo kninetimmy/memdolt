@@ -135,6 +135,37 @@ func TestFTSRetainsAndDemotesSupersededStaleFactsAndSupportsFilters(t *testing.T
 	}
 }
 
+func TestHybridDoneTaskWithNullUpdatedAtHasNoAgeDecay(t *testing.T) {
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	title := "Quasarwhistle nullable timestamp regression"
+	f := newRecallFixture(t, []store.Statement{{
+		SQL:  "INSERT INTO tasks (id, title, status, created_at, updated_at) VALUES (?, ?, 'done', NOW(), NULL)",
+		Args: []any{id, title},
+	}}, []string{title})
+
+	inference := fakeInference{}
+	sources, err := f.st.EmbeddingSources(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := embedding.Rebuild(f.ctx, f.path, sources, inference.Embed); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.Mode = ModeHybrid
+	cfg.UseReranker = false
+	cfg.Scoring.AgeHalfLifeDays = 1
+	response, err := Recall(f.ctx, f.st, f.path, inference, cfg, Options{Query: "quasarwhistle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ReturnedCount != 1 || response.Results[0].SourceType != "task" ||
+		response.Results[0].SourceID != id || response.Results[0].Stale ||
+		response.Results[0].Score != cfg.Scoring.VectorWeight {
+		t.Fatalf("done task with NULL updated_at = %+v, want one unaged task", response)
+	}
+}
+
 func TestHybridUsesVectorOnlyWhenCurrentAndLexicalFallbackForEveryStaleShape(t *testing.T) {
 	ids := []string{
 		"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW",

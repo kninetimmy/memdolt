@@ -390,13 +390,16 @@ behavior changes. The structural blast radius is:
   config-reading symbol or every future table.
 - `store.RecallSource`, `store.LexicalHit`, and `store.CommitProvenance` are
   read models used by `localdolt.Store.RecallSources`, `RecallFTS`, and
-  `LastChanged`. Those concrete readers are committed-`main`-`HEAD` only;
-  that restriction belongs to the named LocalStore methods, not to every
-  `Store` implementation. Existing `Store.Open`, `Commit`, `Query`, and
-  `Close`, review/proposal paths, and deny-list behavior remain unchanged.
-  FULLTEXT still gathers at most 50 distinct rows per source type by grouping
-  before the limit, and optional provenance comes from each table's
-  `dolt_blame` row.
+  `LastChanged`. Those three methods and `EmbeddingSources` share
+  `committedMainConn`, so all four concrete readers are
+  committed-`main`-`HEAD` only. Moving `EmbeddingSources`' existing branch
+  check into that helper did not change its eligibility or read-only behavior.
+  The restriction belongs to these four named LocalStore methods, not to every
+  LocalStore reader or every `Store` implementation. Existing `Store.Open`,
+  `Commit`, `Query`, and `Close`, review/proposal paths, and deny-list behavior
+  remain unchanged. FULLTEXT still gathers at most 50 distinct rows per source
+  type by grouping before the limit, and optional provenance comes from each
+  table's `dolt_blame` row.
 - `internal/retrieval.Recall` adds FTS and hybrid modes. FTS uses the existing
   natural-language FULLTEXT keys. A fully current hybrid corpus uses only
   cosine to order the pre-rerank pool; no lexical weight is silently restored.
