@@ -1,0 +1,73 @@
+{
+  "_comment": "Production inference pins. Model hashes are the memhub v0.2.0 pins at immutable Hugging Face revisions. Runtime archive hashes come from the official microsoft/onnxruntime v1.26.0 GitHub Release API digests; runtime file hashes were computed only after those archives matched their official digests.",
+  "version": 1,
+  "onnxruntime_version": "1.26.0",
+  "bundles": [
+    {
+      "name": "bge-small-en-v1.5",
+      "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+      "base_url": "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+      "files": [
+        { "remote_path": "onnx/model.onnx", "local_name": "model.onnx", "sha256": "828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35" },
+        { "remote_path": "tokenizer.json", "local_name": "tokenizer.json", "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66" },
+        { "remote_path": "config.json", "local_name": "config.json", "sha256": "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750" },
+        { "remote_path": "special_tokens_map.json", "local_name": "special_tokens_map.json", "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3" },
+        { "remote_path": "tokenizer_config.json", "local_name": "tokenizer_config.json", "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3" }
+      ]
+    },
+    {
+      "name": "ms-marco-MiniLM-L-6-v2",
+      "revision": "a09144355adeed5f58c8ed011d209bf8ee5a1fec",
+      "base_url": "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/a09144355adeed5f58c8ed011d209bf8ee5a1fec",
+      "files": [
+        { "remote_path": "onnx/model_int8.onnx", "local_name": "model.onnx", "sha256": "a13ec391ca99f49886694e12d3e800521f36d4267d7d448c34421c541a2baf50" },
+        { "remote_path": "tokenizer.json", "local_name": "tokenizer.json", "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66" },
+        { "remote_path": "config.json", "local_name": "config.json", "sha256": "d827779a72d27ae68cf878a6fc2e954542663fe21ca515d9f4783fc96be2d37e" },
+        { "remote_path": "special_tokens_map.json", "local_name": "special_tokens_map.json", "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3" },
+        { "remote_path": "tokenizer_config.json", "local_name": "tokenizer_config.json", "sha256": "0b29c7bfc889e53b36d9dd3e686dd4300f6525110eaa98c76a5dafceb2029f53" }
+      ]
+    }
+  ],
+  "runtimes": [
+    {
+      "goos": "windows",
+      "goarch": "amd64",
+      "local_path": "onnxruntime/1.26.0/windows-amd64/onnxruntime.dll",
+      "sha256": "b2ba7ca16e0e4fe71ad5148744ab885a2f5809e52a0c3de4d9ba3853a03977f9",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-win-x64-1.26.0.zip",
+      "archive_format": "zip",
+      "archive_member": "onnxruntime-win-x64-1.26.0/lib/onnxruntime.dll",
+      "archive_sha256": "6ebe99b5564bf4d029b6e93eac9ff423682b6212eade769e9ca3f685eaf500b4"
+    },
+    {
+      "goos": "linux",
+      "goarch": "amd64",
+      "local_path": "onnxruntime/1.26.0/linux-amd64/libonnxruntime.so.1.26.0",
+      "sha256": "5bd5bedf736fc501692435d0ec4f6e8b2bdf48cd30af8e6d00d61b3ddc9a7ab8",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-linux-x64-1.26.0.tgz",
+      "archive_format": "tar.gz",
+      "archive_member": "onnxruntime-linux-x64-1.26.0/lib/libonnxruntime.so.1.26.0",
+      "archive_sha256": "1254da24fb389cf39dc0ff3451ab48301740ffbfcbaf646849df92f80ee92c57"
+    },
+    {
+      "goos": "linux",
+      "goarch": "arm64",
+      "local_path": "onnxruntime/1.26.0/linux-arm64/libonnxruntime.so.1.26.0",
+      "sha256": "115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-linux-aarch64-1.26.0.tgz",
+      "archive_format": "tar.gz",
+      "archive_member": "onnxruntime-linux-aarch64-1.26.0/lib/libonnxruntime.so.1.26.0",
+      "archive_sha256": "34ff1c2d0f12e2cf3d33a0c5f82e39792e1d581fbd6968fd7c30d173654be01a"
+    },
+    {
+      "goos": "darwin",
+      "goarch": "arm64",
+      "local_path": "onnxruntime/1.26.0/darwin-arm64/libonnxruntime.1.26.0.dylib",
+      "sha256": "30afadcfc3c704f7671f8430d6252956651c1972373901d2be629da2e6a4d8ee",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-osx-arm64-1.26.0.tgz",
+      "archive_format": "tar.gz",
+      "archive_member": "onnxruntime-osx-arm64-1.26.0/lib/libonnxruntime.1.26.0.dylib",
+      "archive_sha256": "7a1280bbb1701ea514f71828765237e7896e0f2e1cd332f1f70dbd5c3e33aca3"
+    }
+  ]
+}

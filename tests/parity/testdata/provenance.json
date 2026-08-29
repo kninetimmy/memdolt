@@ -2,7 +2,7 @@
   "generated_at_unix_seconds": 1785452195,
   "fastembed_version": "5.13.4",
   "generator_source": "tests/parity/fixturegen/src/main.rs",
-  "model_pins_source": "tests/parity/testdata/model_pins.json (copied from memhub's build.rs)",
+  "model_pins_source": "models/manifest.json (production pins; model hashes copied from memhub's build.rs)",
   "model_dir": "C:/Users/Kninetimmy/memhub/target/debug/build/memhub-3d62ed0aca030512/out",
   "bundles": [
     {

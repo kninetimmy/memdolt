@@ -420,8 +420,32 @@ at a directory with a mismatched or missing file, fails the test loudly
 with the fetch/stage instructions above rather than skipping (verified: see
 `tests/inference/inference.go`'s `RequireEnv`/`StagedModelFiles`).
 
+That paragraph records the M0 rig as it ran; M2 deliberately removed that
+operational behavior. Before M2, both variables were required and missing
+artifacts only produced manual staging instructions. After M2, the same rigs
+call `internal/embedding.Open`: overrides are optional, missing artifacts are
+fetched from `models/manifest.json` unless offline mode is requested, and all
+pre-positioned or fetched bytes are verified by the production path before
+ONNX initialization. The old `tests/inference` package and
+`tests/parity/testdata/model_pins.json` no longer exist as second copies.
+
 Plain `go test ./...` never runs any of this — same convention as rig 1's
 `soak` tag (docs/spikes/m0-rig1.md §14): a command-line `-tags` replaces
 `GOFLAGS`'s tag list rather than adding to it, so `gms_pure_go` has to be
 repeated on any `-tags` invocation or the build fails inside
 `go-icu-regex`.
+
+## 10. M2 production handoff blast radius
+
+| Structural element touched | Before M2 | After M2; does prior behavior still hold? |
+|---|---|---|
+| Model/runtime pin authority | `tests/parity/testdata/model_pins.json` pinned model files only. | `models/manifest.json` is the sole authority and additionally pins immutable model revisions plus each official runtime archive and extracted library. Model identities and hashes still hold; the test-only authority is removed. |
+| Artifact cache and fetch | Rigs only verified manually staged model files; callers supplied the runtime path without a committed runtime checksum. | `internal/embedding` verifies existing cache files on every open, fetches only missing files, verifies downloads before atomic cache installation, and extracts a runtime only after its archive verifies. The manual verified staging path still holds through `Options.Offline`; unverified runtime acceptance does not. |
+| Supported runtime structure | Windows AMD64 was measured; three other official assets were documented but not wired. | One manifest-selected provisioner covers Windows AMD64, Linux AMD64, Linux ARM64, and macOS ARM64. The M0 claim remains limited to measured parity on Windows AMD64; this change does not rewrite it as four-platform parity measurement. |
+| Tokenizer | `tests/inference.nfdCompensate` repaired sugarme's precomposed-accent bug for both rigs. | The same logic moved unchanged to `internal/embedding`; every `Engine` token, embed, and rerank method routes through it, so byte-identical token behavior and the NFD requirement still hold. This restriction binds those `Engine` methods, not every possible `sugarme/tokenizer` value in the process. |
+| Embedding and rerank sessions | `tests/inference` owned the BGE CLS pooling/L2 normalization and raw ms-marco logit logic. | The logic moved to production `internal/embedding` without changing dimensions, pooling, epsilon, tensor names, logits, or tolerances. `Engine` serializes its own calls; that restriction is per `Engine`, not a process-wide ban on parallel engines. |
+| ONNX environment ownership | Each rig's `TestMain` initialized and destroyed yalue's process-global environment directly. | `embedding.Open` initializes only after provisioning succeeds; `Engine.Close` destroys it after the final engine closes. `Open` refuses an environment initialized outside this package because its runtime verification cannot be established. That refusal belongs to this production entry point, not to yalue's symbols generally. |
+| Parity and golden rigs | Both imported build-tagged `tests/inference`; parity separately loaded test pins. | Both import `internal/embedding` and call `Engine` methods. Their build tags, fixtures, recorded tolerances, NFD token probe, retrieval pipeline, and golden gates still hold; the second tokenizer/session implementation does not. |
+| Rust fixture generator and provenance | The independent fastembed reference read the test-only model pin JSON. | It reads the model portion of production `models/manifest.json`; reference generation, staged-byte verification, and fixture formats still hold. It remains an independent reference implementation, not production inference. |
+| Default Go tests and dependencies | Full inference rigs stayed out of `go test ./...`; sugarme, yalue, and x/text were already direct dependencies. | The tagged rigs still stay out, while provisioning unit tests use tiny local TLS fixtures. No dependency changed. |
+| Documentation | This report and the PRD described `tests/inference`, required rig environment variables, and first-run fetch as future design. | The historical M0 statements remain above with this before/after. PRD §8.3 and MD10 now record the production boundary and implemented distribution behavior instead of deleting the old evidence. |

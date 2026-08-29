@@ -63,6 +63,12 @@ against a 1×10⁻² tolerance — the last two despite the Go and Rust sides
 linking two different onnxruntime minor releases (1.26.0 and 1.24.2) over
 byte-identical model files.
 
+That package path is historical. Before M2, `tests/inference` supplied both
+rigs; after M2, both rigs consume production `internal/embedding` and the
+test-only package is gone. The recorded parity measurements and their limits
+still hold because the tokenizer and ONNX session logic moved without a second
+implementation.
+
 **Merge is not a gate condition.** §16's scope line reads
 "clone/pull/push/**merge** round trip"; its exit gate reads only
 "push/pull round trip clean". The gate is the operative reading, which is

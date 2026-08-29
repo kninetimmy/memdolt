@@ -5,81 +5,36 @@ package golden
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 
-	ort "github.com/yalue/onnxruntime_go"
-
-	"github.com/kninetimmy/memdolt/tests/inference"
+	"github.com/kninetimmy/memdolt/internal/embedding"
 )
 
-func TestMain(m *testing.M) {
-	ortLibPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
-	if ortLibPath == "" {
-		println("ONNXRUNTIME_SHARED_LIBRARY_PATH is not set; see the golden package doc comment (tests/golden/pipeline.go) for how to point it at an onnxruntime 1.26.0 shared library.")
-		os.Exit(1)
-	}
-	ort.SetSharedLibraryPath(ortLibPath)
-	if err := ort.InitializeEnvironment(); err != nil {
-		println("ort.InitializeEnvironment failed: " + err.Error())
-		os.Exit(1)
-	}
-	code := m.Run()
-	_ = ort.DestroyEnvironment()
-	os.Exit(code)
-}
-
-// setupPipelineHarness stages the ONNX models (reusing tests/parity's
-// SHA-256-pinned model files — model_pins.json is not duplicated, see
-// pipeline.go's doc comment), seeds a disposable embedded Dolt store with
-// the hermetic fixture corpus plus any extraRows appended after it (the
+// setupPipelineHarness opens the production inference engine (and therefore
+// provisions models/manifest.json's SHA-256-pinned artifacts), seeds a
+// disposable embedded Dolt store with the hermetic fixture corpus plus any
+// extraRows appended after it (the
 // scale rig passes its synthetic hard negatives — see scale_test.go), and
-// builds an embedding for every seeded row through the rig-2 inference
-// path. Returns a harness whose lexical field is left unset; callers plug
+// builds an embedding for every seeded row through that production path.
+// Returns a harness whose lexical field is left unset; callers plug
 // in fulltextGatherer or bm25Gatherer.
 func setupPipelineHarness(t *testing.T, extraRows ...corpusRow) *pipelineHarness {
 	t.Helper()
 	ctx := context.Background()
 
-	modelDir := inference.RequireEnv(t, "MEMDOLT_PARITY_MODEL_DIR",
-		"Point it at a directory containing bge-small-en-v1.5/ and ms-marco-MiniLM-L-6-v2/ "+
-			"subdirectories (memhub build.rs's OUT_DIR staging layout). If not staged locally, "+
-			"fetch from the pinned URLs in tests/parity/testdata/model_pins.json and verify "+
-			"each SHA-256 before use.")
-
-	pins, err := inference.LoadModelPins(filepath.Join("..", "parity", "testdata", "model_pins.json"))
+	engine, err := embedding.Open(ctx, embedding.Options{
+		CacheDir:    os.Getenv("MEMDOLT_PARITY_MODEL_DIR"),
+		RuntimePath: os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"),
+		Offline:     os.Getenv("MEMDOLT_INFERENCE_OFFLINE") != "",
+	})
 	if err != nil {
-		t.Fatalf("%v", err)
+		t.Fatalf("opening production inference engine: %v", err)
 	}
-	bundles := make(map[string]map[string][]byte, len(pins.Bundles))
-	for _, b := range pins.Bundles {
-		files, err := inference.StagedModelFiles(modelDir, b)
-		if err != nil {
-			t.Fatalf("%v", err)
+	t.Cleanup(func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("closing production inference engine: %v", err)
 		}
-		bundles[b.Name] = files
-	}
-	bgeFiles := bundles["bge-small-en-v1.5"]
-	rrFiles := bundles["ms-marco-MiniLM-L-6-v2"]
-
-	bgeTok, err := inference.BuildBertWordPieceTokenizer(bgeFiles["tokenizer.json"])
-	if err != nil {
-		t.Fatalf("building BGE tokenizer: %v", err)
-	}
-	rrTok, err := inference.BuildBertWordPieceTokenizer(rrFiles["tokenizer.json"])
-	if err != nil {
-		t.Fatalf("building reranker tokenizer: %v", err)
-	}
-	embed, err := inference.NewEmbedRunner(bgeFiles["model.onnx"])
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	t.Cleanup(func() { _ = embed.Destroy() })
-	rerank, err := inference.NewRerankRunner(rrFiles["model.onnx"])
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	t.Cleanup(func() { _ = rerank.Destroy() })
+	})
 
 	db, err := openDisposableStore(ctx, t.TempDir())
 	if err != nil {
@@ -100,11 +55,7 @@ func setupPipelineHarness(t *testing.T, extraRows ...corpusRow) *pipelineHarness
 	for _, r := range seeded {
 		key := rowKey{r.sourceType, r.id}
 		rows[key] = r
-		enc, err := inference.EncodeSingle(bgeTok, r.embedText())
-		if err != nil {
-			t.Fatalf("encoding %s: %v", key, err)
-		}
-		vec, err := embed.Embed(enc)
+		vec, err := engine.Embed(r.embedText())
 		if err != nil {
 			t.Fatalf("embedding %s: %v", key, err)
 		}
@@ -115,10 +66,7 @@ func setupPipelineHarness(t *testing.T, extraRows ...corpusRow) *pipelineHarness
 		db:         db,
 		rows:       rows,
 		embeddings: embeddings,
-		bgeTok:     bgeTok,
-		rrTok:      rrTok,
-		embed:      embed,
-		rerank:     rerank,
+		engine:     engine,
 	}
 }
 

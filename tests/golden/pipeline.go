@@ -2,16 +2,16 @@
 
 // Package golden is PRD §16's rig 3: the retrieval golden gate. It seeds a
 // disposable embedded Dolt store with PRD §6.1-shaped tables, builds
-// embeddings for every seeded row through the rig-2 inference path
-// (tests/inference, shared with tests/parity), and runs PRD §8.1's
+// embeddings for every seeded row through the production inference path
+// (internal/embedding, shared with tests/parity), and runs PRD §8.1's
 // retrieval pipeline against memhub's shipped golden query set
 // (retrieval_golden.json, ported verbatim from memhub v0.2.0) to measure
 // Recall@3 and safety failures against memhub's recorded baseline.
 //
 // It is behind the `golden` build tag for the same reason tests/parity is
-// behind `parity` (docs/spikes/m0-rig2.md): it needs the same staged model
-// files and onnxruntime shared library, plus a disposable Dolt data
-// directory, none of which belong in the default `go test ./...` run.
+// behind `parity` (docs/spikes/m0-rig2.md): it provisions and runs the full
+// models, plus a disposable Dolt data directory, none of which belong in the
+// default `go test ./...` run.
 //
 //	go test -tags golden,gms_pure_go ./tests/golden/... -timeout 30m
 //
@@ -25,9 +25,7 @@ import (
 	"math"
 	"sort"
 
-	sgtokenizer "github.com/sugarme/tokenizer"
-
-	"github.com/kninetimmy/memdolt/tests/inference"
+	"github.com/kninetimmy/memdolt/internal/embedding"
 )
 
 // §8.1 / config defaults (PRD §8.1, memhub's src/config/mod.rs — the exact
@@ -161,10 +159,7 @@ type pipelineHarness struct {
 	rows       map[rowKey]corpusRow
 	embeddings map[rowKey][]float32
 
-	bgeTok  *sgtokenizer.Tokenizer
-	rrTok   *sgtokenizer.Tokenizer
-	embed   *inference.EmbedRunner
-	rerank  *inference.RerankRunner
+	engine  *embedding.Engine
 	lexical lexicalGatherer
 }
 
@@ -210,11 +205,7 @@ func fusedPool(ctx context.Context, h *pipelineHarness, query string) ([]scoredH
 
 	// Step 2: vector gather (hybrid mode) — brute-force cosine over every
 	// seeded row of a requested source type, query embedding computed once.
-	queryEnc, err := inference.EncodeSingle(h.bgeTok, query)
-	if err != nil {
-		return nil, fmt.Errorf("encode query: %w", err)
-	}
-	queryVec, err := h.embed.Embed(queryEnc)
+	queryVec, err := h.engine.Embed(query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
@@ -304,11 +295,7 @@ func runQueryWithPoolSize(ctx context.Context, h *pipelineHarness, query string,
 		}
 		pairs := make([]rerankedPair, len(scored))
 		for i, sh := range scored {
-			enc, err := inference.EncodePair(h.rrTok, query, sh.row.rerankText())
-			if err != nil {
-				return nil, fmt.Errorf("encode rerank pair: %w", err)
-			}
-			s, err := h.rerank.Score(enc)
+			s, err := h.engine.Rerank(query, sh.row.rerankText())
 			if err != nil {
 				return nil, fmt.Errorf("rerank score: %w", err)
 			}

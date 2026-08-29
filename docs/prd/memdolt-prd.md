@@ -327,6 +327,23 @@ Port memhub's pipeline with the storage swapped underneath. Same models, same fu
 - Tokenization is NOT bundled with the runtime — a Go WordPiece/HF-tokenizers implementation is required (both models share the same BERT WordPiece vocab). Tokenizer library resolved by M0 rig 2 (docs/spikes/m0-rig2.md §4, §8): `sugarme/tokenizer`, confirmed to produce byte-identical token ids vs memhub's fastembed on a 31-text probe corpus (both models) — but only when the caller NFD-normalizes input before encoding, compensating for a bug in that library's own `BertNormalizer.StripAccents` (it never Unicode-NFD-decomposes text, so it is a near no-op on precomposed accented Latin characters). Any M1 code adopting this library must apply that compensation.
 - Distribution: **first-run fetch** into `~/.memdolt/models/`, every file SHA-256-pinned and verified, offline escape hatch = drop files in place manually. (Unlike memhub's `include_bytes!`: a 150MB `go:embed` would bloat every build and Go tooling handles it poorly.) **[design]**
 
+**M2 production handoff (2026-08-29).** Before M2, the parity and golden rigs
+required callers to stage model files and set an ONNX Runtime path; test-only
+code verified model hashes, then the harness initialized ONNX itself. After M2,
+`internal/embedding.Open` is the one production entry point: it reads the
+embedded `models/manifest.json`, selects the committed runtime pin for Windows
+AMD64, Linux AMD64, Linux ARM64, or macOS ARM64, verifies every existing or
+downloaded model, verifies both the official runtime archive and extracted
+shared library, and only then initializes ONNX. A mismatched existing file is
+never replaced implicitly; a mismatched download stays temporary and is
+removed. `Options.Offline` turns missing files into exact pre-positioning
+instructions, while still verifying every file already present. The
+`ONNXRUNTIME_SHARED_LIBRARY_PATH` name remains only an optional rig override,
+not a production requirement. The caller-side NFD restriction now binds every
+text entry point on `embedding.Engine` because all of them route through the
+package's `encodeSingle`/`encodePair`; it does not bind arbitrary direct uses
+of `sugarme/tokenizer` elsewhere.
+
 ### 8.4 Eval harness
 
 Port `eval retrieval` + `eval locate` and the golden JSON format verbatim (substring matchers, `match`/`empty` kinds, Recall@K, K=3). Seed `tests/golden/retrieval_golden.json` from memhub's file. Hermetic fixture runner in CI. **The M0/M2 gate: memdolt Recall@K ≥ memhub's baseline on the same golden set, same fixture data.**
@@ -602,7 +619,7 @@ Dolt: embedded driver (github.com/dolthub/driver; dolthub.com/blog/2022-07-25-em
 | MD7 | Topology per-project: clone (default) / live / local; no destructive sync op exists anywhere | Proposed |
 | MD8 | Global promotion CLI-only, permanently (r2 D19 adopted) | Adopted from r2 (operator-accepted there) |
 | MD9 | Format invariance across topologies (r2 D13 adopted); round-trip test gates M4 | Proposed |
-| MD10 | Models fetched at first run, SHA-256-pinned, not embedded in the binary | Proposed |
+| MD10 | Models fetched at first run, SHA-256-pinned, not embedded in the binary | **Implemented (M2): `models/manifest.json` pins immutable model revisions and official ONNX Runtime 1.26.0 assets for all four client platforms; `internal/embedding.Open` verifies cache/download bytes before ONNX initialization and supports verified offline pre-positioning** |
 | MD11 | ULID PKs on all agent-writable tables | Proposed |
 | MD12 | Direct lanes (tasks/notes/commands/narratives/docs) commit to main without review; notes batched | Proposed |
 | MD13 | Ambient recall: inject `recall` results automatically via agent-CLI prompt-submit hooks, config-gated | Backlog — post-v1 |
