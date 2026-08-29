@@ -370,6 +370,68 @@ No prior runtime behavior is removed. The structural blast radius is explicit:
   implementation. Dolt vector indexes and hub-side inference remain out of
   scope exactly as before.
 
+**M2 recall handoff (2026-08-29, issue #90).** Before this change,
+`internal/embedding.Rebuild` alone wrote `embeddings.sqlite`, the shipped CLI
+had no recall command, doctor had no empty-recall signal, and the original
+golden gate's selected-strategy assertion still consumed the rig's Go map of
+vectors even though production indexing existed. After it, production recall
+reads committed Dolt text plus current side-store vectors, and the original
+fixture's selected assertion traverses that same path. The old FULLTEXT/BM25
+rig remains for its historical and scale comparisons; it is no longer the
+production assertion. No Dolt schema, source row, working set, or commit-graph
+behavior changes. The structural blast radius is:
+
+- `internal/retrieval.Config` and `LoadConfig` read only `[retrieval]`, with
+  the established defaults and range checks. This removes the old behavior
+  that `[deny_list]` was the sole config table with a reader: before, every
+  other table was ignored; after, retrieval reads its own table while
+  `denylist.Load` still independently and fail-closed reads only
+  `[deny_list]`. The restriction belongs to these two named loaders, not every
+  config-reading symbol or every future table.
+- `store.RecallSource`, `store.LexicalHit`, and `store.CommitProvenance` are
+  read models used by `localdolt.Store.RecallSources`, `RecallFTS`, and
+  `LastChanged`. Those three methods and `EmbeddingSources` share
+  `committedMainConn`, so all four concrete readers are
+  committed-`main`-`HEAD` only. Moving `EmbeddingSources`' existing branch
+  check into that helper did not change its eligibility or read-only behavior.
+  The restriction belongs to these four named LocalStore methods, not to every
+  LocalStore reader or every `Store` implementation. Existing `Store.Open`,
+  `Commit`, `Query`, and `Close`, review/proposal paths, and deny-list behavior
+  remain unchanged. FULLTEXT still gathers at most 50 distinct rows per source
+  type by grouping before the limit, and optional provenance comes from each
+  table's `dolt_blame` row.
+- `internal/retrieval.Recall` adds FTS and hybrid modes. FTS uses the existing
+  natural-language FULLTEXT keys. A fully current hybrid corpus uses only
+  cosine to order the pre-rerank pool; no lexical weight is silently restored.
+  Missing, content-hash-mismatched, and wrong-byte-length vectors warn and
+  only matching stale rows may use lexical fallback. Configured fusion,
+  fact/done-task age behavior, stale and superseded penalties, accepted/source
+  filters, the top-20 cross-encoder pass, score floors, and result truncation
+  then apply. Superseded rows remain present and tagged; no row is deleted.
+  This behavior belongs to recall candidate assembly, not the separate FTS
+  schema contract or M3/M5 retrieval surfaces.
+- `internal/embedding.CurrentVectors` is read-only and returns only vectors
+  that `Status` classifies current. `RecordRecall` and `ReadObservability` own
+  one local `recall_observability` row in the same SQLite file. Thus the prior
+  sentence above that "`Rebuild` alone writes the SQLite side-store" has an
+  explicit before-and-after: before, it was literally the only writer; after,
+  `Rebuild` remains the only writer of `embeddings` vector rows, while
+  `RecordRecall` writes only local call counters. `Status`, `CurrentVectors`,
+  and `ReadObservability` remain read-only and do not create a missing file.
+  None of these restrictions applies to every symbol in `internal/embedding`.
+- `memdolt recall` adds human and JSON response rendering for results,
+  warnings, candidate/returned counts, elapsed time, available document
+  chunks, and optional last-changed provenance. Existing root commands,
+  flags, and payloads behave as before. `doctor` adds the named
+  `empty-recall-rate` check; its lock, IPC, and schema checks and exit rules
+  behave as before, and an absent repository still is not created.
+- `tests/golden.TestRetrievalGolden` keeps the original 22-query fixture and
+  the FULLTEXT/BM25 evidence, but its selected vector-only 20-candidate
+  assertion now uses the production migration schema, side-store, source
+  readers, scoring, and reranker. The scale sweep's three-strategy measurement
+  remains unchanged. Global-store merging, MCP, document ingestion, search,
+  and code indexing remain later-milestone work exactly as before.
+
 ### 8.3 Models & inference
 
 - BGE-small-en-v1.5 fp32 ONNX (384-dim, CLS pooling, ~127MB) + ms-marco-MiniLM-L-6-v2 int8 (~22MB) — memhub's exact pair, same pinned upstream revisions.

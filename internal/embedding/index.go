@@ -28,6 +28,12 @@ const embeddingsSchema = `CREATE TABLE IF NOT EXISTS embeddings (
   PRIMARY KEY (source_type, source_id, model_name)
 ) WITHOUT ROWID`
 
+const recallObservabilitySchema = `CREATE TABLE IF NOT EXISTS recall_observability (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  recall_count INTEGER NOT NULL,
+  empty_count INTEGER NOT NULL
+)`
+
 const RebuildRemedy = "run `memdolt index rebuild`"
 
 // RebuildResult reports the derived rows changed by Rebuild. Unchanged rows do
@@ -96,6 +102,23 @@ type storedEmbedding struct {
 	byteLength  int
 }
 
+// Vector is one current active-model vector read from the derived side-store.
+// Stale and malformed rows are never returned here; StatusReport explains why
+// each one was skipped.
+type Vector struct {
+	SourceType string
+	SourceID   string
+	Values     []float32
+}
+
+// Observability reports the local empty-recall count and rate. It is derived,
+// machine-local state in embeddings.sqlite, never a Dolt row or commit.
+type Observability struct {
+	RecallCount int64   `json:"recallCount"`
+	EmptyCount  int64   `json:"emptyCount"`
+	EmptyRate   float64 `json:"emptyRate"`
+}
+
 // Rebuild creates or refreshes the active model's vectors, skips rows whose
 // hash and shape are already current, and removes rows whose source no longer
 // exists. It writes only path's SQLite side-store; sources are values already
@@ -124,7 +147,7 @@ func Rebuild(ctx context.Context, path string, sources []store.EmbeddingSource, 
 	}
 	db.SetMaxOpenConns(1)
 	defer func() { err = errors.Join(err, db.Close()) }()
-	if _, err := db.ExecContext(ctx, embeddingsSchema); err != nil {
+	if err := initializeSideStore(ctx, db); err != nil {
 		return result, fmt.Errorf("initialize embedding side-store %s: %w", path, err)
 	}
 
@@ -197,6 +220,136 @@ ON CONFLICT (source_type, source_id, model_name) DO UPDATE SET
 	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("commit embedding index rebuild: %w", err)
+	}
+	return result, nil
+}
+
+// CurrentVectors returns only hash- and shape-current vectors for sources.
+// Its StatusReport retains every missing, drifted, malformed, and orphaned
+// classification so retrieval can warn instead of silently degrading.
+func CurrentVectors(ctx context.Context, path string, sources []store.EmbeddingSource) ([]Vector, StatusReport, error) {
+	report, err := Status(ctx, path, sources)
+	if err != nil || report.Current == 0 {
+		return nil, report, err
+	}
+	current := make(map[[2]string]bool, report.Current)
+	for _, entry := range report.Entries {
+		if entry.State == StatusCurrent {
+			current[[2]string{entry.SourceType, entry.SourceID}] = true
+		}
+	}
+	dsn, err := sqliteURI(path, true)
+	if err != nil {
+		return nil, report, err
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, report, fmt.Errorf("open embedding side-store %s read-only: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	defer func() { _ = db.Close() }()
+	rows, err := db.QueryContext(ctx, `SELECT source_type, source_id, vector
+FROM embeddings WHERE model_name = ? AND dimension = ? ORDER BY source_type, source_id`,
+		EmbeddingModelName, EmbeddingDim)
+	if err != nil {
+		return nil, report, fmt.Errorf("read current embedding vectors: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	vectors := make([]Vector, 0, report.Current)
+	for rows.Next() {
+		var vector Vector
+		var blob []byte
+		if err := rows.Scan(&vector.SourceType, &vector.SourceID, &blob); err != nil {
+			return nil, report, fmt.Errorf("scan current embedding vector: %w", err)
+		}
+		if !current[[2]string{vector.SourceType, vector.SourceID}] {
+			continue
+		}
+		vector.Values = decodeVector(blob)
+		vectors = append(vectors, vector)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, report, fmt.Errorf("read current embedding vectors: %w", err)
+	}
+	return vectors, report, nil
+}
+
+// RecordRecall increments the local denominator for every call and the empty
+// numerator when no result cleared the configured floors. It initializes the
+// existing side-store, never the Dolt source store.
+func RecordRecall(ctx context.Context, path string, empty bool) (err error) {
+	if path == "" {
+		return errors.New("embedding side-store path is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create embedding side-store directory: %w", err)
+	}
+	dsn, err := sqliteURI(path, false)
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("open recall observability store %s: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	defer func() { err = errors.Join(err, db.Close()) }()
+	if err := initializeSideStore(ctx, db); err != nil {
+		return fmt.Errorf("initialize recall observability store %s: %w", path, err)
+	}
+	emptyIncrement := 0
+	if empty {
+		emptyIncrement = 1
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO recall_observability (id, recall_count, empty_count)
+VALUES (1, 1, ?) ON CONFLICT (id) DO UPDATE SET
+recall_count = recall_count + 1, empty_count = empty_count + excluded.empty_count`, emptyIncrement)
+	if err != nil {
+		return fmt.Errorf("record recall observability: %w", err)
+	}
+	return nil
+}
+
+// ReadObservability reads the local counters without creating a missing file
+// or upgrading an older side-store that has no observability table yet.
+func ReadObservability(ctx context.Context, path string) (result Observability, err error) {
+	if path == "" {
+		return result, errors.New("embedding side-store path is required")
+	}
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		return result, nil
+	} else if statErr != nil {
+		return result, fmt.Errorf("stat recall observability store %s: %w", path, statErr)
+	}
+	dsn, err := sqliteURI(path, true)
+	if err != nil {
+		return result, err
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return result, fmt.Errorf("open recall observability store %s read-only: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	defer func() { err = errors.Join(err, db.Close()) }()
+	var tables int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'recall_observability'").Scan(&tables); err != nil {
+		return result, fmt.Errorf("look for recall observability counters: %w", err)
+	}
+	if tables == 0 {
+		return result, nil
+	}
+	err = db.QueryRowContext(ctx,
+		"SELECT recall_count, empty_count FROM recall_observability WHERE id = 1").
+		Scan(&result.RecallCount, &result.EmptyCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Observability{}, nil
+	}
+	if err != nil {
+		return result, fmt.Errorf("read recall observability counters: %w", err)
+	}
+	if result.RecallCount > 0 {
+		result.EmptyRate = float64(result.EmptyCount) / float64(result.RecallCount)
 	}
 	return result, nil
 }
@@ -380,6 +533,23 @@ func encodeVector(vector []float32) ([]byte, error) {
 		binary.LittleEndian.PutUint32(blob[i*4:], math.Float32bits(value))
 	}
 	return blob, nil
+}
+
+func decodeVector(blob []byte) []float32 {
+	vector := make([]float32, len(blob)/4)
+	for i := range vector {
+		vector[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
+	}
+	return vector
+}
+
+func initializeSideStore(ctx context.Context, db *sql.DB) error {
+	for _, statement := range []string{embeddingsSchema, recallObservabilitySchema} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sqliteURI(path string, readOnly bool) (string, error) {

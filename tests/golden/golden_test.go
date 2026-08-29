@@ -103,9 +103,9 @@ func logSummary(t *testing.T, s evalSummary) {
 // safety failures) on the same 22-query golden set and hermetic fixture
 // shape. MD5's M0 before-state (§19) chose Dolt FULLTEXT, so this test keeps
 // that original pass/fail assertion: a run where FULLTEXT stops carrying the
-// gate must fail loudly, not pass silently on the BM25 contingency. BM25 and
-// the vector-only configuration (no lexical gather at all) are still measured
-// and logged on every run, both
+// gate must fail loudly, not pass silently on the BM25 contingency. The M2
+// selected assertion traverses production recall; BM25 and the in-memory
+// vector-only configuration are still measured and logged on every run, both
 // because §8.1 R2's contingency needs to stay proven working and because
 // the FULLTEXT-vs-BM25-vs-vector-only comparison is itself a recorded
 // finding — see docs/spikes/m0-rig3.md §1/§4/§7 for what it showed.
@@ -131,7 +131,15 @@ func TestRetrievalGolden(t *testing.T) {
 	logSummary(t, bmSummary)
 
 	h.lexical = noLexicalGatherer{}
-	vecSummary := runGoldenEval(t, h, golden)
+	controlSummary := runGoldenEval(t, h, golden)
+	logSummary(t, controlSummary)
+
+	// The selected M2 assertion now runs the original fixture through the
+	// shipped migration schema, embedding side-store, and retrieval package.
+	// The in-memory control above remains measurement-only for the historical
+	// strategy comparison and scale sweep.
+	production := setupProductionHarness(t, h.engine)
+	vecSummary := runProductionGoldenEval(t, production, golden)
 	logSummary(t, vecSummary)
 	if !meetsGate(bmSummary) {
 		t.Logf("note: BM25 contingency did not clear the gate on this run (recall@3=%.4f, safety_failures=%d)",

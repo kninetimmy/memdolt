@@ -33,12 +33,12 @@ func TestDoctorReportsAnAbsentStoreWithoutCreatingOne(t *testing.T) {
 	if !report.OK {
 		t.Fatalf("doctor on an empty directory reported not-ok: %+v", report.Checks)
 	}
-	for _, name := range []string{"store-lock", "ipc", "schema-version"} {
+	for _, name := range []string{"store-lock", "ipc", "schema-version", "empty-recall-rate"} {
 		check := findCheck(t, report, name)
 		if check.Status != statusOK {
 			t.Fatalf("check %q = %s (%s), want ok", name, check.Status, check.Detail)
 		}
-		if !strings.Contains(check.Detail, "absent") {
+		if name != "empty-recall-rate" && !strings.Contains(check.Detail, "absent") {
 			t.Fatalf("check %q says %q, want it to report the absence", name, check.Detail)
 		}
 	}
@@ -172,7 +172,7 @@ func TestDoctorFailsAndExitsNonzeroOnASchemaNewerThanTheBinary(t *testing.T) {
 func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	out := runMemdolt(t, "doctor", "--dir", scratchDir(t))
 
-	for _, want := range []string{"memdolt doctor:", "store-lock", "ipc", "schema-version", statusOK} {
+	for _, want := range []string{"memdolt doctor:", "store-lock", "ipc", "schema-version", "empty-recall-rate", statusOK} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output %q does not mention %q", out, want)
 		}

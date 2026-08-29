@@ -136,9 +136,11 @@ func Compile(patterns []string) (*List, error) {
 // deny-list from an unread one.
 //
 // Load reads the whole config file but takes only `[deny_list]` from it.
-// The rest of PRD §11.3's keys have no reader yet; when the config layer
-// that owns them lands, it hands its patterns to Compile and this function
-// goes away.
+// Before the recall surface landed, no other table had a reader. After it,
+// internal/retrieval.LoadConfig independently reads `[retrieval]`; that does
+// not broaden this function or make retrieval failures govern write-time
+// deny-list enforcement. A future unified config owner can still hand these
+// patterns to Compile and retire this loader.
 func Load(path string) (*List, error) {
 	var cfg struct {
 		DenyList struct {

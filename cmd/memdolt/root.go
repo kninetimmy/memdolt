@@ -36,6 +36,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newDoctorCommand())
 	root.AddCommand(newIndexCommand())
 	root.AddCommand(newInitCommand())
+	root.AddCommand(newRecallCommand())
 	root.AddCommand(newVersionCommand())
 
 	// The direct lanes of PRD §3.1.

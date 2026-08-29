@@ -14,22 +14,11 @@ import (
 // This is a typed read on LocalStore rather than a caller assembling SQL through
 // Store.Query. It neither changes source rows nor writes a Dolt commit.
 func (s *Store) EmbeddingSources(ctx context.Context) ([]store.EmbeddingSource, error) {
-	db, err := s.handle()
+	conn, err := s.committedMainConn(ctx, "embedding sources")
 	if err != nil {
 		return nil, err
-	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("localdolt: acquire connection for embedding sources: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
-	branch, err := activeBranch(ctx, conn)
-	if err != nil {
-		return nil, err
-	}
-	if branch != MainBranch {
-		return nil, fmt.Errorf("localdolt: embedding sources are read from committed %q only; the store is on %q", MainBranch, branch)
-	}
 
 	var sources []store.EmbeddingSource
 	queries := []struct {
