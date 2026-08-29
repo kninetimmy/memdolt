@@ -166,6 +166,54 @@ func TestHybridDoneTaskWithNullUpdatedAtHasNoAgeDecay(t *testing.T) {
 	}
 }
 
+func TestRecallHydratesSparseSourcesInFTSAndHybridModes(t *testing.T) {
+	const query = "nullablehydrationprobe"
+	ids := []string{
+		"01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		"01ARZ3NDEKTSV4RRFFQ69G5FAW",
+		"01ARZ3NDEKTSV4RRFFQ69G5FAX",
+		"01ARZ3NDEKTSV4RRFFQ69G5FAZ",
+		"01ARZ3NDEKTSV4RRFFQ69G5FB0",
+	}
+	f := newRecallFixture(t, []store.Statement{
+		{SQL: "INSERT INTO facts (id, `key`, value, source, kind, verified_at, created_at, superseded_by) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, NULL)", Args: []any{ids[0], query, query}},
+		{SQL: "INSERT INTO decisions (id, title, rationale, summary, source, status, decided_at, superseded_by) VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL)", Args: []any{ids[1], query}},
+		{SQL: "INSERT INTO tasks (id, title, notes, status, created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, NULL)", Args: []any{ids[2], query}},
+		{SQL: "INSERT INTO documents (id, path, title, content_hash, byte_len, source, ingested_at) VALUES (?, NULL, NULL, NULL, NULL, NULL, NULL)", Args: []any{"01ARZ3NDEKTSV4RRFFQ69G5FAY"}},
+		{SQL: "INSERT INTO doc_chunks (id, doc_id, ord, heading_path, body) VALUES (?, ?, NULL, ?, NULL)", Args: []any{ids[3], "01ARZ3NDEKTSV4RRFFQ69G5FAY", query}},
+		{SQL: "INSERT INTO doc_chunks (id, doc_id, ord, heading_path, body) VALUES (?, NULL, NULL, ?, NULL)", Args: []any{ids[4], query}},
+	}, []string{query})
+
+	sourceTypes := []string{"fact", "decision", "task", "doc_chunk"}
+	for _, mode := range []Mode{ModeFTS, ModeHybrid} {
+		cfg := DefaultConfig()
+		cfg.Mode = mode
+		cfg.UseReranker = false
+		inference := fakeInference{}
+		if mode == ModeHybrid {
+			sources, err := f.st.EmbeddingSources(f.ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := embedding.Rebuild(f.ctx, f.path, sources, inference.Embed); err != nil {
+				t.Fatal(err)
+			}
+		}
+		response, err := Recall(f.ctx, f.st, f.path, inference, cfg, Options{
+			Query: query, Mode: mode, MaxResults: len(ids), SourceTypes: sourceTypes,
+		})
+		if err != nil {
+			t.Fatalf("%s recall: %v", mode, err)
+		}
+		if response.ReturnedCount != len(ids) {
+			t.Fatalf("%s sparse results = %+v, want %d", mode, response.Results, len(ids))
+		}
+		for _, id := range ids {
+			findHit(t, response.Results, id)
+		}
+	}
+}
+
 func TestHybridUsesVectorOnlyWhenCurrentAndLexicalFallbackForEveryStaleShape(t *testing.T) {
 	ids := []string{
 		"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW",

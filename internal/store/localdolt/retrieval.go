@@ -165,13 +165,14 @@ FROM facts AS OF 'HEAD' ORDER BY id`)
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var source store.RecallSource
-		var verified sql.NullTime
+		var verified, created sql.NullTime
 		source.SourceType = "fact"
 		if err := rows.Scan(&source.SourceID, &source.Title, &source.Body, &source.Source,
-			&source.Kind, &verified, &source.CreatedAt, &source.SupersededBy); err != nil {
+			&source.Kind, &verified, &created, &source.SupersededBy); err != nil {
 			return fmt.Errorf("localdolt: scan fact recall source: %w", err)
 		}
 		source.VerifiedAt = timePointer(verified)
+		source.CreatedAt = timeValue(created)
 		*out = append(*out, source)
 	}
 	return rows.Err()
@@ -179,7 +180,7 @@ FROM facts AS OF 'HEAD' ORDER BY id`)
 
 func appendDecisionSources(ctx context.Context, conn *sql.Conn, out *[]store.RecallSource) error {
 	rows, err := conn.QueryContext(ctx, `SELECT id, COALESCE(title, ''), COALESCE(rationale, ''),
-COALESCE(summary, ''), COALESCE(source, ''), status, decided_at, COALESCE(superseded_by, '')
+COALESCE(summary, ''), COALESCE(source, ''), COALESCE(status, ''), decided_at, COALESCE(superseded_by, '')
 FROM decisions AS OF 'HEAD' ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("localdolt: read decision recall sources: %w", err)
@@ -187,11 +188,13 @@ FROM decisions AS OF 'HEAD' ORDER BY id`)
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var source store.RecallSource
+		var decided sql.NullTime
 		source.SourceType = "decision"
 		if err := rows.Scan(&source.SourceID, &source.Title, &source.Body, &source.Summary,
-			&source.Source, &source.Status, &source.CreatedAt, &source.SupersededBy); err != nil {
+			&source.Source, &source.Status, &decided, &source.SupersededBy); err != nil {
 			return fmt.Errorf("localdolt: scan decision recall source: %w", err)
 		}
+		source.CreatedAt = timeValue(decided)
 		*out = append(*out, source)
 	}
 	return rows.Err()
@@ -199,19 +202,20 @@ FROM decisions AS OF 'HEAD' ORDER BY id`)
 
 func appendTaskSources(ctx context.Context, conn *sql.Conn, out *[]store.RecallSource) error {
 	rows, err := conn.QueryContext(ctx, `SELECT id, COALESCE(title, ''), COALESCE(notes, ''),
-status, created_at, updated_at FROM tasks AS OF 'HEAD' ORDER BY id`)
+COALESCE(status, ''), created_at, updated_at FROM tasks AS OF 'HEAD' ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("localdolt: read task recall sources: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var source store.RecallSource
-		var updated sql.NullTime
+		var created, updated sql.NullTime
 		source.SourceType = "task"
 		if err := rows.Scan(&source.SourceID, &source.Title, &source.Body, &source.Status,
-			&source.CreatedAt, &updated); err != nil {
+			&created, &updated); err != nil {
 			return fmt.Errorf("localdolt: scan task recall source: %w", err)
 		}
+		source.CreatedAt = timeValue(created)
 		source.UpdatedAt = timePointer(updated)
 		*out = append(*out, source)
 	}
@@ -232,10 +236,12 @@ FROM documents AS OF 'HEAD' ORDER BY id`)
 	for rows.Next() {
 		var id string
 		var doc document
-		if err := rows.Scan(&id, &doc.title, &doc.source, &doc.ingested); err != nil {
+		var ingested sql.NullTime
+		if err := rows.Scan(&id, &doc.title, &doc.source, &ingested); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("localdolt: scan recall document: %w", err)
 		}
+		doc.ingested = timeValue(ingested)
 		documents[id] = doc
 	}
 	if err := rows.Err(); err != nil {
@@ -254,14 +260,19 @@ FROM doc_chunks AS OF 'HEAD' ORDER BY id`)
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var source store.RecallSource
-		var docID, heading string
+		var docID sql.NullString
+		var heading string
 		source.SourceType = "doc_chunk"
 		if err := rows.Scan(&source.SourceID, &docID, &heading, &source.Body); err != nil {
 			return fmt.Errorf("localdolt: scan document-chunk recall source: %w", err)
 		}
-		doc, ok := documents[docID]
-		if !ok {
-			return fmt.Errorf("localdolt: document chunk %s refers to missing committed document %s", source.SourceID, docID)
+		var doc document
+		if docID.Valid {
+			var ok bool
+			doc, ok = documents[docID.String]
+			if !ok {
+				return fmt.Errorf("localdolt: document chunk %s refers to missing committed document %s", source.SourceID, docID.String)
+			}
 		}
 		switch {
 		case doc.title == "":
@@ -283,4 +294,11 @@ func timePointer(value sql.NullTime) *time.Time {
 		return nil
 	}
 	return &value.Time
+}
+
+func timeValue(value sql.NullTime) time.Time {
+	if !value.Valid {
+		return time.Time{}
+	}
+	return value.Time
 }
