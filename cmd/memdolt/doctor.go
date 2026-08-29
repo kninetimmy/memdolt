@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kninetimmy/memdolt/internal/embedding"
 	"github.com/kninetimmy/memdolt/internal/ipc"
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/singleowner"
@@ -55,12 +56,13 @@ func newDoctorCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Report this repository's store ownership, IPC reachability and schema skew",
+		Short: "Report store ownership, IPC reachability, schema skew, and empty recalls",
 		Long: "Run the M1 health checks of PRD §5.2 and §6.4 against this repository:\n\n" +
 			"  store-lock      who, if anyone, owns the store — held, an orphaned\n" +
 			"                  ownership record, or absent\n" +
 			"  ipc             whether a live owner answers on its loopback endpoint\n" +
-			"  schema-version  whether the store's schema is newer than this binary\n\n" +
+			"  schema-version  whether the store's schema is newer than this binary\n" +
+			"  empty-recall-rate  local empty-above-floor recall count and rate\n\n" +
 			"Against a directory with no store, doctor reports that rather than initializing\n" +
 			"one or creating its directory. With no live owner, it opens an existing store\n" +
 			"directly to read its schema; this briefly takes the ownership lock and may\n" +
@@ -98,6 +100,7 @@ func runDoctor(cmd *cobra.Command, dir string) error {
 			lockCheck(paths),
 			owner,
 			schemaCheck(ctx, paths, ownerLive),
+			emptyRecallCheck(ctx, paths),
 		},
 	}
 
@@ -116,6 +119,21 @@ func runDoctor(cmd *cobra.Command, dir string) error {
 		return fmt.Errorf("doctor: %d of %d checks failed", failed, len(report.Checks))
 	}
 	return nil
+}
+
+// emptyRecallCheck reports the machine-local observability counter required by
+// PRD §8.1. Reading it never creates a missing embeddings.sqlite file.
+func emptyRecallCheck(ctx context.Context, paths layout.Paths) doctorCheck {
+	const name = "empty-recall-rate"
+	status, err := embedding.ReadObservability(ctx, paths.EmbeddingsFile())
+	if err != nil {
+		return newCheck(name, statusFail, "%v", err)
+	}
+	if status.RecallCount == 0 {
+		return newCheck(name, statusOK, "0 empty of 0 recall calls (rate 0.0%%; no calls recorded)")
+	}
+	return newCheck(name, statusOK, "%d empty of %d recall calls (rate %.1f%%)",
+		status.EmptyCount, status.RecallCount, status.EmptyRate*100)
 }
 
 // lockCheck reports the ownership state of the store's own lock file

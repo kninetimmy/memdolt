@@ -59,7 +59,8 @@ export GOFLAGS=-tags=gms_pure_go
 - Check a repository: `go run ./cmd/memdolt doctor` reports the store
   lock's ownership state (held, an orphaned record, absent), whether a live
   owner answers on its IPC endpoint, and whether the store's schema is
-  newer than the binary (PRD §5.2.4, §6.4). Against a directory with no
+  newer than the binary (PRD §5.2.4, §6.4). It also names the machine-local
+  empty-recall count and rate from PRD §8.1. Against a directory with no
   store it reports the absence without initializing a store or creating its
   directory. With no live owner, it opens an existing store directly to read
   its schema; this briefly takes the ownership lock and may create
@@ -74,6 +75,13 @@ export GOFLAGS=-tags=gms_pure_go
   is read-only and does not create a missing side-store; `rebuild` writes
   SQLite only and never changes a Dolt source row or commit. Both accept
   `--dir` and `--json` like the other CLI surfaces.
+- Recall durable memory (PRD §8): `go run ./cmd/memdolt recall <query>` uses
+  the configured FTS or hybrid mode over committed facts, decisions, tasks,
+  and document chunks. Hybrid candidate ordering is vector-only when vectors
+  are current; stale vector rows warn and may enter through the explicit
+  lexical fallback. `--source-type`, `--max-results`, `--accepted-only`,
+  `--include-stale`, `--no-rerank`, `--min-rerank-score`, and `--provenance`
+  narrow or annotate one call; `--json` emits the complete response object.
 - Write and read the direct lanes (PRD §3.1): `memdolt task add|done|block|list`,
   `memdolt note add|list`, `memdolt command record|get`, `memdolt state set|show`
   and `memdolt arch set|show`. Each write is one Dolt commit on `main`, authored
@@ -118,8 +126,10 @@ numbers: `docs/spikes/m0-rig1.md`.
 
 ## The deny-list (PRD §11.3)
 
-`.memdolt/config.toml` is per-machine and optional. `[deny_list]` is the
-only table with a reader so far:
+`.memdolt/config.toml` is per-machine and optional. **Before recall,
+`[deny_list]` was the only table with a reader. After recall, `[retrieval]`
+also has a reader for retrieval behavior; deny-list enforcement still reads
+only `[deny_list]` and remains independent.** A deny-list is configured as:
 
 ```toml
 [deny_list]

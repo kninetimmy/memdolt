@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kninetimmy/memdolt/internal/denylist"
 	"github.com/kninetimmy/memdolt/internal/singleowner"
@@ -91,6 +92,40 @@ type EmbeddingSource struct {
 	SourceType string
 	SourceID   string
 	Text       string
+}
+
+// RecallSource is one committed durable row hydrated for retrieval. The
+// concrete LocalStore reader supplies these from main's HEAD; derived vectors
+// remain outside this type and outside Dolt (PRD §8).
+type RecallSource struct {
+	SourceType   string
+	SourceID     string
+	Title        string
+	Body         string
+	Summary      string
+	Source       string
+	Status       string
+	Kind         string
+	SupersededBy string
+	VerifiedAt   *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    *time.Time
+}
+
+// LexicalHit is one distinct durable row returned by a per-source FULLTEXT
+// gather. Score is Dolt's higher-is-better natural-language relevance.
+type LexicalHit struct {
+	SourceType string
+	SourceID   string
+	Score      float64
+}
+
+// CommitProvenance is the dolt_blame metadata for the commit that last
+// changed a durable row.
+type CommitProvenance struct {
+	Hash   string    `json:"hash"`
+	Author string    `json:"author"`
+	Date   time.Time `json:"date"`
 }
 
 // ErrLocked reports that another live process owns the store. It is the
