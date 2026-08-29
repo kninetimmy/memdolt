@@ -66,6 +66,14 @@ export GOFLAGS=-tags=gms_pure_go
   `.memdolt/LOCK`, but makes no durable database change. It exits nonzero
   when a check fails. A condition memdolt clears by itself (a stale lock
   record, an orphaned pidfile) is a warning and exits zero.
+- Build or inspect the derived embedding side-store (PRD §8.2): `go run
+  ./cmd/memdolt index rebuild` synchronizes `.memdolt/embeddings.sqlite`
+  with every committed fact, decision, task, and document chunk, while
+  `go run ./cmd/memdolt index status` reports current, missing,
+  content-hash-mismatched, wrong-byte-length, and orphaned rows. `status`
+  is read-only and does not create a missing side-store; `rebuild` writes
+  SQLite only and never changes a Dolt source row or commit. Both accept
+  `--dir` and `--json` like the other CLI surfaces.
 - Write and read the direct lanes (PRD §3.1): `memdolt task add|done|block|list`,
   `memdolt note add|list`, `memdolt command record|get`, `memdolt state set|show`
   and `memdolt arch set|show`. Each write is one Dolt commit on `main`, authored

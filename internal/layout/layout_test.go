@@ -25,6 +25,7 @@ func TestPathsAreRootedBeneathTheCallerSuppliedBase(t *testing.T) {
 		"lock file":     {paths.LockFile(), filepath.Join(base, ".memdolt", "LOCK")},
 		"pidfile":       {paths.PidFile(), filepath.Join(base, ".memdolt", "server.pid")},
 		"config file":   {paths.ConfigFile(), filepath.Join(base, ".memdolt", "config.toml")},
+		"embeddings":    {paths.EmbeddingsFile(), filepath.Join(base, ".memdolt", "embeddings.sqlite")},
 	}
 	for name, tc := range cases {
 		if tc.got != tc.want {

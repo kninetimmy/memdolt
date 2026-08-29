@@ -12,6 +12,7 @@
 //	<base>/.memdolt/          memdolt's per-repository state
 //	  dolt/                   Dolt data dir; database name = "memory"
 //	  config.toml             per-machine configuration (§11.3)
+//	  embeddings.sqlite       derived embedding side-store (§8.2)
 //	  LOCK                    memdolt's single-owner store lock (§5.2)
 //	  server.pid              MCP server pidfile (§5.2)
 package layout
@@ -52,6 +53,10 @@ const (
 	// default, and a repository with no config file is configured with
 	// those defaults.
 	ConfigFileName = "config.toml"
+
+	// EmbeddingsFileName is the derived, machine-local embedding side-store
+	// (PRD §5.3, §8.2). It never belongs in the Dolt data directory.
+	EmbeddingsFileName = "embeddings.sqlite"
 )
 
 // ErrNoBaseDir is returned by New when it is given an empty base directory.
@@ -97,3 +102,7 @@ func (p Paths) PidFile() string { return filepath.Join(p.Dir(), PidFileName) }
 // ConfigFile returns <base>/.memdolt/config.toml, this repository's
 // per-machine configuration (PRD §11.3).
 func (p Paths) ConfigFile() string { return filepath.Join(p.Dir(), ConfigFileName) }
+
+// EmbeddingsFile returns <base>/.memdolt/embeddings.sqlite, the derived
+// embedding side-store that is deliberately outside Dolt history (PRD §8.2).
+func (p Paths) EmbeddingsFile() string { return filepath.Join(p.Dir(), EmbeddingsFileName) }

@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	embeddingModelName = "bge-small-en-v1.5"
+	// EmbeddingModelName keys vectors in the derived side-store (PRD §8.2).
+	EmbeddingModelName = "bge-small-en-v1.5"
 	rerankerModelName  = "ms-marco-MiniLM-L-6-v2"
 )
 
@@ -48,11 +49,11 @@ func Open(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, err
 	}
 
-	embedModel, err := requiredModelFile(artifacts, embeddingModelName, "model.onnx")
+	embedModel, err := requiredModelFile(artifacts, EmbeddingModelName, "model.onnx")
 	if err != nil {
 		return nil, err
 	}
-	embedTokenizerJSON, err := requiredModelFile(artifacts, embeddingModelName, "tokenizer.json")
+	embedTokenizerJSON, err := requiredModelFile(artifacts, EmbeddingModelName, "tokenizer.json")
 	if err != nil {
 		return nil, err
 	}
