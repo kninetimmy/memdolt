@@ -60,10 +60,11 @@ const scaleDocTitle = "Synthetic Corpus"
 //
 // Negatives are ordinary corpusRow values, so they get exactly the
 // fixture's persist-side treatment (embedText/rerankText, insertRows'
-// §6.1-shaped inserts). Generated facts reuse title as their key, so the
-// uniqueness screen is also what satisfies facts' UNIQUE(live_key);
-// generated doc_chunks continue the shared document's ord sequence past
-// the fixture's 0–2.
+// §6.1-shaped inserts). Generated facts reuse title as their key; that key
+// is distinct in the current deterministic corpus, and a future collision
+// fails loudly during insertion. The uniqueness screen above checks
+// title/body pairs, not fact keys. Generated doc_chunks continue the shared
+// document's ord sequence past the fixture's 0–2.
 func scaleCorpus(t *testing.T, golden *goldenFile) []corpusRow {
 	t.Helper()
 
