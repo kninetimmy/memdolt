@@ -11,9 +11,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kninetimmy/memdolt/internal/ipc"
 	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
+	"github.com/kninetimmy/memdolt/internal/storeipc"
 )
 
 // This file is the CLI over PRD §3.1's direct lanes: tasks, session notes,
@@ -28,6 +30,13 @@ import (
 type storeFlags struct {
 	dir   string
 	actor string
+}
+
+// commandStore is the complete initialized store surface shipped commands
+// use. LocalStore and the live owner's IPC client both implement it.
+type commandStore interface {
+	storeipc.Backend
+	DataDir() string
 }
 
 // bind adds the flags a read needs.
@@ -50,7 +59,7 @@ func (f *storeFlags) bindWriter(cmd *cobra.Command) *cobra.Command {
 // run opens the store the flags name, hands its direct lanes to fn and
 // closes it again.
 func (f *storeFlags) run(cmd *cobra.Command, fn func(context.Context, *memory.Lanes) error) error {
-	return f.runStore(cmd, func(ctx context.Context, st *localdolt.Store, actor memory.Actor) error {
+	return f.runStore(cmd, func(ctx context.Context, st commandStore, actor memory.Actor) error {
 		return fn(ctx, memory.New(st, actor))
 	})
 }
@@ -59,18 +68,15 @@ func (f *storeFlags) run(cmd *cobra.Command, fn func(context.Context, *memory.La
 // again. The direct lanes reach it through run, which wraps the store in
 // internal/memory; review (review.go) needs the store itself, because a
 // proposal branch is not one of §3.1's lanes.
-func (f *storeFlags) runStore(cmd *cobra.Command, fn func(context.Context, *localdolt.Store, memory.Actor) error) (err error) {
+func (f *storeFlags) runStore(cmd *cobra.Command, fn func(context.Context, commandStore, memory.Actor) error) (err error) {
 	actor, err := memory.NormalizeActor(f.actor)
 	if err != nil {
 		return err
 	}
 
-	st, err := localdolt.New(localdolt.Config{BaseDir: f.dir, Actor: actor.CommitAuthor()})
-	if err != nil {
-		return err
-	}
 	ctx := cmd.Context()
-	if err := st.Open(ctx); err != nil {
+	st, err := openCommandStore(ctx, f.dir, actor.CommitAuthor())
+	if err != nil {
 		return err
 	}
 	// The store holds the single-owner lock (PRD §5.2) until it is closed,
@@ -84,12 +90,41 @@ func (f *storeFlags) runStore(cmd *cobra.Command, fn func(context.Context, *loca
 	return fn(ctx, st, actor)
 }
 
+// openCommandStore routes through a verified live owner and opens embedded
+// Dolt directly only when Probe proves there is no live owner. Probe failures
+// fail closed: guessing "no owner" would violate PRD §5.2's single-owner rule.
+func openCommandStore(ctx context.Context, baseDir string, actor store.Actor) (commandStore, error) {
+	status, _, err := ipc.Probe(ctx, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("check for a live store owner: %w", err)
+	}
+	if status == ipc.StatusOwnerLive {
+		st, err := storeipc.DialOwnerStore(baseDir)
+		if err != nil {
+			return nil, fmt.Errorf("connect to the live store owner: %w", err)
+		}
+		if err := st.Open(ctx); err != nil {
+			return nil, err
+		}
+		return st, nil
+	}
+
+	st, err := localdolt.New(localdolt.Config{BaseDir: baseDir, Actor: actor})
+	if err != nil {
+		return nil, err
+	}
+	if err := st.Open(ctx); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
 // requireCurrentSchema refuses a store the shipped statements would not
 // fit. Open already turns away a store newer than this binary (§6.4); this
 // is the other direction, where the tables a lane writes may not exist
 // yet, and it names the command that fixes it rather than letting the
 // write fail as "table not found".
-func requireCurrentSchema(ctx context.Context, st *localdolt.Store) error {
+func requireCurrentSchema(ctx context.Context, st commandStore) error {
 	version, err := st.SchemaVersion(ctx)
 	if err != nil {
 		return err

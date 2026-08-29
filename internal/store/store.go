@@ -12,7 +12,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,11 +28,13 @@ import (
 // version-controlled write that produces a Dolt commit, and a read. It is
 // deliberately not the shape of the finished interface.
 //
-// M1 extends it with the typed memory operations PRD §5.1 sketches —
-// memory CRUD, proposals, review, recall gathering, doc ops and render
-// reads — at which point Query's raw SQL, which exists so the M0 rig can
-// interrogate dolt_log and its own probe tables, gives way to typed calls.
-// Nothing outside M0 should be built against Query.
+// This originally said M1 would replace Query with typed calls. Before owner
+// routing, that replacement had not happened: direct-lane memory and the M0
+// soak both still used Query, while concrete LocalStore methods carried the
+// typed proposal/review/retrieval surface. After owner routing, Query remains
+// the shared memory/soak seam and storeipc.Backend explicitly composes the
+// typed surface for LocalStore and OwnerStore. Nothing new should build raw
+// SQL against Query when a typed operation already exists.
 type Store interface {
 	// Open acquires the store and makes it usable. It has two refusals,
 	// and they bind different sets of implementations.
@@ -78,10 +79,22 @@ type Store interface {
 	// passed raw SQL through unchanged, so a caller could leave an uncommitted
 	// write for a later version-controlled commit to include. The caller closes
 	// the returned rows.
-	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	Query(ctx context.Context, query string, args ...any) (Rows, error)
 
 	// Close releases the store, including its single-owner lock. It is
 	// idempotent.
+	Close() error
+}
+
+// Rows is the database/sql result surface memory readers consume. LocalStore
+// returns *sql.Rows; an owner-routed Store returns the same cells over IPC.
+// Keeping this narrow interface is what lets both implementations satisfy
+// Store without making callers parse a second result shape.
+type Rows interface {
+	Columns() ([]string, error)
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
 	Close() error
 }
 

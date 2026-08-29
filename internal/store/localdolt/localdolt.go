@@ -342,7 +342,7 @@ func commitTx(ctx context.Context, tx *sql.Tx, req store.CommitRequest) (store.C
 // so a write could remain uncommitted in Dolt's working set; now every other
 // statement is rejected before the database executes it. The caller closes the
 // returned rows.
-func (s *Store) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+func (s *Store) Query(ctx context.Context, query string, args ...any) (store.Rows, error) {
 	db, err := s.handle()
 	if err != nil {
 		return nil, err

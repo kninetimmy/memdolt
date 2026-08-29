@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kninetimmy/memdolt/internal/ipc"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -51,6 +52,14 @@ func newInitCommand() *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, dir string) (err error) {
+	status, _, err := ipc.Probe(cmd.Context(), dir)
+	if err != nil {
+		return fmt.Errorf("check for a live store owner before init: %w", err)
+	}
+	if status == ipc.StatusOwnerLive {
+		return errors.New("memdolt init cannot migrate a store while its owner is running; stop the owner and rerun `memdolt init`")
+	}
+
 	st, err := localdolt.New(localdolt.Config{BaseDir: dir, Actor: cliActor})
 	if err != nil {
 		return err

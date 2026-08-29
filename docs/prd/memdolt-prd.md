@@ -163,6 +163,30 @@ Research findings **[V]**: `github.com/dolthub/driver` opens a Dolt data dir in-
 3. Startup recovery: on open, if a lock file carries an ownership record and its **advisory lock is free**, the process that wrote it is gone: clear the record in place and log loudly with the stale pid. **[V]** (M0 rig 1) — the ergonomics marked [verify] here resolve as *the lock decides, the pid describes*. The kernel releases an advisory lock however a process exits, including a kill, so a free lock is proof; a pid cannot tell a live owner from an unrelated process that inherited a recycled pid, and rig 1 measured a correct recovery against a record naming a pid that was demonstrably alive. The record is cleared in place rather than unlinked, because unlinking a file while holding a lock on it lets two processes lock two inodes under one name. Numbers and method: `docs/spikes/m0-rig1.md`.
 4. `doctor` checks: stale LOCK, orphaned pidfile, IPC reachability.
 
+**Completed for the shipped CLI surface in M3:** before this routing pass,
+the authenticated endpoint carried only the M0 `Commit`/`Query` pair and
+`doctor` assembled its schema read from those raw queries. The CLI still
+constructed `LocalStore` for task/note/command/narrative, review,
+embedding-source, recall/evaluation and search operations, and proposal methods
+had no routed counterpart; the live owner's advisory lock therefore refused
+those CLI calls. After this pass, all use one owner-client store surface:
+the owner executes the same memory, proposal, review, retrieval, search and
+schema methods as direct mode, while the CLI retains rendering and the local
+derived embedding side-store. The raw M0 pair remains for the concurrency soak
+and for `internal/memory`'s shared statements; its read-only restriction is a
+`Store.Query` restriction and therefore binds every implementation, not only
+the IPC route. The typed operation allow-list is narrower: it binds that route
+alone, so adding another method to a store does not expose it without naming it
+on both handler and client.
+
+`memdolt init` is the lifecycle exception. Before, it attempted a direct open
+and surfaced the generic ownership-lock refusal. After, a verified live owner
+causes a specific “stop the owner and rerun `memdolt init`” refusal before any
+embedded open; with no live owner its creation, migration, output and
+idempotence are unchanged. This stop-owner restriction binds `init` alone, not
+every lifecycle or store-independent command: `doctor` continues to inspect a
+live owner, and `version` remains store-independent.
+
 This is more machinery than memhub needed (SQLite WAL handles multi-process natively). It is the honest price of Dolt embedded, paid once, in one module.
 
 ### 5.3 On-disk layout

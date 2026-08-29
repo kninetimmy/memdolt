@@ -12,7 +12,6 @@ import (
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/retrieval"
-	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
 func newEvalCommand() *cobra.Command {
@@ -48,7 +47,7 @@ func newEvalRetrievalCommand() *cobra.Command {
 				return err
 			}
 
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				paths, err := layout.New(flags.dir)
 				if err != nil {
 					return err

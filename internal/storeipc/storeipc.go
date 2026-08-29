@@ -13,23 +13,29 @@
 //
 // # Wire format
 //
-// Two routes, JSON in and JSON out, POST only, both behind the endpoint's
+// Three routes, JSON in and JSON out, POST only, all behind the endpoint's
 // existing X-Memdolt-Token check (internal/ipc applies it to everything
 // Config.Handler serves, so nothing here re-implements authentication and
 // nothing here ever sees the token):
 //
 //	POST /v0/store/commit  {statements, message, author} -> {hash, rowsAffected}
 //	POST /v0/store/query   {sql, args}                   -> {columns, rows}
+//	POST /v1/store/operation {operation, args}           -> typed result
 //
-// It is deliberately the smallest thing that carries store.Store's M0
-// subset, including Query's raw SQL and untyped result grid, because the M0
-// rig has to interrogate dolt_log and its own probe tables. Before the Store
-// boundary was enforced, this route forwarded every statement unchanged and
-// could leave an uncommitted write in the owner's working set. It now inherits
-// Store.Query's one-SELECT-or-SHOW restriction; that restriction binds this
-// query route, while the commit route remains the version-controlled write
-// path. M1 replaces both ends with the typed memory operations of PRD §5.1.
-// Nothing outside M0 should be built against this shape.
+// The first two routes deliberately retain store.Store's M0 subset, including
+// Query's raw SQL and untyped result grid, because the soak interrogates
+// dolt_log and its own probe tables. Before the Store boundary was enforced,
+// the query route forwarded every statement unchanged and could leave an
+// uncommitted write in the owner's working set. It now inherits Store.Query's
+// one-SELECT-or-SHOW restriction. That restriction is interface-wide: it
+// binds every Store.Query implementation, not just this route.
+//
+// Before the typed operation route, only Commit, Query and doctor's hand-built
+// schema queries could cross IPC; every other CLI surface still tried to open
+// embedded Dolt and the owner's lock refused it. After it, OwnerStore carries
+// every shipped store operation through the process already holding Dolt. The
+// operation allow-list binds this route alone; adding a Backend method does not
+// expose it until the handler and OwnerStore both name it.
 //
 // # What the result grid can carry
 //
@@ -42,7 +48,6 @@
 package storeipc
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,7 +138,7 @@ type ErrorResponse struct {
 // Config configures a handler.
 type Config struct {
 	// Store is the store this process owns. Required.
-	Store store.Store
+	Store Backend
 
 	// MaxRows bounds a result set. Zero means DefaultMaxRows.
 	MaxRows int
@@ -147,7 +152,7 @@ type Config struct {
 }
 
 type handler struct {
-	store           store.Store
+	store           Backend
 	maxRows         int
 	maxRequestBytes int64
 	logger          *slog.Logger
@@ -179,6 +184,7 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc(CommitPath, h.handleCommit)
 	mux.HandleFunc(QueryPath, h.handleQuery)
+	mux.HandleFunc(OperationPath, h.handleOperation)
 	return mux, nil
 }
 
@@ -310,6 +316,17 @@ func normalizeArgs(args []any) ([]any, error) {
 				return nil, fmt.Errorf("argument %d: %q is not a number database/sql can bind: %w", i, v.String(), err)
 			}
 			out[i] = f
+		case map[string]any:
+			kind, kindOK := v[wireTypeKey].(string)
+			value, valueOK := v[wireValueKey].(string)
+			if len(v) != 2 || !kindOK || !valueOK || kind != wireTimeType {
+				return nil, fmt.Errorf("argument %d is an unsupported encoded value", i)
+			}
+			stamp, err := time.Parse(time.RFC3339Nano, value)
+			if err != nil {
+				return nil, fmt.Errorf("argument %d is not a valid encoded time: %w", i, err)
+			}
+			out[i] = stamp
 		default:
 			return nil, fmt.Errorf("argument %d has type %T, which this endpoint does not carry", i, arg)
 		}
@@ -319,7 +336,7 @@ func normalizeArgs(args []any) ([]any, error) {
 
 // encodeRows renders a result set as text cells. It fails rather than
 // truncate or mangle; see the package documentation.
-func encodeRows(rows *sql.Rows, maxRows int) (QueryResponse, error) {
+func encodeRows(rows store.Rows, maxRows int) (QueryResponse, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return QueryResponse{}, fmt.Errorf("read result columns: %w", err)
@@ -370,8 +387,38 @@ func encodeCell(cell any) (*string, error) {
 	case bool:
 		text := strconv.FormatBool(v)
 		return &text, nil
+	case int:
+		text := strconv.Itoa(v)
+		return &text, nil
+	case int8:
+		text := strconv.FormatInt(int64(v), 10)
+		return &text, nil
+	case int16:
+		text := strconv.FormatInt(int64(v), 10)
+		return &text, nil
+	case int32:
+		text := strconv.FormatInt(int64(v), 10)
+		return &text, nil
 	case int64:
 		text := strconv.FormatInt(v, 10)
+		return &text, nil
+	case uint:
+		text := strconv.FormatUint(uint64(v), 10)
+		return &text, nil
+	case uint8:
+		text := strconv.FormatUint(uint64(v), 10)
+		return &text, nil
+	case uint16:
+		text := strconv.FormatUint(uint64(v), 10)
+		return &text, nil
+	case uint32:
+		text := strconv.FormatUint(uint64(v), 10)
+		return &text, nil
+	case uint64:
+		text := strconv.FormatUint(v, 10)
+		return &text, nil
+	case float32:
+		text := strconv.FormatFloat(float64(v), 'g', -1, 32)
 		return &text, nil
 	case float64:
 		text := strconv.FormatFloat(v, 'g', -1, 64)

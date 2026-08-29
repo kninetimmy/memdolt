@@ -10,7 +10,6 @@ import (
 	"github.com/kninetimmy/memdolt/internal/embedding"
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
-	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
 func newIndexCommand() *cobra.Command {
@@ -31,7 +30,7 @@ func newIndexRebuildCommand() *cobra.Command {
 		Short: "Synchronize the embedding side-store with durable memory",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				sources, err := st.EmbeddingSources(ctx)
 				if err != nil {
 					return err
@@ -75,7 +74,7 @@ func newIndexStatusCommand() *cobra.Command {
 		Short: "Compare derived embeddings with durable source text",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				sources, err := st.EmbeddingSources(ctx)
 				if err != nil {
 					return err

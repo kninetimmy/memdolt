@@ -11,7 +11,6 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/embedding"
 	"github.com/kninetimmy/memdolt/internal/store"
-	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
 var validSourceTypes = map[string]bool{
@@ -26,6 +25,15 @@ var defaultSourceTypes = []string{"fact", "decision", "task"}
 type Inference interface {
 	Embed(string) ([]float32, error)
 	Rerank(string, string) (float32, error)
+}
+
+// Store is the committed-memory read surface retrieval needs. Both the local
+// embedded store and the live owner's IPC client implement it.
+type Store interface {
+	RecallSources(context.Context) ([]store.RecallSource, error)
+	RecallFTS(context.Context, string, []string) ([]store.LexicalHit, error)
+	EmbeddingSources(context.Context) ([]store.EmbeddingSource, error)
+	LastChanged(context.Context, string, string) (*store.CommitProvenance, error)
 }
 
 // Options contains per-call overrides. Zero values use Config defaults.
@@ -110,7 +118,7 @@ type candidate struct {
 // vector-only; lexical candidates are consulted in hybrid mode only for rows
 // whose derived vector is missing or invalid, and that exception is always
 // accompanied by stale_embeddings.
-func Recall(ctx context.Context, st *localdolt.Store, embeddingsPath string, inference Inference, cfg Config, options Options) (Response, error) {
+func Recall(ctx context.Context, st Store, embeddingsPath string, inference Inference, cfg Config, options Options) (Response, error) {
 	started := time.Now()
 	resolved, err := resolve(cfg, options)
 	if err != nil {

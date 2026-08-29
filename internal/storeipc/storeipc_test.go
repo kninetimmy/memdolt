@@ -9,11 +9,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/kninetimmy/memdolt/internal/ipc"
+	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 	"github.com/kninetimmy/memdolt/internal/storeipc"
@@ -149,6 +153,296 @@ func TestClientWritesAndReadsThroughTheOwner(t *testing.T) {
 	}
 	if value != "1.26.2" {
 		t.Fatalf("owner's store holds %q, want %q", value, "1.26.2")
+	}
+}
+
+// TestDirectAndOwnerRoutedOperationsHaveParity exercises every shipped typed
+// store family against one initialized owner. Direct calls use the owner's
+// LocalStore; routed calls cross its authenticated endpoint, so any accidental
+// second embedded open would instead fail on the lock this fixture holds.
+func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
+	ctx := context.Background()
+	base, direct, _ := startOwner(t)
+	if _, err := direct.Migrate(ctx); err != nil {
+		t.Fatalf("migrate owner store: %v", err)
+	}
+	routed, err := storeipc.DialOwnerStore(base)
+	if err != nil {
+		t.Fatalf("dial owner store: %v", err)
+	}
+	if err := routed.Open(ctx); err != nil {
+		t.Fatalf("open routed store: %v", err)
+	}
+
+	directVersion, err := direct.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("direct schema version: %v", err)
+	}
+	routedVersion, err := routed.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("routed schema version: %v", err)
+	}
+	if directVersion != routedVersion || directVersion != store.LatestSchemaVersion() {
+		t.Fatalf("schema versions direct=%d routed=%d latest=%d", directVersion, routedVersion, store.LatestSchemaVersion())
+	}
+
+	actor, err := memory.NormalizeActor("parity-agent")
+	if err != nil {
+		t.Fatalf("normalize actor: %v", err)
+	}
+	directMemory := memory.New(direct, actor)
+	routedMemory := memory.New(routed, actor)
+	if _, _, err := directMemory.AddTask(ctx, "direct parity task", "same initialized fixture"); err != nil {
+		t.Fatalf("direct memory write: %v", err)
+	}
+	routedTask, routedCommit, err := routedMemory.AddTask(ctx, "routed parity task", "same initialized fixture")
+	if err != nil {
+		t.Fatalf("routed memory write: %v", err)
+	}
+	directTasks, err := directMemory.Tasks(ctx, memory.StatusAny)
+	if err != nil {
+		t.Fatalf("direct memory read: %v", err)
+	}
+	routedTasks, err := routedMemory.Tasks(ctx, memory.StatusAny)
+	if err != nil {
+		t.Fatalf("routed memory read: %v", err)
+	}
+	if !reflect.DeepEqual(directTasks, routedTasks) {
+		t.Fatalf("memory reads differ:\ndirect: %+v\nrouted: %+v", directTasks, routedTasks)
+	}
+	if routedTask.ID == "" || routedCommit == "" {
+		t.Fatalf("routed memory write returned task=%+v commit=%q", routedTask, routedCommit)
+	}
+	if got := queryString(t, direct, "SELECT committer FROM dolt_log WHERE commit_hash = ?", routedCommit); got != actor.Name {
+		t.Fatalf("routed memory commit author = %q, want %q", got, actor.Name)
+	}
+
+	proposal := localdolt.Proposal{
+		Rationale: "exercise direct and routed proposal operations",
+		Actor:     testActor,
+		Target:    localdolt.TargetRepo,
+	}
+	stagedFact, err := direct.ProposeFact(ctx, proposal, localdolt.Fact{
+		Key: "routing.owner", Value: "the live owner carries store operations",
+	})
+	if err != nil {
+		t.Fatalf("direct proposal write: %v", err)
+	}
+	assertPendingParity(t, ctx, direct, routed)
+	directDiff, err := direct.ProposalDiff(ctx, stagedFact.ID)
+	if err != nil {
+		t.Fatalf("direct proposal diff: %v", err)
+	}
+	routedDiff, err := routed.ProposalDiff(ctx, stagedFact.ID)
+	if err != nil {
+		t.Fatalf("routed proposal diff: %v", err)
+	}
+	if !reflect.DeepEqual(directDiff, routedDiff) {
+		t.Fatalf("proposal diffs differ:\ndirect: %+v\nrouted: %+v", directDiff, routedDiff)
+	}
+	if _, err := routed.AcceptProposal(ctx, stagedFact.ID, testActor); err != nil {
+		t.Fatalf("routed review accept: %v", err)
+	}
+
+	stagedDecision, err := routed.ProposeDecision(ctx, proposal, localdolt.Decision{
+		Title: "Route through the owner", Rationale: "embedded Dolt has one process owner",
+	})
+	if err != nil {
+		t.Fatalf("routed proposal write: %v", err)
+	}
+	assertPendingParity(t, ctx, direct, routed)
+	if _, err := routed.AcceptProposal(ctx, stagedDecision.ID, testActor); err != nil {
+		t.Fatalf("routed review accept decision: %v", err)
+	}
+
+	directEmbedding, err := direct.EmbeddingSources(ctx)
+	if err != nil {
+		t.Fatalf("direct embedding sources: %v", err)
+	}
+	routedEmbedding, err := routed.EmbeddingSources(ctx)
+	if err != nil {
+		t.Fatalf("routed embedding sources: %v", err)
+	}
+	if !reflect.DeepEqual(directEmbedding, routedEmbedding) {
+		t.Fatalf("embedding sources differ:\ndirect: %+v\nrouted: %+v", directEmbedding, routedEmbedding)
+	}
+	directRecall, err := direct.RecallSources(ctx)
+	if err != nil {
+		t.Fatalf("direct recall sources: %v", err)
+	}
+	routedRecall, err := routed.RecallSources(ctx)
+	if err != nil {
+		t.Fatalf("routed recall sources: %v", err)
+	}
+	if !reflect.DeepEqual(directRecall, routedRecall) {
+		t.Fatalf("recall sources differ:\ndirect: %+v\nrouted: %+v", directRecall, routedRecall)
+	}
+	directFTS, err := direct.RecallFTS(ctx, "owner", []string{"fact", "decision", "task"})
+	if err != nil {
+		t.Fatalf("direct recall FTS: %v", err)
+	}
+	routedFTS, err := routed.RecallFTS(ctx, "owner", []string{"fact", "decision", "task"})
+	if err != nil {
+		t.Fatalf("routed recall FTS: %v", err)
+	}
+	if !reflect.DeepEqual(directFTS, routedFTS) {
+		t.Fatalf("recall FTS differs:\ndirect: %+v\nrouted: %+v", directFTS, routedFTS)
+	}
+	directSearch, err := direct.SearchDecisions(ctx, "owner", 10)
+	if err != nil {
+		t.Fatalf("direct search: %v", err)
+	}
+	routedSearch, err := routed.SearchDecisions(ctx, "owner", 10)
+	if err != nil {
+		t.Fatalf("routed search: %v", err)
+	}
+	if !reflect.DeepEqual(directSearch, routedSearch) {
+		t.Fatalf("search differs:\ndirect: %+v\nrouted: %+v", directSearch, routedSearch)
+	}
+	directChanged, err := direct.LastChanged(ctx, "fact", stagedFact.RowID)
+	if err != nil {
+		t.Fatalf("direct provenance: %v", err)
+	}
+	routedChanged, err := routed.LastChanged(ctx, "fact", stagedFact.RowID)
+	if err != nil {
+		t.Fatalf("routed provenance: %v", err)
+	}
+	if !reflect.DeepEqual(directChanged, routedChanged) {
+		t.Fatalf("provenance differs: direct=%+v routed=%+v", directChanged, routedChanged)
+	}
+	supersede, err := routed.ProposeSupersede(ctx, proposal, stagedFact.RowID, localdolt.Fact{
+		Key: "routing.owner", Value: "the replacement is staged through the owner",
+	})
+	if err != nil {
+		t.Fatalf("routed supersede proposal: %v", err)
+	}
+	directSupersedeDiff, err := direct.ProposalDiff(ctx, supersede.ID)
+	if err != nil {
+		t.Fatalf("direct supersede diff: %v", err)
+	}
+	routedSupersedeDiff, err := routed.ProposalDiff(ctx, supersede.ID)
+	if err != nil {
+		t.Fatalf("routed supersede diff: %v", err)
+	}
+	if !reflect.DeepEqual(directSupersedeDiff, routedSupersedeDiff) {
+		t.Fatalf("supersede diffs differ:\ndirect: %+v\nrouted: %+v", directSupersedeDiff, routedSupersedeDiff)
+	}
+	if _, err := routed.RejectProposal(ctx, supersede.ID); err != nil {
+		t.Fatalf("reject routed supersede: %v", err)
+	}
+
+	toReject, err := routed.ProposeFact(ctx, proposal, localdolt.Fact{Key: "routing.reject", Value: "discard me"})
+	if err != nil {
+		t.Fatalf("stage rejection probe: %v", err)
+	}
+	if _, err := routed.RejectProposal(ctx, toReject.ID); err != nil {
+		t.Fatalf("routed review reject: %v", err)
+	}
+	assertPendingParity(t, ctx, direct, routed)
+}
+
+func assertPendingParity(t *testing.T, ctx context.Context, direct *localdolt.Store, routed *storeipc.OwnerStore) {
+	t.Helper()
+	directPending, err := direct.PendingProposals(ctx)
+	if err != nil {
+		t.Fatalf("direct pending proposals: %v", err)
+	}
+	routedPending, err := routed.PendingProposals(ctx)
+	if err != nil {
+		t.Fatalf("routed pending proposals: %v", err)
+	}
+	if !reflect.DeepEqual(directPending, routedPending) {
+		t.Fatalf("pending proposals differ:\ndirect: %+v\nrouted: %+v", directPending, routedPending)
+	}
+}
+
+func queryString(t *testing.T, st *localdolt.Store, query string, args ...any) string {
+	t.Helper()
+	rows, err := st.Query(context.Background(), query, args...)
+	if err != nil {
+		t.Fatalf("query string: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		t.Fatalf("query string returned no row: %v", rows.Err())
+	}
+	var value string
+	if err := rows.Scan(&value); err != nil {
+		t.Fatalf("scan string: %v", err)
+	}
+	return value
+}
+
+func queryInt(t *testing.T, st *localdolt.Store, query string, args ...any) int {
+	t.Helper()
+	value := queryString(t, st, query, args...)
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		t.Fatalf("parse query result %q as an integer: %v", value, err)
+	}
+	return parsed
+}
+
+func TestOwnerRoutedWritePreservesDenyListAndAtomicCommit(t *testing.T) {
+	ctx := context.Background()
+	base, direct, _ := startOwner(t)
+	if _, err := direct.Migrate(ctx); err != nil {
+		t.Fatalf("migrate owner store: %v", err)
+	}
+	routed, err := storeipc.DialOwnerStore(base)
+	if err != nil {
+		t.Fatalf("dial owner store: %v", err)
+	}
+
+	before := queryInt(t, direct, "SELECT COUNT(*) FROM dolt_log")
+	actor, err := memory.NormalizeActor("routed-writer")
+	if err != nil {
+		t.Fatalf("normalize actor: %v", err)
+	}
+	if _, _, err := memory.New(routed, actor).AddTask(ctx, "one routed commit", "one row"); err != nil {
+		t.Fatalf("routed task write: %v", err)
+	}
+	after := queryInt(t, direct, "SELECT COUNT(*) FROM dolt_log")
+	if after != before+1 {
+		t.Fatalf("routed memory write added %d commits, want 1", after-before)
+	}
+
+	config := filepath.Join(base, ".memdolt", "config.toml")
+	if err := os.WriteFile(config, []byte("[deny_list]\npatterns = ['blocked routed text']\n"), 0o600); err != nil {
+		t.Fatalf("write deny-list: %v", err)
+	}
+	before = queryInt(t, direct, "SELECT COUNT(*) FROM dolt_log")
+	_, _, err = memory.New(routed, actor).AddTask(ctx, "blocked routed text", "must not land")
+	if err == nil || !strings.Contains(err.Error(), "blocked routed text") {
+		t.Fatalf("routed denied write error = %v, want named deny-list rule", err)
+	}
+	if afterDenied := queryInt(t, direct, "SELECT COUNT(*) FROM dolt_log"); afterDenied != before {
+		t.Fatalf("denied routed write moved history from %d to %d", before, afterDenied)
+	}
+}
+
+func TestUnknownRoutedProposalOutcomeIsNotRetried(t *testing.T) {
+	ctx := context.Background()
+	base, direct, _ := startOwnerWrapping(t, dropFirstAnswer)
+	if _, err := direct.Migrate(ctx); err != nil {
+		t.Fatalf("migrate owner store: %v", err)
+	}
+	routed, err := storeipc.DialOwnerStore(base)
+	if err != nil {
+		t.Fatalf("dial owner store: %v", err)
+	}
+	_, err = routed.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "drop the answer", Actor: testActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "routing.unknown", Value: "the proposal lands once"})
+	if err == nil || storeipc.IsOwnerRefusal(err) {
+		t.Fatalf("lost proposal answer error = %v, want unknown transport outcome", err)
+	}
+	pending, err := direct.PendingProposals(ctx)
+	if err != nil {
+		t.Fatalf("read proposals after lost answer: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("lost-answer proposal was applied %d times, want exactly once", len(pending))
 	}
 }
 
@@ -395,7 +689,7 @@ func TestStoreRoutesAreBehindTheTokenCheck(t *testing.T) {
 	ctx := context.Background()
 	_, owner, srv := startOwner(t)
 
-	for _, path := range []string{storeipc.CommitPath, storeipc.QueryPath} {
+	for _, path := range []string{storeipc.CommitPath, storeipc.QueryPath, storeipc.OperationPath} {
 		body := `{"statements":[{"sql":"CREATE TABLE untokened (k VARCHAR(8) PRIMARY KEY)"}],` +
 			`"message":"untokened","author":{"name":"user","email":"user@memdolt.invalid"},` +
 			`"sql":"SELECT 1"}`

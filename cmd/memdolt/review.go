@@ -93,7 +93,7 @@ func newReviewListCommand() *cobra.Command {
 		Short: "List the proposals waiting for review, oldest first",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				pending, err := st.PendingProposals(ctx)
 				if err != nil {
 					return err
@@ -117,7 +117,7 @@ func newReviewShowCommand() *cobra.Command {
 			"from — the whole of what accepting it would change.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				diff, err := st.ProposalDiff(ctx, args[0])
 				if err != nil {
 					return err
@@ -195,7 +195,7 @@ func newReviewAcceptCommand() *cobra.Command {
 			"attribute leaves main exactly where it was and the proposal still pending.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, actor memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, actor memory.Actor) error {
 				result, err := st.AcceptProposal(ctx, args[0], actor.CommitAuthor())
 				if err != nil {
 					return err
@@ -223,7 +223,7 @@ func newReviewRejectCommand() *cobra.Command {
 		Short: "Delete a proposal's branch, leaving main unchanged",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				proposal, err := st.RejectProposal(ctx, args[0])
 				if err != nil {
 					return err
@@ -250,7 +250,7 @@ func newReviewExpireCommand() *cobra.Command {
 			"proposal is one that was never promoted.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				expired, err := st.ExpireProposals(ctx, time.Now().Add(-olderThan))
 				if err != nil {
 					return err
@@ -278,7 +278,7 @@ func newReviewStaleCommand() *cobra.Command {
 			"expires anything.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				pending, err := st.PendingProposals(ctx)
 				if err != nil {
 					return err

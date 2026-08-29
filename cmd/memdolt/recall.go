@@ -12,7 +12,6 @@ import (
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/retrieval"
-	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
 func newRecallCommand() *cobra.Command {
@@ -28,7 +27,7 @@ func newRecallCommand() *cobra.Command {
 		Short: "Recall ranked facts, decisions, tasks, and document chunks",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				paths, err := layout.New(flags.dir)
 				if err != nil {
 					return err
