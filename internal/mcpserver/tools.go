@@ -124,7 +124,7 @@ type recallInput struct {
 	Query          string   `json:"query" jsonschema:"the text to recall"`
 	Mode           string   `json:"mode,omitempty" jsonschema:"optional retrieval mode: fts or hybrid"`
 	MaxResults     int      `json:"max_results,omitempty" jsonschema:"maximum returned results; zero uses repository config"`
-	SourceTypes    []string `json:"source_types,omitempty" jsonschema:"optional fact, decision, task, doc, or doc_chunk filters"`
+	SourceTypes    []string `json:"source_types,omitempty" jsonschema:"optional fact, decision, task, or doc_chunk filters"`
 	AcceptedOnly   *bool    `json:"accepted_only,omitempty"`
 	IncludeStale   *bool    `json:"include_stale,omitempty"`
 	NoRerank       bool     `json:"no_rerank,omitempty"`
@@ -255,7 +255,7 @@ func (t *Toolset) listDecisions(ctx context.Context, _ *mcp.CallToolRequest, in 
 }
 
 type listFactsInput struct {
-	Prefix string `json:"prefix,omitempty" jsonschema:"literal dotted-key prefix such as build.; wildcards are not accepted"`
+	Prefix string `json:"prefix,omitempty" jsonschema:"literal dotted-key prefix such as build.; percent, underscore, and backslash are ordinary key characters"`
 	Limit  int    `json:"limit,omitempty"`
 }
 
@@ -279,9 +279,6 @@ type listFactsOutput struct {
 
 func (t *Toolset) listFacts(ctx context.Context, _ *mcp.CallToolRequest, in listFactsInput) (*mcp.CallToolResult, listFactsOutput, error) {
 	prefix := strings.TrimSpace(in.Prefix)
-	if strings.ContainsAny(prefix, "%_") {
-		return nil, listFactsOutput{}, errors.New("fact prefix is literal and must not contain SQL wildcards '%' or '_'")
-	}
 	if prefix != "" && !strings.HasSuffix(prefix, ".") {
 		return nil, listFactsOutput{}, fmt.Errorf("fact prefix %q must end in '.'", prefix)
 	}
@@ -292,8 +289,9 @@ func (t *Toolset) listFacts(ctx context.Context, _ *mcp.CallToolRequest, in list
 		"FROM facts AS OF 'main'"
 	args := []any{}
 	if prefix != "" {
-		query += " WHERE `key` LIKE ?"
-		args = append(args, prefix+"%")
+		query += " WHERE `key` LIKE ? ESCAPE '!'"
+		pattern := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(prefix) + "%"
+		args = append(args, pattern)
 	}
 	query += " ORDER BY `key`, created_at, id"
 	if in.Limit > 0 {
@@ -606,7 +604,7 @@ func (t *Toolset) queryFacts(ctx context.Context, query string, args ...any) (fa
 		if created.Valid {
 			fact.CreatedAt = created.Time
 		}
-		fact.Stale = !verified.Valid || now.Sub(verified.Time.UTC()) > time.Duration(cfg.FactStaleAfterDays)*24*time.Hour
+		fact.Stale = !verified.Valid || retrieval.FactIsStale(verified.Time, now, cfg.FactStaleAfterDays)
 		facts = append(facts, fact)
 	}
 	if err := rows.Err(); err != nil {

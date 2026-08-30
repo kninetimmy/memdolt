@@ -112,8 +112,10 @@ export GOFLAGS=-tags=gms_pure_go
     missing identity remains `agent:unknown`. The fixed-name restriction binds
     `RegisterTools` alone, not arbitrary go-sdk servers or the destination tool
     table. `list_facts` alone interprets `prefix` as one literal dotted prefix,
-    appends the terminal SQL wildcard itself, and retains superseded rows; this
-    is not permission for other list filters to accept wildcard syntax.
+    uses an explicit non-backslash LIKE escape so percent and underscore are
+    escaped in the bound value while backslash stays ordinary, appends the
+    terminal SQL wildcard itself, and retains superseded rows; this is not
+    permission for other list filters to accept wildcard syntax.
     `Toolset.flushLocked` attempts every queued actor group even when another
     group fails, removes each success immediately, and retains only failures for
     the orderly-shutdown retry. `Toolset.Close` reports both deadline and final
@@ -153,7 +155,11 @@ export GOFLAGS=-tags=gms_pure_go
   - `retrieval.Run` now owns config loading, effective-mode selection, inference
     open/close and close-error joining for both surfaces. `cmd/memdolt/recall.go`
     still builds the same options and emits the same response; retrieval ranking,
-    filters, warnings, observability and provenance are unchanged. `search.Run`,
+    filters, warnings, observability and provenance are unchanged.
+    `retrieval.FactIsStale` applies recall's floating-point day comparison to
+    `list_facts` too, so every positive int64 horizon remains valid without a
+    `time.Duration` conversion. This helper binds fact staleness in recall and
+    MCP fact listing alone, not every age or retention calculation. `search.Run`,
     `memory.Lanes`, and the `localdolt.Propose*` methods remain the sole business
     logic for the corresponding MCP and CLI operations.
   - `internal/mcpserver/tools_test.go` is additive in-memory client coverage for
@@ -162,9 +168,15 @@ export GOFLAGS=-tags=gms_pure_go
     retention, recall provenance, note deadlines, and orderly shutdown. Its mixed
     denied/allowed regression proves every queued actor group is attempted,
     successful groups are not recommitted, failed groups alone reach the shutdown
-    retry, and final failures are reported then discarded. It does not independently
-    assert every established ordering, filter, or recall-warning behavior; those
-    remain covered by their existing application/store tests. `server_test.go`
+    retry, and final failures are reported then discarded. More precisely, this
+    file asserts the exact tool names and schemas, deferred-name absence, structured
+    successes and visible refusals, task and note attribution, proposal/main
+    isolation, command lookup, duplicate-key and file-search refusals, superseded
+    fact retention, literal percent/underscore/backslash/escape-character
+    prefixes, max-int64 fact staleness, recall fact provenance, and advertised
+    `doc_chunk` acceptance. It does not claim exhaustive coverage of every
+    ordering, filter, or warning.
+    `server_test.go`
     keeps the backend-free `New` foundation expectation but updates its diagnostic
     wording. `localdolt/note_batch_internal_test.go` and the added
     `storeipc_test.go` assertion cover dirty-working-set and routed deny-list

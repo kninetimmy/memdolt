@@ -542,6 +542,12 @@ func sortCandidates(rows []*candidate) {
 	})
 }
 
+// FactIsStale applies recall's day comparison without converting a configured
+// day horizon to time.Duration, which can overflow for valid int64 values.
+func FactIsStale(verifiedAt, now time.Time, staleAfterDays int64) bool {
+	return factAgeIsStale(ageDays(verifiedAt, now), staleAfterDays)
+}
+
 func sourceAge(source store.RecallSource, now time.Time, staleAfterDays int64) (bool, *float64) {
 	var timestamp *time.Time
 	switch {
@@ -558,12 +564,17 @@ func sourceAge(source store.RecallSource, now time.Time, staleAfterDays int64) (
 	if timestamp == nil {
 		return false, nil
 	}
-	days := now.Sub(timestamp.UTC()).Hours() / 24
-	if days < 0 {
-		days = 0
-	}
-	stale := source.SourceType == "fact" && days > float64(staleAfterDays)
+	days := ageDays(*timestamp, now)
+	stale := source.SourceType == "fact" && factAgeIsStale(days, staleAfterDays)
 	return stale, &days
+}
+
+func ageDays(timestamp, now time.Time) float64 {
+	return max(now.Sub(timestamp.UTC()).Hours()/24, 0)
+}
+
+func factAgeIsStale(ageDays float64, staleAfterDays int64) bool {
+	return ageDays > float64(staleAfterDays)
 }
 
 func acceptedSource(source string) bool {

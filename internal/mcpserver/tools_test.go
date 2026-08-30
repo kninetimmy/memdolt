@@ -14,6 +14,7 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
@@ -35,10 +36,26 @@ func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := make([]string, 0, len(listed.Tools))
+	var recallSourceTypesDescription string
 	for _, tool := range listed.Tools {
 		names = append(names, tool.Name)
 		if tool.InputSchema == nil || tool.OutputSchema == nil {
 			t.Errorf("tool %s has input=%v output=%v; every M3 tool needs both schemas", tool.Name, tool.InputSchema, tool.OutputSchema)
+		}
+		if tool.Name == "recall" {
+			schema, ok := tool.InputSchema.(map[string]any)
+			if !ok {
+				t.Fatalf("recall input schema type = %T, want map", tool.InputSchema)
+			}
+			properties, ok := schema["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("recall input schema properties = %T, want map", schema["properties"])
+			}
+			sourceTypes, ok := properties["source_types"].(map[string]any)
+			if !ok {
+				t.Fatalf("recall source_types schema = %T, want map", properties["source_types"])
+			}
+			recallSourceTypesDescription, _ = sourceTypes["description"].(string)
 		}
 	}
 	slices.Sort(names)
@@ -50,8 +67,15 @@ func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
 			t.Errorf("deferred tool %q was advertised", deferred)
 		}
 	}
+	const advertisedDocumentSource = "doc_chunk"
+	if want := "optional fact, decision, task, or doc_chunk filters"; recallSourceTypesDescription != want {
+		t.Fatalf("recall source_types description = %q, want %q", recallSourceTypesDescription, want)
+	}
 
 	callOK(t, client, "status", map[string]any{})
+	callOK(t, client, "recall", map[string]any{
+		"query": "advertised document source", "mode": "fts", "source_types": []string{advertisedDocumentSource},
+	})
 	taskAdded := callAs[taskWriteOutput](t, client, "task_add", map[string]any{
 		"title": "Exercise every M3 tool", "notes": "in memory",
 	})
@@ -108,7 +132,7 @@ func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
 	if len(facts.Facts) != 2 || facts.Facts[0].SupersededBy == "" {
 		t.Fatalf("list_facts lost the superseded chain: %+v", facts.Facts)
 	}
-	callError(t, client, "list_facts", map[string]any{"prefix": "build%"}, "literal")
+	callError(t, client, "list_facts", map[string]any{"prefix": "build"}, "must end in '.'")
 
 	recalled := callAs[retrievalOutput](t, client, "recall", map[string]any{
 		"query": "race lane", "mode": "fts", "source_types": []string{"fact"}, "provenance": true,
@@ -132,6 +156,71 @@ func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
 	}
 	if got := testText(t, st, "SELECT actor_raw FROM session_notes AS OF 'main' ORDER BY id LIMIT 1"); got != "Claude Code" {
 		t.Fatalf("note raw actor = %q, want Claude Code", got)
+	}
+}
+
+func TestListFactsTreatsPrefixCharactersLiterallyAndLargeHorizonDoesNotOverflow(t *testing.T) {
+	ctx := context.Background()
+	base, st := initializedToolStore(t)
+	server := New("test")
+	tools := RegisterTools(server, base, st)
+	client, serverSession := connect(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false)
+
+	tests := []struct {
+		name, prefix, match, decoy string
+	}{
+		{name: "percent", prefix: "percent%.", match: "percent%.match", decoy: "percentX.match"},
+		{name: "underscore", prefix: "under_.", match: "under_.match", decoy: "underX.match"},
+		{name: "backslash", prefix: `slash\.`, match: `slash\.match`, decoy: "slash.match"},
+		{name: "escape", prefix: "bang!.", match: "bang!.match", decoy: "bang.match"},
+	}
+	var verifiedID string
+	for _, test := range tests {
+		for _, key := range []string{test.match, test.decoy} {
+			staged := callAs[stagedProposalOutput](t, client, "propose_fact", map[string]any{
+				"key": key, "value": "literal prefix " + test.name, "rationale": "exercise literal prefix binding",
+			})
+			acceptProposal(t, st, staged.ID)
+			if key == test.match && verifiedID == "" {
+				verifiedID = staged.RowID
+			}
+		}
+	}
+
+	verifiedAt := time.Now().UTC().Add(-365 * 24 * time.Hour)
+	if _, err := st.Commit(ctx, store.CommitRequest{
+		Statements: []store.Statement{{SQL: "UPDATE facts SET verified_at = ? WHERE id = ?", Args: []any{verifiedAt, verifiedID}}},
+		Text:       []string{"verify literal-prefix boundary fact"},
+		Message:    "verify literal-prefix boundary fact",
+		Author:     memory.UserActor.CommitAuthor(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := layout.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile(), []byte("[retrieval]\nfact_stale_after_days = 9223372036854775807\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			facts := callAs[listFactsOutput](t, client, "list_facts", map[string]any{"prefix": test.prefix})
+			if len(facts.Facts) != 1 || facts.Facts[0].Key != test.match {
+				t.Fatalf("list_facts(%q) = %+v, want only %q", test.prefix, facts.Facts, test.match)
+			}
+			if facts.Facts[0].ID == verifiedID && facts.Facts[0].Stale {
+				t.Fatalf("365-day-old fact is stale under max-int64 day horizon: %+v", facts.Facts[0])
+			}
+		})
+	}
+	callError(t, client, "list_facts", map[string]any{"prefix": "percent%"}, "must end in '.'")
+	callError(t, client, "list_facts", map[string]any{"limit": -1}, "must not be negative")
+
+	closeSessions(t, client, serverSession)
+	if err := tools.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
