@@ -54,7 +54,7 @@ func TestModernDiscoveryInstructionsAndToolsCache(t *testing.T) {
 		t.Fatalf("tools/list cacheScope = %q, want public", tools.CacheScope)
 	}
 	if len(tools.Tools) != 0 {
-		t.Fatalf("runtime foundation advertised %d tools before the tool-surface issue", len(tools.Tools))
+		t.Fatalf("runtime without an application backend advertised %d tools", len(tools.Tools))
 	}
 
 	closeSessions(t, clientSession, serverSession)

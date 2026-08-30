@@ -667,6 +667,21 @@ A `global` Dolt database on the hub, cloned to `~/.memdolt/global/` on each mach
 | History (new) | `history` — blame/log/AS-OF lookups for a fact/decision ("when did this change and who changed it") or the `project_state`/`project_arch` narrative tables ("how did our status/architecture evolve", §3.2) |
 | Gated | `archive_transcript` (confirm=true; unredacted warning — memhub parity) |
 
+**Approved M3 phasing (2026-08-30, issue #104).** Before this delivery, the
+table above described the destination surface without distinguishing which
+names the first M3 server could honestly advertise, while the runtime
+foundation itself registered no memory tools. After it, M3 registers exactly
+the implemented read tools `status`, `recall`, `search`, `list_tasks`,
+`list_decisions`, `list_facts`, `list_proposals`, and `get_command`; direct
+tools `task_add`, `task_done`, `log_session_note`, and `record_command`; and
+staged tools `propose_fact`, `propose_decision`, and `propose_supersede`.
+`review_pending` and its fact-key elicitation remain a separate M3 delivery.
+The later-backed names `locate`, `doc_add`, `render`, `repo_status`,
+`repo_pull`, `repo_push`, `history`, and `archive_transcript` are absent from
+`tools/list`, not refusal stubs. This is a registration restriction on the
+first M3 implementation alone, not removal of those tools from the destination
+contract or permission to substitute a stub before its backend lands.
+
 Server instructions embed memhub's routing rules (recall-before-ledger, locate-before-grep, turn-1 PROJECT.md, never-write-durable-directly) adapted to memdolt names, plus two memdolt-native additions **[design]**: the fact-key namespace convention (§6.1 — `build.*`, `convention.*`, `env.*`, `gotcha.*`, and similar dotted prefixes) so agents file under an existing prefix instead of inventing ad hoc keys, and the filing rule that decides fact vs. decision — **facts state what is true; decisions record what we chose and why — if there's a "because," it's a decision.**
 
 The server instructions text is itself a versioned, first-class artifact: checked in, and its changes are reviewed as deliberately as a schema migration, not tweaked ad hoc. It encodes the agent's recall-decision policy — recall-before-ledger, when to file a fact vs. a decision, what prefix a new fact key gets — and an undiscussed edit to that policy is exactly as load-bearing as an undiscussed column change. **[design]**

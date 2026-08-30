@@ -249,6 +249,11 @@ func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.Commit
 	if err := s.checkDenyList(req.Text); err != nil {
 		return store.CommitResult{}, err
 	}
+	if req.RequireClean {
+		if err := requireCleanWorkingSet(ctx, conn, "commit the session-note batch"); err != nil {
+			return store.CommitResult{}, err
+		}
+	}
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -267,6 +272,18 @@ func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.Commit
 		return store.CommitResult{}, fmt.Errorf("localdolt: commit transaction: %w", err)
 	}
 	return result, nil
+}
+
+// CheckWriteText applies the same fail-closed deny-list check Commit uses,
+// without opening a transaction. Long-lived MCP note batching uses it to make
+// an already-forbidden note a visible tool error instead of discovering it
+// only when the asynchronous batch deadline arrives. Commit checks again when
+// the batch is actually written, so a config change cannot bypass the guard.
+func (s *Store) CheckWriteText(_ context.Context, text []string) error {
+	if _, err := s.handle(); err != nil {
+		return err
+	}
+	return s.checkDenyList(text)
 }
 
 // checkDenyList applies the repository's `[deny_list]` (PRD §11.3) to the

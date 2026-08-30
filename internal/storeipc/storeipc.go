@@ -101,11 +101,12 @@ type Statement struct {
 // request that declares neither, so the declaration has to survive the
 // hop rather than be re-derived from an empty field.
 type CommitRequest struct {
-	Statements []Statement `json:"statements"`
-	Text       []string    `json:"text,omitempty"`
-	NoText     bool        `json:"noText,omitempty"`
-	Message    string      `json:"message"`
-	Author     Actor       `json:"author"`
+	Statements   []Statement `json:"statements"`
+	Text         []string    `json:"text,omitempty"`
+	NoText       bool        `json:"noText,omitempty"`
+	RequireClean bool        `json:"requireClean,omitempty"`
+	Message      string      `json:"message"`
+	Author       Actor       `json:"author"`
 }
 
 // CommitResponse is the wire form of store.CommitResult.
@@ -214,11 +215,12 @@ func (h *handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.store.Commit(r.Context(), store.CommitRequest{
-		Statements: statements,
-		Text:       req.Text,
-		NoText:     req.NoText,
-		Message:    req.Message,
-		Author:     store.Actor{Name: req.Author.Name, Email: req.Author.Email},
+		Statements:   statements,
+		Text:         req.Text,
+		NoText:       req.NoText,
+		RequireClean: req.RequireClean,
+		Message:      req.Message,
+		Author:       store.Actor{Name: req.Author.Name, Email: req.Author.Email},
 	})
 	if err != nil {
 		h.fail(w, http.StatusInternalServerError, err)

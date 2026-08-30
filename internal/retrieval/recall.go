@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kninetimmy/memdolt/internal/embedding"
+	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/store"
 )
 
@@ -112,6 +113,37 @@ type candidate struct {
 	stale       bool
 	ageDays     *float64
 	rerankScore *float32
+}
+
+// Run applies repository config, opens production inference only when the
+// effective mode needs it, and closes that inference before returning. CLI
+// and MCP call this same application seam so mode selection, warnings,
+// observability, and close failures cannot drift between surfaces.
+func Run(ctx context.Context, st Store, baseDir string, options Options) (Response, error) {
+	paths, err := layout.New(baseDir)
+	if err != nil {
+		return Response{}, err
+	}
+	cfg, err := LoadConfig(paths.ConfigFile())
+	if err != nil {
+		return Response{}, err
+	}
+	effectiveMode := options.Mode
+	if effectiveMode == "" {
+		effectiveMode = cfg.Mode
+	}
+	var engine *embedding.Engine
+	if effectiveMode == ModeHybrid {
+		engine, err = embedding.Open(ctx, embedding.Options{})
+		if err != nil {
+			return Response{}, err
+		}
+	}
+	response, recallErr := Recall(ctx, st, paths.EmbeddingsFile(), engine, cfg, options)
+	if engine != nil {
+		recallErr = errors.Join(recallErr, engine.Close())
+	}
+	return response, recallErr
 }
 
 // Recall executes the production retrieval path. Normal hybrid assembly is

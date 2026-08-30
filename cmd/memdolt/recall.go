@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/kninetimmy/memdolt/internal/embedding"
-	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/retrieval"
 )
@@ -28,14 +25,7 @@ func newRecallCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
-				paths, err := layout.New(flags.dir)
-				if err != nil {
-					return err
-				}
-				cfg, err := retrieval.LoadConfig(paths.ConfigFile())
-				if err != nil {
-					return err
-				}
+				var err error
 				options := retrieval.Options{
 					Query: args[0], MaxResults: maxResults, SourceTypes: sourceTypes, Provenance: provenance,
 				}
@@ -58,23 +48,9 @@ func newRecallCommand() *cobra.Command {
 				if cmd.Flags().Changed("min-rerank-score") {
 					options.MinRerankScore = &minRerankScore
 				}
-				effectiveMode := options.Mode
-				if effectiveMode == "" {
-					effectiveMode = cfg.Mode
-				}
-				var engine *embedding.Engine
-				if effectiveMode == retrieval.ModeHybrid {
-					engine, err = embedding.Open(ctx, embedding.Options{})
-					if err != nil {
-						return err
-					}
-				}
-				response, recallErr := retrieval.Recall(ctx, st, paths.EmbeddingsFile(), engine, cfg, options)
-				if engine != nil {
-					recallErr = errors.Join(recallErr, engine.Close())
-				}
-				if recallErr != nil {
-					return recallErr
+				response, err := retrieval.Run(ctx, st, flags.dir, options)
+				if err != nil {
+					return err
 				}
 				return emit(cmd, response, recallLines(response))
 			})
