@@ -9,10 +9,10 @@
 // (§3.1, §3.2). Nothing in this package writes an audit row, because the
 // commit graph is the audit trail.
 //
-// One call here is one commit. §3.1's note batching — notes accumulating
-// in the working set behind a five-minute timer — is MCP-server behavior
-// for a long-lived session; a CLI process that exits after a single write
-// has nothing to batch with.
+// One call here is one commit. §3.1's note batching — prepared notes
+// accumulating in the MCP Toolset's process memory behind a five-minute
+// timer — is server behavior for a long-lived session; a CLI process that
+// exits after a single write has nothing to batch with.
 //
 // Every read and write goes through store.Store, the one path the CLI and
 // the MCP server share (§5.1). This package opens no database of its own

@@ -197,7 +197,7 @@ func TestSessionNoteDeadlineFlushesAndDenyListRefusesVisibly(t *testing.T) {
 		}
 	})
 
-	t.Run("shutdown failure", func(t *testing.T) {
+	t.Run("mixed failure retries only failed group on shutdown", func(t *testing.T) {
 		base, st := initializedToolStore(t)
 		paths, err := layout.New(base)
 		if err != nil {
@@ -205,17 +205,67 @@ func TestSessionNoteDeadlineFlushesAndDenyListRefusesVisibly(t *testing.T) {
 		}
 		server := New("test")
 		tools := RegisterTools(server, base, st)
-		client, serverSession := connect(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false)
-		callOK(t, client, "log_session_note", map[string]any{"text": "becomes forbidden before shutdown"})
+		client, serverSession := connect(t, server, &mcp.Implementation{Name: "session-client", Version: "1"}, false)
+		for _, note := range []struct {
+			actor string
+			text  string
+		}{
+			{actor: "Codex", text: "becomes forbidden before shutdown"},
+			{actor: "Claude Code", text: "allowed note survives another actor's failure"},
+		} {
+			result, callErr := client.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      "log_session_note",
+				Meta:      mcp.Meta{mcp.MetaKeyClientInfo: &mcp.Implementation{Name: note.actor, Version: "1"}},
+				Arguments: map[string]any{"text": note.text},
+			})
+			if callErr != nil || result.IsError {
+				t.Fatalf("queue %s note: result=%+v err=%v", note.actor, result, callErr)
+			}
+		}
 		if err := os.WriteFile(paths.ConfigFile(), []byte("[deny_list]\npatterns = ['forbidden']\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+
+		tools.mu.Lock()
+		if tools.timer != nil {
+			tools.timer.Stop()
+			tools.timer = nil
+		}
+		tools.flushErr = tools.flushLocked(context.Background())
+		flushErr := tools.flushErr
+		pending := append([]noteGroup(nil), tools.groups...)
+		tools.mu.Unlock()
+		if flushErr == nil || !strings.Contains(flushErr.Error(), "deny-list") {
+			t.Fatalf("deadline-style flush error = %v, want reported deny-list failure", flushErr)
+		}
+		if len(pending) != 1 || pending[0].actor.Name != "agent:codex" {
+			t.Fatalf("pending groups after mixed flush = %+v, want only agent:codex", pending)
+		}
+		if got := testCount(t, st, "SELECT COUNT(*) FROM session_notes AS OF 'main' WHERE actor = 'agent:claude-code'"); got != 1 {
+			t.Fatalf("allowed actor rows after mixed flush = %d, want 1", got)
+		}
+		if got := testCount(t, st, "SELECT COUNT(*) FROM dolt_log WHERE message = 'note batch (1)' AND committer = 'agent:claude-code'"); got != 1 {
+			t.Fatalf("allowed actor commits after mixed flush = %d, want 1", got)
+		}
+
 		closeSessions(t, client, serverSession)
 		if err := tools.Close(); err == nil || !strings.Contains(err.Error(), "deny-list") {
 			t.Fatalf("shutdown error = %v, want reported deny-list failure", err)
 		}
-		if got := testCount(t, st, "SELECT COUNT(*) FROM session_notes AS OF 'main'"); got != 0 {
-			t.Fatalf("failed shutdown flush wrote %d notes", got)
+		tools.mu.Lock()
+		pendingAfterClose := len(tools.groups)
+		tools.mu.Unlock()
+		if pendingAfterClose != 0 {
+			t.Fatalf("closed toolset retained %d failed groups, want explicit discard", pendingAfterClose)
+		}
+		if err := tools.Close(); err == nil || !strings.Contains(err.Error(), "deny-list") {
+			t.Fatalf("repeated close error = %v, want retained shutdown failure", err)
+		}
+		if got := testCount(t, st, "SELECT COUNT(*) FROM session_notes AS OF 'main'"); got != 1 {
+			t.Fatalf("mixed failure left %d durable notes, want only the allowed note", got)
+		}
+		if got := testCount(t, st, "SELECT COUNT(*) FROM dolt_log WHERE message = 'note batch (1)' AND committer = 'agent:claude-code'"); got != 1 {
+			t.Fatalf("shutdown recommitted the successful group: %d commits", got)
 		}
 	})
 }

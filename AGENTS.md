@@ -114,6 +114,12 @@ export GOFLAGS=-tags=gms_pure_go
     table. `list_facts` alone interprets `prefix` as one literal dotted prefix,
     appends the terminal SQL wildcard itself, and retains superseded rows; this
     is not permission for other list filters to accept wildcard syntax.
+    `Toolset.flushLocked` attempts every queued actor group even when another
+    group fails, removes each success immediately, and retains only failures for
+    the orderly-shutdown retry. `Toolset.Close` reports both deadline and final
+    failures, then discards any still-failed in-memory rows because a closed
+    session cannot retry them. This retry/discard rule binds the MCP `Toolset`
+    accumulator alone, not every batch loop or direct-lane write.
   - `cmd/memdolt/serve.go` registers that toolset on the already-open owner and
     closes it after protocol serving but before IPC and the store. The issue
     #103 lifecycle ordering, schema gate and authenticated owner endpoint still
@@ -151,15 +157,21 @@ export GOFLAGS=-tags=gms_pure_go
     `memory.Lanes`, and the `localdolt.Propose*` methods remain the sole business
     logic for the corresponding MCP and CLI operations.
   - `internal/mcpserver/tools_test.go` is additive in-memory client coverage for
-    every registered schema, success paths, visible refusals, main/proposal
-    separation, attribution, ordering/filter/provenance retention and note
-    deadlines/shutdown; `server_test.go` keeps the backend-free `New` foundation
-    expectation but updates its diagnostic wording. `localdolt/note_batch_internal_test.go`
-    and the added `storeipc_test.go` assertion cover dirty-working-set and routed
-    deny-list preflight behavior. They change no production behavior. PRD §11.1
-    preserves the before-and-after phasing; no dependency, schema migration,
-    deferred backend, elicited review, host registration or provenance workflow
-    is added.
+    every registered schema, representative successes and visible refusals,
+    main/proposal separation, attribution, literal fact-prefix and superseded-row
+    retention, recall provenance, note deadlines, and orderly shutdown. Its mixed
+    denied/allowed regression proves every queued actor group is attempted,
+    successful groups are not recommitted, failed groups alone reach the shutdown
+    retry, and final failures are reported then discarded. It does not independently
+    assert every established ordering, filter, or recall-warning behavior; those
+    remain covered by their existing application/store tests. `server_test.go`
+    keeps the backend-free `New` foundation expectation but updates its diagnostic
+    wording. `localdolt/note_batch_internal_test.go` and the added
+    `storeipc_test.go` assertion cover dirty-working-set and routed deny-list
+    preflight behavior. They change no production behavior. PRD §§3.1 and 11.1
+    preserve the batching and phasing before/after records; no dependency, schema
+    migration, deferred backend, elicited review, host registration or provenance
+    workflow is added.
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,

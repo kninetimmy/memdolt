@@ -541,19 +541,22 @@ func (t *Toolset) startTimer() {
 }
 
 func (t *Toolset) flushLocked(ctx context.Context) error {
-	for len(t.groups) > 0 {
-		group := t.groups[0]
+	failed := make([]noteGroup, 0, len(t.groups))
+	var errs []error
+	for _, group := range t.groups {
 		if _, err := memory.New(t.store, group.actor).CommitNotes(ctx, group.notes); err != nil {
-			return err
+			failed = append(failed, group)
+			errs = append(errs, fmt.Errorf("flush session-note batch for %s: %w", group.actor.Name, err))
 		}
-		t.groups = t.groups[1:]
 	}
-	return nil
+	t.groups = failed
+	return errors.Join(errs...)
 }
 
-// Close commits pending notes before the owner store closes. A prior deadline
-// failure is retained in the returned error even if a shutdown retry succeeds,
-// so asynchronous deny-list or store failures are never hidden.
+// Close retries groups retained by a failed deadline flush before the owner
+// store closes. Successful groups were already removed and are not recommitted.
+// After this final attempt, failed groups are discarded with the returned error;
+// a prior deadline error remains visible even if its shutdown retry succeeds.
 func (t *Toolset) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -565,10 +568,11 @@ func (t *Toolset) Close() error {
 		t.timer.Stop()
 		t.timer = nil
 	}
-	prior := t.flushErr
 	ctx, cancel := context.WithTimeout(context.Background(), noteFlushTimeout)
 	defer cancel()
-	return errors.Join(prior, t.flushLocked(ctx))
+	t.flushErr = errors.Join(t.flushErr, t.flushLocked(ctx))
+	t.groups = nil
+	return t.flushErr
 }
 
 func (t *Toolset) queryFacts(ctx context.Context, query string, args ...any) (facts []factRecord, err error) {
