@@ -163,19 +163,23 @@ export GOFLAGS=-tags=gms_pure_go
     `memory.Lanes`, and the `localdolt.Propose*` methods remain the sole business
     logic for the corresponding MCP and CLI operations.
   - `internal/mcpserver/tools_test.go` is additive in-memory client coverage for
-    every registered schema, representative successes and visible refusals,
-    main/proposal separation, attribution, literal fact-prefix and superseded-row
-    retention, recall provenance, note deadlines, and orderly shutdown. Its mixed
-    denied/allowed regression proves every queued actor group is attempted,
-    successful groups are not recommitted, failed groups alone reach the shutdown
-    retry, and final failures are reported then discarded. More precisely, this
-    file asserts the exact tool names and schemas, deferred-name absence, structured
-    successes and visible refusals, task and note attribution, proposal/main
-    isolation, command lookup, duplicate-key and file-search refusals, superseded
-    fact retention, literal percent/underscore/backslash/escape-character
-    prefixes, max-int64 fact staleness, recall fact provenance, and advertised
-    `doc_chunk` acceptance. It does not claim exhaustive coverage of every
-    ordering, filter, or warning.
+    all 15 registered tools and confirms each has non-nil input and output schemas.
+    It checks representative successes and visible refusals, main/proposal
+    separation, attribution, literal fact-prefix and superseded-row retention,
+    recall provenance, note deadlines, and orderly shutdown. Its mixed
+    denied/allowed regression proves the first flush attempts both actor groups in
+    that fixture despite one failure, leaves only the failed group pending, and
+    does not recommit the successful group when `Close` reports the failure and
+    discards pending rows. It does not directly observe the failed group's shutdown
+    retry attempt. More precisely, this file asserts the exact tool names, non-nil
+    input and output schemas for all 15 tools, recall's exact source-type
+    description, deferred-name absence, structured successes and visible refusals,
+    task and note attribution, proposal/main isolation, command lookup,
+    duplicate-key and file-search refusals, superseded fact retention, literal
+    percent/underscore/backslash/escape-character prefixes, max-int64 fact
+    staleness, recall fact provenance, and advertised `doc_chunk` acceptance. It
+    does not claim exhaustive coverage of every ordering, filter, warning, or
+    schema structure.
     `server_test.go`
     keeps the backend-free `New` foundation expectation but updates its diagnostic
     wording. `localdolt/note_batch_internal_test.go` and the added
