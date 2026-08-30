@@ -108,6 +108,32 @@ export GOFLAGS=-tags=gms_pure_go
   violation that verification shows is real, or a row memdolt cannot attribute leaves
   `main` untouched and the proposal still pending.
 
+  **Before M3, acceptance had no contradiction probe.** It moved from the
+  one-commit and accept-time deny-list guards directly into the merge protocol.
+  After issue #102, ordinary repository fact and decision accepts compare their
+  incoming prose with every current same-kind durable row using the shipped
+  cross-encoder; a score at or above 2.0 refuses before merge. An already-staged
+  supersede proposal or explicit operator `review accept --force` is the only
+  bypass, and both still land through the same reviewer-authored merge. A model
+  configuration, model-open, inference, non-finite-score, or model-close failure
+  refuses before durable state changes. **This restriction binds repository
+  promotion through `internal/review.Accept`/`localdolt.AcceptProposal` alone,
+  not every review verb or every `Store` write**: list, show, reject, expire and
+  stale do not promote and run no inference. Force skips only this probe; the
+  target, one-commit, deny-list, conflict, constraint, attribution and branch
+  deletion rules above still hold.
+
+  `AcceptProposal` calls on one repository-owning Store are serialized: the
+  second accept probes the first one's durable result. This lock binds that
+  method alone, not reads, staging, direct-lane commits, or every Store.
+
+  A branch does not gain the supersede bypass from its metadata label alone:
+  accept verifies the exact staged shape (one old live fact linked, one live
+  same-key replacement, no other old-row or decision change). Before this
+  shape check, accept trusted `proposals.kind = 'supersede'`; after it, a
+  hand-crafted mislabeled commit is refused. This check binds
+  `KindSupersede` acceptance alone, not every two-row proposal.
+
   **That sentence used to read "merges exactly that branch".** It merged the branch
   by name and trusted it to hold one commit, which is true of every branch `stage()`
   produces and of nothing else: a branch carrying two commits was shown and

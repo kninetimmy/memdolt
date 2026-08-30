@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -68,6 +70,41 @@ func TestReviewCLIAcceptRoundTrip(t *testing.T) {
 	}
 	if got := queryString(t, st, "SELECT COUNT(*) FROM dolt_branches WHERE name LIKE 'proposal/%'"); got != "0" {
 		t.Fatalf("%s proposal branch(es) survived the accept", got)
+	}
+}
+
+func TestReviewCLIContradictionConfigFailsClosedUnlessForced(t *testing.T) {
+	base := initStore(t)
+	staged := stageFact(t, base, "record the build lane",
+		localdolt.Fact{Key: "build.command", Value: "go test ./..."})
+	paths, err := layout.New(base)
+	if err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	if err := os.WriteFile(paths.ConfigFile(), []byte("[retrieval]\nmode = 'broken'\n"), 0o600); err != nil {
+		t.Fatalf("write unreadable model configuration: %v", err)
+	}
+
+	errText := runMemdoltErr(t, "review", "accept", staged.ID, "--dir", base)
+	if !strings.Contains(errText, "contradiction probe configuration") {
+		t.Fatalf("accept error = %q, want the contradiction configuration refusal", errText)
+	}
+	pending := decodeJSON[proposalList](t, runMemdolt(t, "review", "list", "--dir", base, "--json"))
+	if len(pending.Proposals) != 1 || pending.Proposals[0].ID != staged.ID {
+		t.Fatalf("configuration failure changed the pending proposals to %+v", pending.Proposals)
+	}
+	st := openInitializedStore(t, base)
+	if got := queryString(t, st, "SELECT COUNT(*) FROM facts"); got != "0" {
+		t.Fatalf("configuration failure put %s facts on main", got)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store after configuration refusal: %v", err)
+	}
+
+	accepted := decodeJSON[localdolt.AcceptResult](t, runMemdolt(t,
+		"review", "accept", staged.ID, "--force", "--dir", base, "--json"))
+	if accepted.Proposal.ID != staged.ID || accepted.Commit == "" {
+		t.Fatalf("forced accept returned %+v", accepted)
 	}
 }
 
