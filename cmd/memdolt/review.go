@@ -13,6 +13,7 @@ import (
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
 	reviewgate "github.com/kninetimmy/memdolt/internal/review"
+	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
@@ -33,6 +34,27 @@ const defaultExpireAfter = 30 * 24 * time.Hour
 // name proposals heading for expiry while accepting them is still an
 // option.
 const defaultStaleAfter = 7 * 24 * time.Hour
+
+// localCommandStore adapts the embedded store to the same application-level
+// accept operation OwnerStore carries over IPC. The review policy stays in
+// internal/review.Accept on both sides of that transport boundary.
+type localCommandStore struct {
+	*localdolt.Store
+	baseDir string
+}
+
+func (s *localCommandStore) ReviewAccept(
+	ctx context.Context,
+	id string,
+	reviewer store.Actor,
+	force bool,
+) (localdolt.AcceptResult, error) {
+	paths, err := layout.New(s.baseDir)
+	if err != nil {
+		return localdolt.AcceptResult{}, err
+	}
+	return reviewgate.Accept(ctx, s.Store, paths.ConfigFile(), id, reviewer, force)
+}
 
 func newReviewCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -95,7 +117,7 @@ func newReviewListCommand() *cobra.Command {
 		Short: "List the proposals waiting for review, oldest first",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				pending, err := st.PendingProposals(ctx)
 				if err != nil {
 					return err
@@ -119,7 +141,7 @@ func newReviewShowCommand() *cobra.Command {
 			"from — the whole of what accepting it would change.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				diff, err := st.ProposalDiff(ctx, args[0])
 				if err != nil {
 					return err
@@ -200,12 +222,8 @@ func newReviewAcceptCommand() *cobra.Command {
 			"attribute leaves main exactly where it was and the proposal still pending.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, actor memory.Actor) error {
-				paths, err := layout.New(flags.dir)
-				if err != nil {
-					return err
-				}
-				result, err := reviewgate.Accept(ctx, st, paths.ConfigFile(), args[0], actor.CommitAuthor(), force)
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, actor memory.Actor) error {
+				result, err := st.ReviewAccept(ctx, args[0], actor.CommitAuthor(), force)
 				if err != nil {
 					return err
 				}
@@ -234,7 +252,7 @@ func newReviewRejectCommand() *cobra.Command {
 		Short: "Delete a proposal's branch, leaving main unchanged",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				proposal, err := st.RejectProposal(ctx, args[0])
 				if err != nil {
 					return err
@@ -261,7 +279,7 @@ func newReviewExpireCommand() *cobra.Command {
 			"proposal is one that was never promoted.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				expired, err := st.ExpireProposals(ctx, time.Now().Add(-olderThan))
 				if err != nil {
 					return err
@@ -289,7 +307,7 @@ func newReviewStaleCommand() *cobra.Command {
 			"expires anything.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st *localdolt.Store, _ memory.Actor) error {
+			return flags.runStore(cmd, func(ctx context.Context, st commandStore, _ memory.Actor) error {
 				pending, err := st.PendingProposals(ctx)
 				if err != nil {
 					return err

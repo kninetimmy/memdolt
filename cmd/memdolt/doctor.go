@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -231,9 +229,17 @@ func schemaCheck(ctx context.Context, paths layout.Paths, ownerLive bool) doctor
 // is what the caller reports.
 func readSchemaVersion(ctx context.Context, paths layout.Paths, ownerLive bool) (int, error) {
 	if ownerLive {
-		return schemaVersionOverIPC(ctx, paths.Base())
+		client, err := storeipc.DialOwnerStore(paths.Base())
+		if err != nil {
+			return 0, fmt.Errorf("reach the store's owner: %w", err)
+		}
+		return client.SchemaVersion(ctx)
 	}
 
+	// Before owner routing was complete, doctor was the exception: it built
+	// two raw IPC queries by hand while every other schema reader opened
+	// LocalStore. After, all schema readers share OwnerStore.SchemaVersion;
+	// the direct branch below remains the no-live-owner behavior.
 	st, err := localdolt.New(localdolt.Config{BaseDir: paths.Base(), Actor: cliActor})
 	if err != nil {
 		return 0, err
@@ -243,72 +249,6 @@ func readSchemaVersion(ctx context.Context, paths layout.Paths, ownerLive bool) 
 	}
 	defer func() { _ = st.Close() }()
 	return st.SchemaVersion(ctx)
-}
-
-// schemaVersionOverIPC reads meta.schema_version through the process that
-// owns the store.
-//
-// It asks the two questions localdolt asks of its own connection, in the
-// same order and for the same reason: a store with no meta table has not
-// been initialized and is at version 0, and its absence is established
-// through information_schema rather than by matching the text of Dolt's
-// "table not found" error.
-func schemaVersionOverIPC(ctx context.Context, base string) (int, error) {
-	client, err := storeipc.Dial(base)
-	if err != nil {
-		return 0, fmt.Errorf("reach the store's owner: %w", err)
-	}
-
-	tables, err := queryCell(ctx, client,
-		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
-		localdolt.DatabaseName, store.MetaTable)
-	if err != nil {
-		return 0, err
-	}
-	count, err := parseCell(tables, "the number of "+store.MetaTable+" tables")
-	if err != nil {
-		return 0, err
-	}
-	if count == 0 {
-		return 0, nil
-	}
-
-	raw, err := queryCell(ctx, client,
-		"SELECT v FROM "+store.MetaTable+" WHERE k = ?", store.SchemaVersionKey)
-	if err != nil {
-		return 0, err
-	}
-	return parseCell(raw, store.MetaTable+"."+store.SchemaVersionKey)
-}
-
-// queryCell runs a statement that returns at most one row of one column,
-// and reports nil for no row.
-func queryCell(ctx context.Context, client *storeipc.Client, sql string, args ...any) (*string, error) {
-	grid, err := client.Query(ctx, storeipc.QueryRequest{SQL: sql, Args: args})
-	if err != nil {
-		return nil, err
-	}
-	if len(grid.Rows) == 0 {
-		return nil, nil
-	}
-	if len(grid.Rows[0]) != 1 {
-		return nil, fmt.Errorf("the owner answered with %d columns, want 1", len(grid.Rows[0]))
-	}
-	return grid.Rows[0][0], nil
-}
-
-// parseCell reads a whole number out of a cell the owner sent as text. An
-// absent cell — no row, or SQL NULL — is zero, which is what an
-// uninitialized store reports.
-func parseCell(cell *string, what string) (int, error) {
-	if cell == nil {
-		return 0, nil
-	}
-	value, err := strconv.Atoi(strings.TrimSpace(*cell))
-	if err != nil {
-		return 0, fmt.Errorf("the owner reports %s as %q, which is not a number", what, *cell)
-	}
-	return value, nil
 }
 
 // describeOwner renders a lock record for an operator. A record with no

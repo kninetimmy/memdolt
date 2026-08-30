@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/kninetimmy/memdolt/internal/store/localdolt"
+	"github.com/kninetimmy/memdolt/internal/store"
 )
 
 const DefaultLimit = 10
@@ -73,7 +73,13 @@ func Parse(raw string, limit int) (Query, error) {
 	return Query{Text: text, Matcher: matcher, Limit: limit}, nil
 }
 
-func Run(ctx context.Context, st *localdolt.Store, query Query) (Response, error) {
+// Store is the committed decision-search surface used by local and owner-routed
+// executions.
+type Store interface {
+	SearchDecisions(context.Context, string, int) ([]store.DecisionSearchHit, error)
+}
+
+func Run(ctx context.Context, st Store, query Query) (Response, error) {
 	hits, err := st.SearchDecisions(ctx, query.Text, query.Limit)
 	if err != nil {
 		return Response{}, err

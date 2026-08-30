@@ -8,8 +8,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
 const (
@@ -127,7 +125,7 @@ func validateGolden(golden GoldenFile, path string) error {
 // EvaluateGolden runs every query through Recall, the same production path as
 // the CLI, and returns ErrBelowBaseline with the complete summary on quality
 // or safety regression.
-func EvaluateGolden(ctx context.Context, st *localdolt.Store, embeddingsPath string, inference Inference, cfg Config, golden GoldenFile, options EvalOptions) (EvalSummary, error) {
+func EvaluateGolden(ctx context.Context, st Store, embeddingsPath string, inference Inference, cfg Config, golden GoldenFile, options EvalOptions) (EvalSummary, error) {
 	if err := validateGolden(golden, options.GoldenPath); err != nil {
 		return EvalSummary{}, err
 	}
