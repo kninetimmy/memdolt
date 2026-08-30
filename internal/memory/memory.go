@@ -342,11 +342,22 @@ func (l *Lanes) queryTasks(ctx context.Context, query string, args ...any) (task
 
 // Note is one row of the session_notes table (§6.1).
 type Note struct {
-	ID        string    `json:"id"`
-	Actor     string    `json:"actor"`
-	ActorRaw  string    `json:"actorRaw"`
-	Text      string    `json:"text"`
+	ID       string `json:"id"`
+	Actor    string `json:"actor"`
+	ActorRaw string `json:"actorRaw"`
+	Text     string `json:"text"`
+	NoteProvenance
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// NoteProvenance is optional host metadata attached to a session note. It is
+// neither note text nor input to actor normalization (PRD §6.1, §11.4).
+type NoteProvenance struct {
+	SessionID  string `json:"session_id,omitempty"`
+	AgentID    string `json:"agent_id,omitempty"`
+	ProviderID string `json:"provider_id,omitempty"`
+	ModelID    string `json:"model_id,omitempty"`
+	Variant    string `json:"variant,omitempty"`
 }
 
 // LogNote is the short-lived CLI seam: it records one session note in one
@@ -355,22 +366,44 @@ type Note struct {
 // the five-minute timer. It must not reuse a general DOLT_COMMIT('-A') path or
 // weaken the clean-working-set guards around proposal staging and review.
 func (l *Lanes) LogNote(ctx context.Context, body string) (Note, string, error) {
+	return l.LogNoteWithProvenance(ctx, body, NoteProvenance{})
+}
+
+// LogNoteWithProvenance records one note with optional, independently
+// verified host metadata. LogNote remains the ordinary no-metadata path.
+func (l *Lanes) LogNoteWithProvenance(
+	ctx context.Context,
+	body string,
+	provenance NoteProvenance,
+) (Note, string, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return Note{}, "", errors.New("a session note needs text")
 	}
 
 	note := Note{
-		ID:        newID(),
-		Actor:     l.actor.Name,
-		ActorRaw:  l.actor.Raw,
-		Text:      body,
-		CreatedAt: now(),
+		ID:             newID(),
+		Actor:          l.actor.Name,
+		ActorRaw:       l.actor.Raw,
+		Text:           body,
+		NoteProvenance: provenance,
+		CreatedAt:      now(),
 	}
-	hash, err := l.write(ctx, "note add "+summarize(note.Text), []string{note.Text, note.ActorRaw}, store.Statement{
-		SQL: "INSERT INTO session_notes (id, actor, actor_raw, text, created_at) " +
-			"VALUES (?, ?, ?, ?, ?)",
-		Args: []any{note.ID, note.Actor, note.ActorRaw, note.Text, note.CreatedAt},
+	text := []string{note.Text, note.ActorRaw}
+	for _, value := range []string{note.SessionID, note.AgentID, note.ProviderID, note.ModelID, note.Variant} {
+		if value != "" {
+			text = append(text, value)
+		}
+	}
+	hash, err := l.write(ctx, "note add "+summarize(note.Text), text, store.Statement{
+		SQL: "INSERT INTO session_notes " +
+			"(id, actor, actor_raw, text, session_id, agent_id, provider_id, model_id, variant, created_at) " +
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		Args: []any{
+			note.ID, note.Actor, note.ActorRaw, note.Text,
+			nullable(note.SessionID), nullable(note.AgentID), nullable(note.ProviderID),
+			nullable(note.ModelID), nullable(note.Variant), note.CreatedAt,
+		},
 	})
 	if err != nil {
 		return Note{}, "", fmt.Errorf("log session note: %w", err)
@@ -388,7 +421,8 @@ func (l *Lanes) Notes(ctx context.Context, limit int) (notes []Note, err error) 
 	}
 
 	rows, err := l.store.Query(ctx,
-		"SELECT id, actor, actor_raw, text, created_at FROM session_notes "+
+		"SELECT id, actor, actor_raw, text, session_id, agent_id, provider_id, model_id, variant, created_at "+
+			"FROM session_notes "+
 			"ORDER BY created_at DESC, id DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, fmt.Errorf("read session notes: %w", err)
@@ -397,11 +431,16 @@ func (l *Lanes) Notes(ctx context.Context, limit int) (notes []Note, err error) 
 
 	for rows.Next() {
 		var note Note
-		var actor, actorRaw sql.NullString
-		if err := rows.Scan(&note.ID, &actor, &actorRaw, &note.Text, &note.CreatedAt); err != nil {
+		var actor, actorRaw, sessionID, agentID, providerID, modelID, variant sql.NullString
+		if err := rows.Scan(
+			&note.ID, &actor, &actorRaw, &note.Text, &sessionID, &agentID,
+			&providerID, &modelID, &variant, &note.CreatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("read session notes: %w", err)
 		}
 		note.Actor, note.ActorRaw = nullText(actor), nullText(actorRaw)
+		note.SessionID, note.AgentID = nullText(sessionID), nullText(agentID)
+		note.ProviderID, note.ModelID, note.Variant = nullText(providerID), nullText(modelID), nullText(variant)
 		notes = append(notes, note)
 	}
 	if err := rows.Err(); err != nil {

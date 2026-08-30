@@ -97,12 +97,76 @@ export GOFLAGS=-tags=gms_pure_go
     dependencies and behavior still hold. This `AGENTS.md` record preserves
     the before-and-after above; all other guidance and its managed block are
     unchanged.
+- Register agent hosts and use the current core workflow skills (PRD §11.4):
+  tracked `.mcp.json` and `opencode.json` coexist, and the latter discovers
+  only `check-init`, `recall`, and `wrap-up` beneath
+  `templates/skills/opencode`. **Before issue #105 there was no tracked host
+  registration or committed skill template in this repository; after it,
+  Claude Code and OpenCode launch `memdolt serve` through their distinct native
+  shapes, and Claude Code, Codex, and OpenCode each carry those same three
+  skills.** The complete structural blast radius is:
+
+  - `.mcp.json` owns Claude Code's `mcpServers.memdolt` registration only.
+    `opencode.json` independently owns OpenCode's native
+    `mcp.servers.memdolt`, plural command-object map, and skill path. Neither
+    file replaces, generates, or modifies the other host's configuration.
+  - `cmd/memdolt/doctor.go` adds `mcp-registration-opencode` to `runDoctor`.
+    `openCodeRegistrationCheckWithHome` applies the supported-path restriction
+    to every repo and user candidate it reads: only parsed native
+    `mcp.servers.memdolt` and V1 `mcp.memdolt` objects count. That restriction
+    does not apply to arbitrary JSON readers or similarly named paths.
+    JSONC comment and trailing-comma handling precedes a real JSON parse;
+    malformed input still does not count. Existing lock, IPC, schema, and
+    empty-recall checks retain their behavior and failure contribution.
+    **Before this check, every doctor warning named a condition memdolt clears
+    itself; after it, a missing optional OpenCode registration is also a
+    zero-exit warning requiring operator action.** Stale lock and pidfile
+    warnings still mean and do exactly what they did before.
+  - `internal/store/schema.go` appends migration 4; migrations 1-3 are
+    unchanged. `sessionNoteProvenance` adds nullable `session_id`, `agent_id`,
+    `provider_id`, `model_id`, and `variant` columns, so pre-migration and
+    ordinary notes remain valid and repeated migration remains a no-op.
+  - `internal/memory.Note` adds optional provenance through
+    `NoteProvenance`; `LogNoteWithProvenance` writes and deny-list-declares
+    those supplied strings, while `Notes` reads them. Existing `LogNote` now
+    calls that method with empty metadata, so its trimmed text, actor/raw
+    actor, one-commit, ordering, and JSON behavior still hold. This metadata
+    rule binds session-note calls through these two methods, not every direct
+    lane or persisted string.
+  - `internal/opencode.ValidateSessionID` and `VerifySession` are the sole
+    OpenCode process boundary added here: they accept a host-supplied `ses`
+    identifier only, invoke `opencode2` with argument APIs, require exact
+    returned `data.id`, and on Windows try `opencode2.cmd` only after the bare
+    program is unavailable. This restriction binds these functions and the
+    commands that call them, not every subprocess in memdolt.
+  - `cmd/memdolt/opencode.go` adds read-only `opencode session-info` and
+    `opencode wrap-up-note`; `cmd/memdolt/root.go` retains every prior command
+    and adds that group. `logOpenCodeWrapUpNote` verifies before opening a
+    store, then writes exactly one provenance-bearing note. **Before issue
+    #105, raw `cli` became canonical `agent:opencode` only through
+    `mcpserver.actorFor`; after it, this verified CLI seam deliberately writes
+    the same raw/canonical pair.** The MCP-specific restriction on `actorFor`
+    still binds only `New`'s `tools/call` middleware; this command is a second
+    named seam, not a change to `NormalizeActor` or every CLI command.
+  - `templates/skills/{claude,codex,opencode}` contains only the three current
+    M3 workflows. Their tool references are limited to M3's implemented set;
+    fact and decision claims remain proposals for human review. Metrics,
+    visualization, locate, documents, global memory, repo operations, render,
+    sync, elicited review, and transcript archive remain undiscovered and are
+    not stubbed here. This allowlist binds these committed templates, not the
+    eventual full server surface.
+  - `doctor_test.go`, `host_templates_test.go`, `opencode_test.go`,
+    `internal/opencode/session_test.go`, and the additive migration assertions
+    cover the new paths. They change no production behavior. This `AGENTS.md`
+    entry records the before-and-after and scope restrictions; all other
+    guidance and its managed block remain unchanged.
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
   §6.2, §6.4). It is idempotent: a second run adds nothing to the Dolt
   history.
-- Check a repository: `go run ./cmd/memdolt doctor` reports the store
+- Check a repository: `go run ./cmd/memdolt doctor` reports the OpenCode MCP
+  registration alongside the store
   lock's ownership state (held, an orphaned record, absent), whether a live
   owner answers on its IPC endpoint, and whether the store's schema is
   newer than the binary (PRD §5.2.4, §6.4). It also names the machine-local
@@ -112,7 +176,9 @@ export GOFLAGS=-tags=gms_pure_go
   its schema; this briefly takes the ownership lock and may create
   `.memdolt/LOCK`, but makes no durable database change. It exits nonzero
   when a check fails. A condition memdolt clears by itself (a stale lock
-  record, an orphaned pidfile) is a warning and exits zero.
+  record, an orphaned pidfile) remains a warning and exits zero; a missing
+  optional OpenCode registration is now also an operator-action warning and
+  exits zero, as recorded in the before-and-after above.
 - Build or inspect the derived embedding side-store (PRD §8.2): `go run
   ./cmd/memdolt index rebuild` synchronizes `.memdolt/embeddings.sqlite`
   with every committed fact, decision, task, and document chunk, while
