@@ -51,6 +51,17 @@ export GOFLAGS=-tags=gms_pure_go
   in `.github/workflows/ci.yml`)
 - Run the CLI: `go run ./cmd/memdolt version` (add `--json` for a single
   machine-readable JSON object instead of the human-readable line)
+- Run the MCP server: `go run ./cmd/memdolt serve` owns the repository store
+  and authenticated IPC endpoint while serving MCP over stdin/stdout. **Before
+  issue #103, the root command had no `serve` child and the owner lifecycle was
+  exercised only by lower-level IPC tests and the soak; after it, `serve`
+  stops protocol handling, closes pending session work, then closes IPC and
+  the store.** That ordering binds `cmd/memdolt.runServe` alone, not every CLI
+  command or every go-sdk server. Existing short-lived commands still route
+  through a live owner and otherwise open the store directly. Attribution
+  middleware installed by `internal/mcpserver.New` binds every `tools/call`
+  handled by that server, not arbitrary go-sdk servers or non-tool requests;
+  `tools/list` alone receives the static long-TTL cache hint.
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
