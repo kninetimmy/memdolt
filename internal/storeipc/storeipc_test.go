@@ -3,6 +3,7 @@ package storeipc_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -10,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -207,9 +207,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("routed memory read: %v", err)
 	}
-	if !reflect.DeepEqual(directTasks, routedTasks) {
-		t.Fatalf("memory reads differ:\ndirect: %+v\nrouted: %+v", directTasks, routedTasks)
-	}
+	assertJSONParity(t, "memory reads", directTasks, routedTasks)
 	if routedTask.ID == "" || routedCommit == "" {
 		t.Fatalf("routed memory write returned task=%+v commit=%q", routedTask, routedCommit)
 	}
@@ -237,9 +235,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("routed proposal diff: %v", err)
 	}
-	if !reflect.DeepEqual(directDiff, routedDiff) {
-		t.Fatalf("proposal diffs differ:\ndirect: %+v\nrouted: %+v", directDiff, routedDiff)
-	}
+	assertJSONParity(t, "proposal diffs", directDiff, routedDiff)
 	if _, err := routed.AcceptProposal(ctx, stagedFact.ID, testActor); err != nil {
 		t.Fatalf("routed review accept: %v", err)
 	}
@@ -263,9 +259,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("routed embedding sources: %v", err)
 	}
-	if !reflect.DeepEqual(directEmbedding, routedEmbedding) {
-		t.Fatalf("embedding sources differ:\ndirect: %+v\nrouted: %+v", directEmbedding, routedEmbedding)
-	}
+	assertJSONParity(t, "embedding sources", directEmbedding, routedEmbedding)
 	directRecall, err := direct.RecallSources(ctx)
 	if err != nil {
 		t.Fatalf("direct recall sources: %v", err)
@@ -274,9 +268,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("routed recall sources: %v", err)
 	}
-	if !reflect.DeepEqual(directRecall, routedRecall) {
-		t.Fatalf("recall sources differ:\ndirect: %+v\nrouted: %+v", directRecall, routedRecall)
-	}
+	assertJSONParity(t, "recall sources", directRecall, routedRecall)
 	directFTS, err := direct.RecallFTS(ctx, "owner", []string{"fact", "decision", "task"})
 	if err != nil {
 		t.Fatalf("direct recall FTS: %v", err)
@@ -285,9 +277,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("routed recall FTS: %v", err)
 	}
-	if !reflect.DeepEqual(directFTS, routedFTS) {
-		t.Fatalf("recall FTS differs:\ndirect: %+v\nrouted: %+v", directFTS, routedFTS)
-	}
+	assertJSONParity(t, "recall FTS", directFTS, routedFTS)
 	directSearch, err := direct.SearchDecisions(ctx, "owner", 10)
 	if err != nil {
 		t.Fatalf("direct search: %v", err)
@@ -296,9 +286,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("routed search: %v", err)
 	}
-	if !reflect.DeepEqual(directSearch, routedSearch) {
-		t.Fatalf("search differs:\ndirect: %+v\nrouted: %+v", directSearch, routedSearch)
-	}
+	assertJSONParity(t, "search", directSearch, routedSearch)
 	directChanged, err := direct.LastChanged(ctx, "fact", stagedFact.RowID)
 	if err != nil {
 		t.Fatalf("direct provenance: %v", err)
@@ -307,9 +295,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("routed provenance: %v", err)
 	}
-	if !reflect.DeepEqual(directChanged, routedChanged) {
-		t.Fatalf("provenance differs: direct=%+v routed=%+v", directChanged, routedChanged)
-	}
+	assertJSONParity(t, "provenance", directChanged, routedChanged)
 	supersede, err := routed.ProposeSupersede(ctx, proposal, stagedFact.RowID, localdolt.Fact{
 		Key: "routing.owner", Value: "the replacement is staged through the owner",
 	})
@@ -324,9 +310,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("routed supersede diff: %v", err)
 	}
-	if !reflect.DeepEqual(directSupersedeDiff, routedSupersedeDiff) {
-		t.Fatalf("supersede diffs differ:\ndirect: %+v\nrouted: %+v", directSupersedeDiff, routedSupersedeDiff)
-	}
+	assertJSONParity(t, "supersede diffs", directSupersedeDiff, routedSupersedeDiff)
 	if _, err := routed.RejectProposal(ctx, supersede.ID); err != nil {
 		t.Fatalf("reject routed supersede: %v", err)
 	}
@@ -351,8 +335,21 @@ func assertPendingParity(t *testing.T, ctx context.Context, direct *localdolt.St
 	if err != nil {
 		t.Fatalf("routed pending proposals: %v", err)
 	}
-	if !reflect.DeepEqual(directPending, routedPending) {
-		t.Fatalf("pending proposals differ:\ndirect: %+v\nrouted: %+v", directPending, routedPending)
+	assertJSONParity(t, "pending proposals", directPending, routedPending)
+}
+
+func assertJSONParity(t *testing.T, label string, direct, routed any) {
+	t.Helper()
+	directJSON, err := json.Marshal(direct)
+	if err != nil {
+		t.Fatalf("encode direct %s: %v", label, err)
+	}
+	routedJSON, err := json.Marshal(routed)
+	if err != nil {
+		t.Fatalf("encode routed %s: %v", label, err)
+	}
+	if !bytes.Equal(directJSON, routedJSON) {
+		t.Fatalf("%s differ:\ndirect: %s\nrouted: %s", label, directJSON, routedJSON)
 	}
 }
 
