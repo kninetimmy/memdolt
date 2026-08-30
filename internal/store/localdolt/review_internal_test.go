@@ -103,3 +103,71 @@ func TestProposalBranchOfRefusesAnythingButAULID(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateSupersedeChangesBindsTheBypassToASupersede(t *testing.T) {
+	valid := func() []ProposalChange {
+		return []ProposalChange{
+			{
+				Type: "modified",
+				From: map[string]string{
+					"id": "old", "key": "build.command", "value": "go test ./...", "live_key": "build.command",
+				},
+				To: map[string]string{
+					"id": "old", "key": "build.command", "value": "go test ./...", "superseded_by": "new",
+				},
+			},
+			{
+				Type: "added",
+				To: map[string]string{
+					"id": "new", "key": "build.command", "value": "go test -race ./...", "live_key": "build.command",
+				},
+			},
+		}
+	}
+	if err := validateSupersedeChanges(valid(), nil); err != nil {
+		t.Fatalf("valid supersede refused: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		mutate    func([]ProposalChange)
+		decisions []ProposalChange
+		want      string
+	}{
+		{
+			name: "metadata without the old-row update",
+			mutate: func(changes []ProposalChange) {
+				changes[0].Type = "added"
+			},
+			want: "adds more than one",
+		},
+		{
+			name: "link to a different replacement",
+			mutate: func(changes []ProposalChange) {
+				changes[0].To["superseded_by"] = "elsewhere"
+			},
+			want: "must be live and link",
+		},
+		{
+			name: "an extra old-row edit",
+			mutate: func(changes []ProposalChange) {
+				changes[0].To["value"] = "silently rewritten"
+			},
+			want: "also changes old row column",
+		},
+		{
+			name:      "a decision hidden in the same commit",
+			mutate:    func([]ProposalChange) {},
+			decisions: []ProposalChange{{Type: "added", To: map[string]string{"id": "decision"}}},
+			want:      "decision row",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changes := valid()
+			tc.mutate(changes)
+			if err := validateSupersedeChanges(changes, tc.decisions); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validation error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

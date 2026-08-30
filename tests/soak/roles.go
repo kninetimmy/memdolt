@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kninetimmy/memdolt/internal/ipc"
+	reviewgate "github.com/kninetimmy/memdolt/internal/review"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 	"github.com/kninetimmy/memdolt/internal/storeipc"
@@ -134,7 +135,13 @@ func runOwner(cfg roleConfig) error {
 		return err
 	}
 
-	routes, err := storeipc.NewHandler(storeipc.Config{Store: st, Logger: logger})
+	routes, err := storeipc.NewHandler(storeipc.Config{
+		Store: st,
+		ReviewAccept: func(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+			return reviewgate.Accept(ctx, st, filepath.Join(cfg.BaseDir, ".memdolt", "config.toml"), id, reviewer, force)
+		},
+		Logger: logger,
+	})
 	if err != nil {
 		return fmt.Errorf("new store routes: %w", err)
 	}

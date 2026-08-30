@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kninetimmy/memdolt/internal/layout"
+	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -157,6 +158,22 @@ func (s *OwnerStore) LastChanged(ctx context.Context, sourceType, sourceID strin
 	return result, err
 }
 
+// RecordCommand keeps the lane's incrementing upsert and read-back inside one
+// owner request. Splitting them into Commit and Query requests would leave a
+// window where another client could replace the row before this call reads it.
+func (s *OwnerStore) RecordCommand(
+	ctx context.Context,
+	actor memory.Actor,
+	kind, cmdline string,
+	exitCode int,
+) (memory.Command, string, error) {
+	var result recordCommandResult
+	err := s.operation(ctx, opRecordCommand, recordCommandArgs{
+		Actor: actor, Kind: kind, Cmdline: cmdline, ExitCode: exitCode,
+	}, &result)
+	return result.Command, result.Commit, err
+}
+
 func (s *OwnerStore) ProposeFact(ctx context.Context, proposal localdolt.Proposal, fact localdolt.Fact) (localdolt.StagedProposal, error) {
 	var result localdolt.StagedProposal
 	err := s.operation(ctx, opProposeFact, proposeFactArgs{Proposal: proposal, Fact: fact}, &result)
@@ -197,9 +214,12 @@ func (s *OwnerStore) ExpireProposals(ctx context.Context, before time.Time) ([]l
 	return result, s.operation(ctx, opExpireProposals, expireProposalsArgs{Before: before}, &result)
 }
 
-func (s *OwnerStore) AcceptProposal(ctx context.Context, id string, reviewer store.Actor) (localdolt.AcceptResult, error) {
+// ReviewAccept promotes through the owner's application review gate. Force is
+// transported as operator intent; no model callback or config path crosses the
+// process boundary.
+func (s *OwnerStore) ReviewAccept(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
 	var result localdolt.AcceptResult
-	return result, s.operation(ctx, opAcceptProposal, acceptProposalArgs{ID: id, Reviewer: reviewer}, &result)
+	return result, s.operation(ctx, opReviewAccept, acceptProposalArgs{ID: id, Reviewer: reviewer, Force: force}, &result)
 }
 
 type ownerRows struct {

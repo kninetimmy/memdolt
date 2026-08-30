@@ -179,6 +179,37 @@ the IPC route. The typed operation allow-list is narrower: it binds that route
 alone, so adding another method to a store does not expose it without naming it
 on both handler and client.
 
+Review acceptance crosses that typed route as the complete application gate,
+not as a raw storage merge. The first version of this routing pass called the
+old `localdolt.AcceptProposal` signature directly, carried no `--force` intent,
+and therefore omitted the contradiction guard that landed concurrently on
+`main`. After integration, `ReviewAccept` carries the proposal id, reviewer and
+force bit in one request; the owner handler requires a `ReviewAcceptFunc`, whose
+production binding is `internal/review.Accept`, and that function constructs
+`AcceptOptions` and enters `localdolt.Store.AcceptProposal` on the owning
+process. Thus configuration validation and model use stay with the owner,
+`acceptMu` serializes direct and routed accepts on that same Store, the
+contradiction probe and validated supersede-shape bypass remain in force, and
+the existing one-commit, deny-list, conflict, constraint, attribution, merge
+and branch-deletion behavior still holds. This restriction binds the named
+`ReviewAccept` route alone: list, show, reject, expire and stale retain their
+existing routed methods, and neither model callbacks nor a client-selected
+configuration path cross IPC. The complete storage symbols and their scopes
+remain enumerated in §7's contradiction-guard handoff.
+
+Command recording has one additional concurrency boundary. Before the typed
+operation, `internal/memory.RecordCommand` protected its incrementing upsert
+plus read-back with process-local `commandMu`; the first routed version sent
+that commit and query as two owner HTTP requests, so two client processes could
+interleave and one could return the other's command line and counters. After,
+the `record_command` operation runs the entire existing `RecordCommand` method
+inside the owner, where the same mutex covers every routed client; direct mode
+keeps its previous critical section, SQL increment, actor attribution,
+deny-list scan and one-commit result. The route is still submitted once: if the
+owner commits and loses the response, the outcome remains unknown and is not
+retried. This owner-side multi-step restriction binds `RecordCommand` alone,
+not every memory method, every pair of IPC requests, or every `Store` method.
+
 `memdolt init` is the lifecycle exception. Before, it attempted a direct open
 and surfaced the generic ownership-lock refusal. After, a verified live owner
 causes a specific “stop the owner and rerun `memdolt init`” refusal before any
@@ -309,9 +340,86 @@ The untrusted-writer invariant is memhub's soul; memdolt keeps it whole.
 1. Agents propose (branch), humans promote (merge). `review accept` is the only path to durable truth in the reviewed lane.
 2. **Global promotion is CLI-only, permanently** (r2 D19, adopted verbatim). `global`-targeted proposals are excluded from MCP/elicitation review; MCP `review_pending` reports them as "N global proposals pending — run `memdolt review` in a terminal."
 3. Elicitation-gated review over MCP for **repo-scope** proposals: the go-sdk's multi-round-trip machinery with its legacy `elicitation/create` downgrade shim **[V]** means confirmation dialogs work in today's Claude Code and upgrade transparently when MRTR delivery ships. The r2 D16 token discipline (single-use, short-expiry, server-minted, pending-row-backed `requestState`) applies unchanged — an auto-responding client hook must not be able to forge an approval.
-4. Accept-time contradiction probe: port memhub's cross-encoder check (score incoming payload vs existing durable rows; ≥2.0 blocks with `--supersede`/`--force` escapes).
+4. Accept-time contradiction probe: the shipped cross-encoder scores incoming fact or decision prose against current same-kind durable rows; ≥2.0 blocks, and only an already-staged supersede proposal or explicit operator `--force` bypasses the probe.
 5. Never auto-approve on absent elicitation response. Fail closed on missing actor attribution (`agent:unknown` = untrusted).
 6. Doc ingestion stays a direct, user-attributed lane (docs are user-pointed artifacts, not agent claims) with the same path confinement: MCP `doc_add` restricted to repo root ∪ `allowed_dirs`, deny-list on top; CLI unconfined.
+
+**M3 contradiction-guard handoff (2026-08-29, issue #102).** Before this
+change, item 4 was a required but unshipped port and
+`internal/store/localdolt/review.go` explicitly said the accept-time probe was
+not there; `review accept` proceeded from one-commit and deny-list checks to
+the merge protocol without comparing the claim with durable prose. After it,
+ordinary repository fact and decision acceptance runs the fixed 2.0 probe
+before `DOLT_MERGE`, while supersede proposals and an operator's `--force`
+remain the only bypasses. The structural blast radius is explicit:
+
+- `internal/review.Accept` is the shared application entry point for CLI and
+  MCP promotion. It validates the repository's existing `[retrieval]` model
+  configuration and supplies `embedding.Open` to the storage gate. It does
+  not honor `retrieval.use_reranker = false`: that setting still controls
+  recall, while the acceptance guard is mandatory. `retrieval.LoadConfig`,
+  its defaults and validation, and all recall behavior otherwise remain as
+  before. This mandatory-probe rule belongs to repository promotion through
+  `internal/review.Accept`, not to every retrieval-config caller.
+- `localdolt.Store.AcceptProposal`, `AcceptOptions`,
+  `ContradictionScorer`, `ErrContradiction`, and `ContradictionError` own the
+  storage boundary. An ordinary fact or decision accept requires readable
+  model configuration; when current same-kind rows exist, it opens, runs and
+  closes the scorer and refuses on any failure or any finite score ≥2.0.
+  Facts compare `key: value`; decisions compare the optional summary, title
+  and rationale in the same shape as production embedding input. Current
+  facts are `superseded_by IS NULL`; current decisions are active and
+  unsuperseded. Every such row is scored, without a recency cap. These rules
+  bind `AcceptProposal` alone, not `PendingProposals`, `ProposalDiff`,
+  `RejectProposal`, `ExpireProposals`, or every `Store` write.
+- `localdolt.Store.acceptMu` serializes `AcceptProposal` calls on the one
+  repository-owning Store, so a second promotion probes the first promotion's
+  durable result rather than the same old `main`. Before this lock, concurrent
+  accepts were left to Dolt transaction timing; after it, their promotion
+  order is explicit. This serialization binds accepts on one Store alone, not
+  reads, proposal staging, direct-lane commits, or every Store implementation.
+- `localdolt.requireSupersedeShape` and `validateSupersedeChanges` bind the
+  model bypass to the shape `ProposeSupersede` actually stages: one live fact
+  is changed only by its `superseded_by`/generated `live_key` handoff, one
+  live replacement takes the same key, and no decision row changes. Before
+  this guard, accept trusted a proposal metadata row whose kind said
+  `supersede`; after it, a hand-crafted commit carrying that label without the
+  link-and-replacement shape is refused rather than gaining the bypass. This
+  shape restriction belongs to `KindSupersede` acceptance, not to ordinary
+  fact/decision proposals or every two-row commit.
+- `localdolt.acceptInTx` now runs the read-only probe before `merge` in the
+  same rollback-capable transaction. A refusal, model-open failure, inference
+  failure, non-finite score, or model-close failure therefore leaves `main`
+  unmoved and the proposal branch present. A score below 2.0 reaches the
+  existing `merge`, `resolveOrBlock`, surface re-check, constraint
+  verification, reviewer-authored `DOLT_COMMIT`, and post-commit branch
+  deletion unchanged. The one-commit guard and accept-time deny-list scan
+  still run before that transaction and retain their prior behavior.
+- `localdolt.factSemanticText` and `decisionSemanticText` are the shared text
+  renderers now used by both `EmbeddingSources` and the contradiction probe.
+  Their output is byte-for-byte the prior embedding text, so embedding hashes,
+  side-store identity, recall candidates, and reranker inputs retain their
+  old behavior. This sharing applies to those two named renderers, not to
+  task or document text.
+- `memdolt review accept --force` is the sole new operator surface. It skips
+  only contradiction configuration and inference; target validation,
+  one-commit enforcement, accept-time deny-list scanning, conflict and
+  constraint verification, reviewer attribution, the no-fast-forward merge
+  commit, and branch deletion after a successful commit all still hold. A
+  supersede proposal takes the same bypass because its reviewed payload
+  already declares which durable row it replaces. Force and supersede do not
+  create a direct-write path, and accepted results remain the same auditable
+  proposal-commit plus reviewer-merge graph. Existing review JSON result
+  fields and the list/show/reject/expire/stale CLI surfaces are unchanged.
+- The `facts`, `decisions`, and `proposals` tables, their columns and indexes,
+  migration history, source rows, and commit message format do not change.
+  The probe reads current `facts`/`decisions` from the transaction's durable
+  `main` state and reads incoming prose from the immutable staging commit;
+  it writes neither table. Tests inject deterministic scorers at the
+  `ContradictionScorer` seam, while production promotion always supplies the
+  checksum-verified shipped engine through `internal/review.Accept`; no new
+  model, dependency, side-store, schema object, or configuration knob is
+  introduced.
 
 ---
 

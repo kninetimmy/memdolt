@@ -16,6 +16,7 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/ipc"
 	"github.com/kninetimmy/memdolt/internal/layout"
+	reviewgate "github.com/kninetimmy/memdolt/internal/review"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 	"github.com/kninetimmy/memdolt/internal/storeipc"
@@ -211,8 +212,12 @@ func serveStore(t *testing.T, base string) *ipc.Server {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
+	configPath := pathsFor(t, base).ConfigFile()
 	handler, err := storeipc.NewHandler(storeipc.Config{
-		Store:  st,
+		Store: st,
+		ReviewAccept: func(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+			return reviewgate.Accept(ctx, st, configPath, id, reviewer, force)
+		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {

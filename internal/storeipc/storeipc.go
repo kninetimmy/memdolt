@@ -140,6 +140,10 @@ type Config struct {
 	// Store is the store this process owns. Required.
 	Store Backend
 
+	// ReviewAccept is the complete application review gate. Required because
+	// exposing a raw storage accept would bypass contradiction policy.
+	ReviewAccept ReviewAcceptFunc
+
 	// MaxRows bounds a result set. Zero means DefaultMaxRows.
 	MaxRows int
 
@@ -153,6 +157,7 @@ type Config struct {
 
 type handler struct {
 	store           Backend
+	reviewAccept    ReviewAcceptFunc
 	maxRows         int
 	maxRequestBytes int64
 	logger          *slog.Logger
@@ -165,8 +170,12 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("storeipc: a store is required")
 	}
+	if cfg.ReviewAccept == nil {
+		return nil, errors.New("storeipc: the application review accept gate is required")
+	}
 	h := &handler{
 		store:           cfg.Store,
+		reviewAccept:    cfg.ReviewAccept,
 		maxRows:         cfg.MaxRows,
 		maxRequestBytes: cfg.MaxRequestBytes,
 		logger:          cfg.Logger,

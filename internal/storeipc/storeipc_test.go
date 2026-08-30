@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -24,6 +26,11 @@ import (
 )
 
 var testActor = store.Actor{Name: "agent:claude-code", Email: "claude@memdolt.invalid"}
+
+type fixedScorer float32
+
+func (s fixedScorer) Rerank(string, string) (float32, error) { return float32(s), nil }
+func (fixedScorer) Close() error                             { return nil }
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -54,6 +61,17 @@ func startOwner(t *testing.T) (string, *localdolt.Store, *ipc.Server) {
 // how a test puts a fault between the store and the answer that reports it.
 func startOwnerWrapping(t *testing.T, wrap func(http.Handler) http.Handler) (string, *localdolt.Store, *ipc.Server) {
 	t.Helper()
+	return startOwnerConfigured(t, nil, wrap)
+}
+
+// startOwnerConfigured lets a review test inject deterministic contradiction
+// scoring while every ordinary transport test uses the same permissive scorer.
+func startOwnerConfigured(
+	t *testing.T,
+	configureAccept func(*localdolt.Store) storeipc.ReviewAcceptFunc,
+	wrap func(http.Handler) http.Handler,
+) (string, *localdolt.Store, *ipc.Server) {
+	t.Helper()
 	base := baseDir(t)
 
 	st, err := localdolt.New(localdolt.Config{BaseDir: base, Actor: testActor, Logger: discardLogger()})
@@ -65,7 +83,15 @@ func startOwnerWrapping(t *testing.T, wrap func(http.Handler) http.Handler) (str
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	routes, err := storeipc.NewHandler(storeipc.Config{Store: st, Logger: discardLogger()})
+	reviewAccept := reviewAcceptWithScorer(st, func() localdolt.ContradictionScorer { return fixedScorer(-100) })
+	if configureAccept != nil {
+		reviewAccept = configureAccept(st)
+	}
+	routes, err := storeipc.NewHandler(storeipc.Config{
+		Store:        st,
+		ReviewAccept: reviewAccept,
+		Logger:       discardLogger(),
+	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
@@ -78,6 +104,21 @@ func startOwnerWrapping(t *testing.T, wrap func(http.Handler) http.Handler) (str
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 	return base, st, srv
+}
+
+func reviewAcceptWithScorer(
+	st *localdolt.Store,
+	newScorer func() localdolt.ContradictionScorer,
+) storeipc.ReviewAcceptFunc {
+	return func(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+		return st.AcceptProposal(ctx, id, reviewer, localdolt.AcceptOptions{
+			Force:                       force,
+			ValidateContradictionConfig: func() error { return nil },
+			OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+				return newScorer(), nil
+			},
+		})
+	}
 }
 
 // TestClientWritesAndReadsThroughTheOwner covers the acceptance criterion
@@ -236,7 +277,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 		t.Fatalf("routed proposal diff: %v", err)
 	}
 	assertJSONParity(t, "proposal diffs", directDiff, routedDiff)
-	if _, err := routed.AcceptProposal(ctx, stagedFact.ID, testActor); err != nil {
+	if _, err := routed.ReviewAccept(ctx, stagedFact.ID, testActor, false); err != nil {
 		t.Fatalf("routed review accept: %v", err)
 	}
 
@@ -247,7 +288,7 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 		t.Fatalf("routed proposal write: %v", err)
 	}
 	assertPendingParity(t, ctx, direct, routed)
-	if _, err := routed.AcceptProposal(ctx, stagedDecision.ID, testActor); err != nil {
+	if _, err := routed.ReviewAccept(ctx, stagedDecision.ID, testActor, false); err != nil {
 		t.Fatalf("routed review accept decision: %v", err)
 	}
 
@@ -323,6 +364,308 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 		t.Fatalf("routed review reject: %v", err)
 	}
 	assertPendingParity(t, ctx, direct, routed)
+}
+
+func TestDirectAndOwnerRoutedReviewTrustBoundaryParity(t *testing.T) {
+	t.Run("contradiction refusal and force", func(t *testing.T) {
+		ctx := context.Background()
+		var directAccept storeipc.ReviewAcceptFunc
+		base, direct, _ := startOwnerConfigured(t, func(st *localdolt.Store) storeipc.ReviewAcceptFunc {
+			directAccept = reviewAcceptWithScorer(st, func() localdolt.ContradictionScorer { return fixedScorer(2) })
+			return directAccept
+		}, nil)
+		if _, err := direct.Migrate(ctx); err != nil {
+			t.Fatalf("migrate owner store: %v", err)
+		}
+		routed, err := storeipc.DialOwnerStore(base)
+		if err != nil {
+			t.Fatalf("dial owner store: %v", err)
+		}
+		if _, err := direct.Commit(ctx, store.CommitRequest{
+			Statements: []store.Statement{{
+				SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+				Args: []any{"01J0000000000000000000BASE", "routing.baseline", "durable baseline", "user", "2026-08-30 12:00:00"},
+			}},
+			Text: []string{"routing.baseline", "durable baseline"}, Message: "record the durable baseline", Author: testActor,
+		}); err != nil {
+			t.Fatalf("seed durable fact: %v", err)
+		}
+
+		proposal := localdolt.Proposal{Rationale: "exercise contradiction parity", Actor: testActor, Target: localdolt.TargetRepo}
+		directStaged, err := direct.ProposeFact(ctx, proposal, localdolt.Fact{Key: "routing.direct", Value: "direct claim"})
+		if err != nil {
+			t.Fatalf("stage direct contradiction: %v", err)
+		}
+		routedStaged, err := routed.ProposeFact(ctx, proposal, localdolt.Fact{Key: "routing.routed", Value: "routed claim"})
+		if err != nil {
+			t.Fatalf("stage routed contradiction: %v", err)
+		}
+
+		_, directErr := directAccept(ctx, directStaged.ID, testActor, false)
+		_, routedErr := routed.ReviewAccept(ctx, routedStaged.ID, testActor, false)
+		for label, acceptErr := range map[string]error{"direct": directErr, "routed": routedErr} {
+			if acceptErr == nil || !strings.Contains(acceptErr.Error(), "contradict") {
+				t.Fatalf("%s contradiction error = %v, want the contradiction refusal", label, acceptErr)
+			}
+		}
+		assertPendingParity(t, ctx, direct, routed)
+
+		directResult, err := directAccept(ctx, directStaged.ID, testActor, true)
+		if err != nil {
+			t.Fatalf("force direct accept: %v", err)
+		}
+		routedResult, err := routed.ReviewAccept(ctx, routedStaged.ID, testActor, true)
+		if err != nil {
+			t.Fatalf("force routed accept: %v", err)
+		}
+		if directResult.Commit == "" || routedResult.Commit == "" ||
+			directResult.Proposal.ID != directStaged.ID || routedResult.Proposal.ID != routedStaged.ID {
+			t.Fatalf("forced results direct=%+v routed=%+v", directResult, routedResult)
+		}
+		assertPendingParity(t, ctx, direct, routed)
+	})
+
+	t.Run("accept serialization", func(t *testing.T) {
+		ctx := context.Background()
+		var directAccept storeipc.ReviewAcceptFunc
+		base, direct, _ := startOwnerConfigured(t, func(st *localdolt.Store) storeipc.ReviewAcceptFunc {
+			directAccept = reviewAcceptWithScorer(st, func() localdolt.ContradictionScorer {
+				return serializedAcceptScorer{}
+			})
+			return directAccept
+		}, nil)
+		if _, err := direct.Migrate(ctx); err != nil {
+			t.Fatalf("migrate owner store: %v", err)
+		}
+		routed, err := storeipc.DialOwnerStore(base)
+		if err != nil {
+			t.Fatalf("dial owner store: %v", err)
+		}
+		if _, err := direct.Commit(ctx, store.CommitRequest{
+			Statements: []store.Statement{{
+				SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+				Args: []any{"01J0000000000000000000BASE", "serial.baseline", "durable baseline", "user", "2026-08-30 12:00:00"},
+			}},
+			Text: []string{"serial.baseline", "durable baseline"}, Message: "record serialization baseline", Author: testActor,
+		}); err != nil {
+			t.Fatalf("seed serialization baseline: %v", err)
+		}
+		proposal := localdolt.Proposal{Rationale: "exercise accept serialization", Actor: testActor, Target: localdolt.TargetRepo}
+		first, err := direct.ProposeFact(ctx, proposal, localdolt.Fact{Key: "serial.first", Value: "serial candidate first"})
+		if err != nil {
+			t.Fatalf("stage direct serialized accept: %v", err)
+		}
+		second, err := routed.ProposeFact(ctx, proposal, localdolt.Fact{Key: "serial.second", Value: "serial candidate second"})
+		if err != nil {
+			t.Fatalf("stage routed serialized accept: %v", err)
+		}
+
+		type outcome struct {
+			result localdolt.AcceptResult
+			err    error
+		}
+		start := make(chan struct{})
+		outcomes := make(chan outcome, 2)
+		go func() {
+			<-start
+			result, acceptErr := directAccept(ctx, first.ID, testActor, false)
+			outcomes <- outcome{result: result, err: acceptErr}
+		}()
+		go func() {
+			<-start
+			result, acceptErr := routed.ReviewAccept(ctx, second.ID, testActor, false)
+			outcomes <- outcome{result: result, err: acceptErr}
+		}()
+		close(start)
+
+		accepted, blocked := 0, 0
+		for range 2 {
+			got := <-outcomes
+			switch {
+			case got.err == nil && got.result.Commit != "":
+				accepted++
+			case got.err != nil && strings.Contains(got.err.Error(), "contradict"):
+				blocked++
+			default:
+				t.Fatalf("serialized accept outcome = %+v, want a merge or contradiction", got)
+			}
+		}
+		if accepted != 1 || blocked != 1 {
+			t.Fatalf("serialized accepts merged=%d blocked=%d, want 1/1", accepted, blocked)
+		}
+		if got := queryInt(t, direct, "SELECT COUNT(*) FROM facts"); got != 2 {
+			t.Fatalf("serialized accepts left %d durable facts, want baseline plus one accepted claim", got)
+		}
+		pending, err := direct.PendingProposals(ctx)
+		if err != nil || len(pending) != 1 {
+			t.Fatalf("serialized accepts left pending=%+v err=%v, want one blocked proposal", pending, err)
+		}
+		assertPendingParity(t, ctx, direct, routed)
+	})
+
+	t.Run("validated supersede bypass", func(t *testing.T) {
+		ctx := context.Background()
+		var probes atomic.Int32
+		var directAccept storeipc.ReviewAcceptFunc
+		base, direct, _ := startOwnerConfigured(t, func(st *localdolt.Store) storeipc.ReviewAcceptFunc {
+			directAccept = func(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+				return st.AcceptProposal(ctx, id, reviewer, localdolt.AcceptOptions{
+					Force: force,
+					ValidateContradictionConfig: func() error {
+						probes.Add(1)
+						return nil
+					},
+					OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+						probes.Add(1)
+						return fixedScorer(2), nil
+					},
+				})
+			}
+			return directAccept
+		}, nil)
+		if _, err := direct.Migrate(ctx); err != nil {
+			t.Fatalf("migrate owner store: %v", err)
+		}
+		routed, err := storeipc.DialOwnerStore(base)
+		if err != nil {
+			t.Fatalf("dial owner store: %v", err)
+		}
+		if _, err := direct.Commit(ctx, store.CommitRequest{
+			Statements: []store.Statement{{
+				SQL: "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)",
+				Args: []any{
+					"01J0000000000000000000SUPA", "supersede.direct", "old direct", "user", "2026-08-30 12:00:00",
+					"01J0000000000000000000SUPB", "supersede.routed", "old routed", "user", "2026-08-30 12:00:00",
+				},
+			}},
+			Text:    []string{"supersede.direct", "old direct", "supersede.routed", "old routed"},
+			Message: "record supersede baselines", Author: testActor,
+		}); err != nil {
+			t.Fatalf("seed supersede baselines: %v", err)
+		}
+		proposal := localdolt.Proposal{Rationale: "exercise supersede parity", Actor: testActor, Target: localdolt.TargetRepo}
+		directStaged, err := direct.ProposeSupersede(ctx, proposal, "01J0000000000000000000SUPA",
+			localdolt.Fact{Key: "supersede.direct", Value: "new direct"})
+		if err != nil {
+			t.Fatalf("stage direct supersede: %v", err)
+		}
+		routedStaged, err := routed.ProposeSupersede(ctx, proposal, "01J0000000000000000000SUPB",
+			localdolt.Fact{Key: "supersede.routed", Value: "new routed"})
+		if err != nil {
+			t.Fatalf("stage routed supersede: %v", err)
+		}
+		if _, err := directAccept(ctx, directStaged.ID, testActor, false); err != nil {
+			t.Fatalf("accept direct supersede: %v", err)
+		}
+		if _, err := routed.ReviewAccept(ctx, routedStaged.ID, testActor, false); err != nil {
+			t.Fatalf("accept routed supersede: %v", err)
+		}
+		if got := probes.Load(); got != 0 {
+			t.Fatalf("valid supersedes invoked %d contradiction callback(s), want the validated bypass", got)
+		}
+		if got := queryInt(t, direct, "SELECT COUNT(*) FROM facts WHERE superseded_by IS NOT NULL"); got != 2 {
+			t.Fatalf("accepted supersedes linked %d old rows, want 2", got)
+		}
+		assertPendingParity(t, ctx, direct, routed)
+	})
+}
+
+type serializedAcceptScorer struct{}
+
+func (serializedAcceptScorer) Rerank(_, passage string) (float32, error) {
+	if strings.Contains(passage, "serial candidate") {
+		return 2, nil
+	}
+	return -100, nil
+}
+
+func (serializedAcceptScorer) Close() error { return nil }
+
+// TestOwnerRoutedCommandRecordKeepsCommitAndReadbackTogether is deterministic
+// against the old split route: the wrapper holds both commit responses until
+// both writes have landed, so separate follow-up queries would both read the
+// last writer. One typed owner operation returns each caller's own row instead.
+func TestOwnerRoutedCommandRecordKeepsCommitAndReadbackTogether(t *testing.T) {
+	ctx := context.Background()
+	base, direct, _ := startOwnerConfigured(t, nil, interleaveSplitCommandRequests)
+	if _, err := direct.Migrate(ctx); err != nil {
+		t.Fatalf("migrate owner store: %v", err)
+	}
+	clients := make([]*storeipc.OwnerStore, 2)
+	for i := range clients {
+		var err error
+		clients[i], err = storeipc.DialOwnerStore(base)
+		if err != nil {
+			t.Fatalf("dial owner store %d: %v", i, err)
+		}
+	}
+
+	type result struct {
+		command memory.Command
+		commit  string
+		err     error
+	}
+	cmdlines := []string{"go test ./first/...", "go test ./second/..."}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for i := range clients {
+		go func(i int) {
+			<-start
+			command, commit, err := clients[i].RecordCommand(ctx,
+				memory.Actor{Name: fmt.Sprintf("agent:client-%d", i), Raw: fmt.Sprintf("client-%d", i)},
+				"test", cmdlines[i], 0)
+			results <- result{command: command, commit: commit, err: err}
+		}(i)
+	}
+	close(start)
+
+	seen := map[string]memory.Command{}
+	for range 2 {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("record routed command: %v", got.err)
+		}
+		if got.commit == "" {
+			t.Fatal("record routed command returned an empty commit")
+		}
+		seen[got.command.Cmdline] = got.command
+	}
+	for _, cmdline := range cmdlines {
+		if got, ok := seen[cmdline]; !ok || got.Kind != "test" {
+			t.Fatalf("routed command results = %+v, want the caller's %q row", seen, cmdline)
+		}
+	}
+	first, second := seen[cmdlines[0]].SuccessCount, seen[cmdlines[1]].SuccessCount
+	if first == second || first+second != 3 {
+		t.Fatalf("routed command success counts = %d and %d, want serialized counts 1 and 2", first, second)
+	}
+}
+
+func interleaveSplitCommandRequests(inner http.Handler) http.Handler {
+	var mu sync.Mutex
+	commits := 0
+	bothCommitted := make(chan struct{})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != storeipc.CommitPath {
+			inner.ServeHTTP(w, r)
+			return
+		}
+
+		recorded := httptest.NewRecorder()
+		inner.ServeHTTP(recorded, r)
+		mu.Lock()
+		commits++
+		if commits == 2 {
+			close(bothCommitted)
+		}
+		mu.Unlock()
+		<-bothCommitted
+		for key, values := range recorded.Header() {
+			w.Header()[key] = append([]string(nil), values...)
+		}
+		w.WriteHeader(recorded.Code)
+		_, _ = w.Write(recorded.Body.Bytes())
+	})
 }
 
 func assertPendingParity(t *testing.T, ctx context.Context, direct *localdolt.Store, routed *storeipc.OwnerStore) {

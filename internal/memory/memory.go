@@ -44,6 +44,14 @@ type Lanes struct {
 	actor Actor
 }
 
+// commandRecorder is the optional store-level operation that keeps a command
+// recording's commit and read-back inside one store owner. An IPC-backed store
+// implements it; LocalStore deliberately does not, so its direct path below
+// remains the one implementation of the lane's SQL and commit metadata.
+type commandRecorder interface {
+	RecordCommand(context.Context, Actor, string, string, int) (Command, string, error)
+}
+
 // commandMu keeps every command recording's atomic upsert and read-back
 // together, including recordings through distinct Lanes over the same store,
 // so the returned row is the one persisted when that operation completes.
@@ -438,6 +446,9 @@ func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCod
 	}
 	if cmdline = strings.TrimSpace(cmdline); cmdline == "" {
 		return Command{}, "", errors.New("a recorded command needs a command line")
+	}
+	if recorder, ok := l.store.(commandRecorder); ok {
+		return recorder.RecordCommand(ctx, l.actor, kind, cmdline, exitCode)
 	}
 
 	commandMu.Lock()

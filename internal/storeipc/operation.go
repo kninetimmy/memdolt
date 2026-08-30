@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -23,6 +24,7 @@ const (
 	opRecallFTS        = "recall_fts"
 	opSearchDecisions  = "search_decisions"
 	opLastChanged      = "last_changed"
+	opRecordCommand    = "record_command"
 	opProposeFact      = "propose_fact"
 	opProposeDecision  = "propose_decision"
 	opProposeSupersede = "propose_supersede"
@@ -30,12 +32,13 @@ const (
 	opProposalDiff     = "proposal_diff"
 	opRejectProposal   = "reject_proposal"
 	opExpireProposals  = "expire_proposals"
-	opAcceptProposal   = "accept_proposal"
+	opReviewAccept     = "review_accept"
 )
 
-// Backend is the complete initialized LocalStore surface the live owner
-// exposes. The operation handler is an explicit allow-list over these methods;
-// this interface alone does not make a method remotely callable.
+// Backend is the initialized data-store surface the live owner exposes. The
+// application-level review accept gate is supplied separately, so this
+// interface cannot accidentally reduce promotion to a raw storage call. The
+// operation handler is an explicit allow-list over both surfaces.
 type Backend interface {
 	store.Store
 	SchemaVersion(context.Context) (int, error)
@@ -51,7 +54,6 @@ type Backend interface {
 	ProposalDiff(context.Context, string) (localdolt.ProposalDiff, error)
 	RejectProposal(context.Context, string) (localdolt.PendingProposal, error)
 	ExpireProposals(context.Context, time.Time) ([]localdolt.PendingProposal, error)
-	AcceptProposal(context.Context, string, store.Actor) (localdolt.AcceptResult, error)
 }
 
 var _ Backend = (*localdolt.Store)(nil)
@@ -74,6 +76,18 @@ type searchDecisionsArgs struct {
 type lastChangedArgs struct {
 	SourceType string `json:"sourceType"`
 	SourceID   string `json:"sourceId"`
+}
+
+type recordCommandArgs struct {
+	Actor    memory.Actor `json:"actor"`
+	Kind     string       `json:"kind"`
+	Cmdline  string       `json:"cmdline"`
+	ExitCode int          `json:"exitCode"`
+}
+
+type recordCommandResult struct {
+	Command memory.Command `json:"command"`
+	Commit  string         `json:"commit"`
 }
 
 type proposeFactArgs struct {
@@ -103,7 +117,14 @@ type expireProposalsArgs struct {
 type acceptProposalArgs struct {
 	ID       string      `json:"id"`
 	Reviewer store.Actor `json:"reviewer"`
+	Force    bool        `json:"force,omitempty"`
 }
+
+// ReviewAcceptFunc is the application review gate an owner exposes. The
+// production function is internal/review.Accept; keeping it explicit prevents
+// the transport from falling back to a raw storage merge that omits the
+// contradiction configuration, force semantics, or future application guards.
+type ReviewAcceptFunc func(context.Context, string, store.Actor, bool) (localdolt.AcceptResult, error)
 
 func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var req operationRequest
@@ -146,6 +167,15 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		result, err = h.store.LastChanged(ctx, args.SourceType, args.SourceID)
+	case opRecordCommand:
+		args, decodeErr := operationArgs[recordCommandArgs](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		command, commit, recordErr := memory.New(h.store, args.Actor).RecordCommand(
+			ctx, args.Kind, args.Cmdline, args.ExitCode)
+		result, err = recordCommandResult{Command: command, Commit: commit}, recordErr
 	case opProposeFact:
 		args, decodeErr := operationArgs[proposeFactArgs](req.Args)
 		if decodeErr != nil {
@@ -190,13 +220,13 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		result, err = h.store.ExpireProposals(ctx, args.Before)
-	case opAcceptProposal:
+	case opReviewAccept:
 		args, decodeErr := operationArgs[acceptProposalArgs](req.Args)
 		if decodeErr != nil {
 			err = decodeErr
 			break
 		}
-		result, err = h.store.AcceptProposal(ctx, args.ID, args.Reviewer)
+		result, err = h.reviewAccept(ctx, args.ID, args.Reviewer, args.Force)
 	default:
 		h.fail(w, http.StatusNotFound, fmt.Errorf("unknown store operation %q", req.Operation))
 		return

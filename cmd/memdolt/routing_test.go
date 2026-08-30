@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -84,6 +85,22 @@ func TestEveryStoreDependentCLIUsesTheLiveOwner(t *testing.T) {
 	}
 	if got := runMemdoltErr(t, "eval", "retrieval", "--mode", "fts", "--golden", golden, "--dir", base, "--json"); !strings.Contains(got, "below the recorded baseline") {
 		t.Fatalf("routed evaluator error = %q, want the expected fixture-quality failure", got)
+	}
+
+	forced, err := owner.ProposeFact(ctx, proposal, localdolt.Fact{Key: "routing.force", Value: "force stays routed"})
+	if err != nil {
+		t.Fatalf("stage routed force probe: %v", err)
+	}
+	configPath := filepath.Join(base, ".memdolt", "config.toml")
+	if err := os.WriteFile(configPath, []byte("[retrieval]\nmode = 'broken'\n"), 0o600); err != nil {
+		t.Fatalf("write invalid contradiction configuration: %v", err)
+	}
+	if got := runMemdoltErr(t, "review", "accept", forced.ID, "--dir", base); !strings.Contains(got, "contradiction probe configuration") {
+		t.Fatalf("routed accept error = %q, want the contradiction configuration refusal", got)
+	}
+	runMemdolt(t, "review", "accept", forced.ID, "--force", "--dir", base, "--json")
+	if err := os.Remove(configPath); err != nil {
+		t.Fatalf("remove invalid contradiction configuration: %v", err)
 	}
 
 	if got := runMemdoltErr(t, "init", "--dir", base); !strings.Contains(got, "stop the owner and rerun `memdolt init`") {

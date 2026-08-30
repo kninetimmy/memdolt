@@ -80,11 +80,12 @@ type Store struct {
 	paths  layout.Paths
 	logger *slog.Logger
 
-	mu     sync.Mutex
-	lock   *singleowner.Lock
-	db     *sql.DB
-	opened bool
-	closed bool
+	mu       sync.Mutex
+	acceptMu sync.Mutex
+	lock     *singleowner.Lock
+	db       *sql.DB
+	opened   bool
+	closed   bool
 }
 
 var _ store.Store = (*Store)(nil)

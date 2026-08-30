@@ -20,6 +20,18 @@ import (
 // dolt_log has to show both.
 var reviewer = store.Actor{Name: "user", Email: "user@memdolt.invalid"}
 
+var testAcceptOptions = localdolt.AcceptOptions{
+	ValidateContradictionConfig: func() error { return nil },
+	OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+		return fixedContradictionScorer(-100), nil
+	},
+}
+
+type fixedContradictionScorer float32
+
+func (s fixedContradictionScorer) Rerank(string, string) (float32, error) { return float32(s), nil }
+func (fixedContradictionScorer) Close() error                             { return nil }
+
 // TestReviewAcceptMergesTheProposalAndDeletesItsBranch covers acceptance
 // criteria 1, 2 and 3: a staged fact is listed as pending, accepting it
 // merges exactly its branch into main and deletes the branch, the row is
@@ -93,7 +105,7 @@ func TestReviewAcceptMergesTheProposalAndDeletesItsBranch(t *testing.T) {
 		}
 	}
 
-	result, err := st.AcceptProposal(ctx, staged.ID, reviewer)
+	result, err := st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions)
 	if err != nil {
 		t.Fatalf("accept proposal: %v", err)
 	}
@@ -141,6 +153,263 @@ func TestReviewAcceptMergesTheProposalAndDeletesItsBranch(t *testing.T) {
 		t.Fatalf("the staging commit reads %q by %q, want it preserved under the agent that staged it",
 			staging.message, staging.committer)
 	}
+}
+
+func TestReviewAcceptContradictionProbe(t *testing.T) {
+	t.Run("score at the threshold blocks and leaves the proposal pending", func(t *testing.T) {
+		ctx, st, staged, mainHead := factContradictionFixture(t)
+		scorer := &recordingContradictionScorer{score: 2.0}
+
+		_, err := st.AcceptProposal(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
+			ValidateContradictionConfig: func() error { return nil },
+			OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+				return scorer, nil
+			},
+		})
+		if !errors.Is(err, localdolt.ErrContradiction) {
+			t.Fatalf("accept error = %v, want ErrContradiction", err)
+		}
+		wantCalls := [][2]string{
+			{"database.host: db-beta.example.com", "prod.db.host: db-alpha.example.com"},
+			{"database.host: db-beta.example.com", "build.command: go test ./..."},
+		}
+		if !reflect.DeepEqual(scorer.calls, wantCalls) {
+			t.Fatalf("cross-encoder calls = %#v", scorer.calls)
+		}
+		if !scorer.closed {
+			t.Fatal("blocked probe did not close its model")
+		}
+		requireBlockedContradiction(t, st, staged, mainHead)
+	})
+
+	t.Run("score below the threshold keeps the reviewed merge flow", func(t *testing.T) {
+		ctx, st, staged, mainHead := factContradictionFixture(t)
+		scorer := &recordingContradictionScorer{score: 1.999}
+
+		result, err := st.AcceptProposal(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
+			ValidateContradictionConfig: func() error { return nil },
+			OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+				return scorer, nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("accept below the contradiction threshold: %v", err)
+		}
+		if !scorer.closed || len(scorer.calls) != 2 {
+			t.Fatalf("scorer closed=%v calls=%d, want true/2", scorer.closed, len(scorer.calls))
+		}
+		if parents := parentsOf(t, st, result.Commit); !reflect.DeepEqual(parents, []string{mainHead, staged.Commit}) {
+			t.Fatalf("merge parents = %v, want the reviewed main and staging commits", parents)
+		}
+		if got := scanInt(t, st, "SELECT COUNT(*) FROM facts WHERE id = ?", staged.RowID); got != 1 {
+			t.Fatalf("accepted row count = %d, want 1", got)
+		}
+		requireProposalBranches(t, st)
+	})
+
+	for _, tc := range []struct {
+		name    string
+		options func(*testing.T) localdolt.AcceptOptions
+		want    string
+	}{
+		{
+			name: "unreadable model configuration",
+			options: func(t *testing.T) localdolt.AcceptOptions {
+				return localdolt.AcceptOptions{
+					ValidateContradictionConfig: func() error { return errors.New("permission denied") },
+					OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+						t.Fatal("model opened after configuration failed")
+						return nil, nil
+					},
+				}
+			},
+			want: "contradiction probe configuration",
+		},
+		{
+			name: "unavailable model",
+			options: func(*testing.T) localdolt.AcceptOptions {
+				return localdolt.AcceptOptions{
+					ValidateContradictionConfig: func() error { return nil },
+					OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+						return nil, errors.New("runtime missing")
+					},
+				}
+			},
+			want: "open the contradiction probe model",
+		},
+		{
+			name: "failed inference",
+			options: func(*testing.T) localdolt.AcceptOptions {
+				return localdolt.AcceptOptions{
+					ValidateContradictionConfig: func() error { return nil },
+					OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+						return &recordingContradictionScorer{err: errors.New("session failed")}, nil
+					},
+				}
+			},
+			want: "score proposal",
+		},
+	} {
+		t.Run(tc.name+" fails closed", func(t *testing.T) {
+			ctx, st, staged, mainHead := factContradictionFixture(t)
+			_, err := st.AcceptProposal(ctx, staged.ID, reviewer, tc.options(t))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("accept error = %v, want %q", err, tc.want)
+			}
+			requireBlockedContradiction(t, st, staged, mainHead)
+		})
+	}
+}
+
+func TestReviewAcceptContradictionBypasses(t *testing.T) {
+	t.Run("explicit force still produces the reviewed merge", func(t *testing.T) {
+		ctx, st, staged, mainHead := factContradictionFixture(t)
+		result, err := st.AcceptProposal(ctx, staged.ID, reviewer, localdolt.AcceptOptions{Force: true})
+		if err != nil {
+			t.Fatalf("force accept: %v", err)
+		}
+		if parents := parentsOf(t, st, result.Commit); !reflect.DeepEqual(parents, []string{mainHead, staged.Commit}) {
+			t.Fatalf("forced merge parents = %v, want the reviewed main and staging commits", parents)
+		}
+		if got := headCommitOn(t, st, localdolt.MainBranch).message; got != "review accept fact "+staged.ID {
+			t.Fatalf("forced accept commit message = %q", got)
+		}
+		requireProposalBranches(t, st)
+	})
+
+	t.Run("supersede proposal bypasses only the probe", func(t *testing.T) {
+		ctx := context.Background()
+		st := migratedStore(t)
+		const oldID = "01J00000000000000000000OLD"
+		if _, err := st.Commit(ctx, store.CommitRequest{
+			Statements: []store.Statement{{
+				SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+				Args: []any{oldID, "build.command", "go test ./...", "user", "2026-08-02 12:00:00"},
+			}},
+			Text: []string{"build.command", "go test ./..."}, Message: "record the old fact", Author: reviewer,
+		}); err != nil {
+			t.Fatalf("seed old fact: %v", err)
+		}
+		staged, err := st.ProposeSupersede(ctx, localdolt.Proposal{
+			Rationale: "use the race lane", Actor: stagingActor, Target: localdolt.TargetRepo,
+		}, oldID, localdolt.Fact{Key: "build.command", Value: "go test -race ./..."})
+		if err != nil {
+			t.Fatalf("propose supersede: %v", err)
+		}
+		result, err := st.AcceptProposal(ctx, staged.ID, reviewer, localdolt.AcceptOptions{})
+		if err != nil {
+			t.Fatalf("accept supersede without model callbacks: %v", err)
+		}
+		if got := headCommitOn(t, st, localdolt.MainBranch).message; got != "review accept supersede "+staged.ID {
+			t.Fatalf("supersede merge commit message = %q", got)
+		}
+		old := readStagedFact(t, st, localdolt.MainBranch, oldID)
+		if old.supersededBy.String != staged.RowID || result.Commit == "" {
+			t.Fatalf("supersede result = %+v, old row = %+v", result, old)
+		}
+	})
+}
+
+func TestReviewAcceptProbesDecisionProse(t *testing.T) {
+	ctx := context.Background()
+	st := migratedStore(t)
+	const existingID = "01J00000000000000000000DEC"
+	if _, err := st.Commit(ctx, store.CommitRequest{
+		Statements: []store.Statement{{
+			SQL: "INSERT INTO decisions (id, title, rationale, summary, status, source, decided_at) " +
+				"VALUES (?, ?, ?, ?, 'active', ?, ?)",
+			Args: []any{existingID, "Adopt Postgres", "Run a Postgres server.", "Postgres datastore", "user", "2026-08-02 12:00:00"},
+		}},
+		Text:    []string{"Adopt Postgres", "Run a Postgres server.", "Postgres datastore"},
+		Message: "record the durable decision", Author: reviewer,
+	}); err != nil {
+		t.Fatalf("seed decision: %v", err)
+	}
+	staged, err := st.ProposeDecision(ctx, localdolt.Proposal{
+		Rationale: "managed service is operationally simpler", Actor: stagingActor, Target: localdolt.TargetRepo,
+	}, localdolt.Decision{
+		Title: "Adopt managed Postgres", Rationale: "Use a managed Postgres server.", Summary: "Managed Postgres datastore",
+	})
+	if err != nil {
+		t.Fatalf("propose decision: %v", err)
+	}
+	scorer := &recordingContradictionScorer{score: 2.0}
+	_, err = st.AcceptProposal(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
+		ValidateContradictionConfig: func() error { return nil },
+		OpenContradictionScorer: func(context.Context) (localdolt.ContradictionScorer, error) {
+			return scorer, nil
+		},
+	})
+	if !errors.Is(err, localdolt.ErrContradiction) {
+		t.Fatalf("decision accept error = %v, want ErrContradiction", err)
+	}
+	want := [2]string{
+		"Managed Postgres datastore\n\nAdopt managed Postgres\n\nUse a managed Postgres server.",
+		"Postgres datastore\n\nAdopt Postgres\n\nRun a Postgres server.",
+	}
+	if len(scorer.calls) != 1 || scorer.calls[0] != want {
+		t.Fatalf("decision cross-encoder calls = %#v, want %#v", scorer.calls, want)
+	}
+}
+
+type recordingContradictionScorer struct {
+	score  float32
+	err    error
+	calls  [][2]string
+	closed bool
+}
+
+func (s *recordingContradictionScorer) Rerank(query, passage string) (float32, error) {
+	s.calls = append(s.calls, [2]string{query, passage})
+	return s.score, s.err
+}
+
+func (s *recordingContradictionScorer) Close() error {
+	s.closed = true
+	return nil
+}
+
+func factContradictionFixture(t *testing.T) (context.Context, *localdolt.Store, localdolt.StagedProposal, string) {
+	t.Helper()
+	ctx := context.Background()
+	st := migratedStore(t)
+	if _, err := st.Commit(ctx, store.CommitRequest{
+		Statements: []store.Statement{{
+			SQL: "INSERT INTO facts (id, `key`, value, source, created_at) " +
+				"VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)",
+			Args: []any{
+				"01J00000000000000000000DBA", "prod.db.host", "db-alpha.example.com", "user", "2026-08-02 12:00:00",
+				"01J00000000000000000000ZZZ", "build.command", "go test ./...", "user", "2026-08-02 12:00:00",
+			},
+		}},
+		Text:    []string{"prod.db.host", "db-alpha.example.com", "build.command", "go test ./..."},
+		Message: "record durable facts", Author: reviewer,
+	}); err != nil {
+		t.Fatalf("seed durable fact: %v", err)
+	}
+	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "the database moved", Actor: stagingActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "database.host", Value: "db-beta.example.com"})
+	if err != nil {
+		t.Fatalf("propose contradictory fact: %v", err)
+	}
+	return ctx, st, staged, headCommit(t, st)
+}
+
+func requireBlockedContradiction(
+	t *testing.T,
+	st *localdolt.Store,
+	staged localdolt.StagedProposal,
+	mainHead string,
+) {
+	t.Helper()
+	if got := headCommit(t, st); got != mainHead {
+		t.Fatalf("blocked accept moved main from %s to %s", mainHead, got)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM facts WHERE id = ?", staged.RowID); got != 0 {
+		t.Fatalf("blocked accept put %d incoming rows on main", got)
+	}
+	requireProposalBranches(t, st, staged.Branch)
 }
 
 // TestReviewAcceptSupersedeClearsAnAlreadySatisfiedViolation covers
@@ -196,7 +465,7 @@ func TestReviewAcceptSupersedeClearsAnAlreadySatisfiedViolation(t *testing.T) {
 	}
 	mainHead := headCommit(t, st)
 
-	result, err := st.AcceptProposal(ctx, staged.ID, reviewer)
+	result, err := st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions)
 	if err != nil {
 		t.Fatalf("accept the supersede proposal: %v", err)
 	}
@@ -331,7 +600,7 @@ func TestReviewAcceptStaysBlocked(t *testing.T) {
 			mainHead := headCommit(t, st)
 			factsBefore := scanInt(t, st, "SELECT COUNT(*) FROM facts")
 
-			_, err := st.AcceptProposal(ctx, staged.ID, reviewer)
+			_, err := st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions)
 			if err == nil {
 				t.Fatal("the accept concluded a merge that should have stayed blocked")
 			}
@@ -438,7 +707,7 @@ func TestReviewAcceptRefusesMoreThanTheOneStagedCommit(t *testing.T) {
 			mainCommits := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log")
 			factsBefore := scanInt(t, st, "SELECT COUNT(*) FROM facts")
 
-			_, err = st.AcceptProposal(ctx, staged.ID, reviewer)
+			_, err = st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions)
 			if err == nil {
 				t.Fatal("the accept merged a branch carrying more than the proposal's own commit")
 			}
@@ -528,7 +797,7 @@ func TestReviewAcceptPromotesAProposalStagedBeforeMainMoved(t *testing.T) {
 		t.Fatalf("review list reports %+v, want the staging commit %q", pending, staged.Commit)
 	}
 
-	result, err := st.AcceptProposal(ctx, staged.ID, reviewer)
+	result, err := st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions)
 	if err != nil {
 		t.Fatalf("accept a proposal staged before main moved: %v", err)
 	}
@@ -873,7 +1142,7 @@ func TestReviewRefusalsAreLoud(t *testing.T) {
 		{
 			name: "accepting an id that is not a ULID",
 			call: func() error {
-				_, err := st.AcceptProposal(ctx, "'; DROP TABLE facts; --", reviewer)
+				_, err := st.AcceptProposal(ctx, "'; DROP TABLE facts; --", reviewer, testAcceptOptions)
 				return err
 			},
 			want: "is not a proposal id",
@@ -881,7 +1150,7 @@ func TestReviewRefusalsAreLoud(t *testing.T) {
 		{
 			name: "accepting an id of the right length that is not base32",
 			call: func() error {
-				_, err := st.AcceptProposal(ctx, strings.Repeat("u", 26), reviewer)
+				_, err := st.AcceptProposal(ctx, strings.Repeat("u", 26), reviewer, testAcceptOptions)
 				return err
 			},
 			want: "base32 alphabet",
@@ -897,7 +1166,7 @@ func TestReviewRefusalsAreLoud(t *testing.T) {
 		{
 			name: "accepting a proposal that is not pending",
 			call: func() error {
-				_, err := st.AcceptProposal(ctx, "01ARZ3NDEKTSV4RRFFQ69G5FAV", reviewer)
+				_, err := st.AcceptProposal(ctx, "01ARZ3NDEKTSV4RRFFQ69G5FAV", reviewer, testAcceptOptions)
 				return err
 			},
 			want: "there is no pending proposal",
@@ -913,7 +1182,7 @@ func TestReviewRefusalsAreLoud(t *testing.T) {
 		{
 			name: "accepting a global proposal into the repository store",
 			call: func() error {
-				_, err := st.AcceptProposal(ctx, global.ID, reviewer)
+				_, err := st.AcceptProposal(ctx, global.ID, reviewer, testAcceptOptions)
 				return err
 			},
 			want: "global store",
@@ -921,7 +1190,7 @@ func TestReviewRefusalsAreLoud(t *testing.T) {
 		{
 			name: "accepting with no reviewer identity",
 			call: func() error {
-				_, err := st.AcceptProposal(ctx, global.ID, store.Actor{})
+				_, err := st.AcceptProposal(ctx, global.ID, store.Actor{}, testAcceptOptions)
 				return err
 			},
 			want: "reviewer",
@@ -966,7 +1235,7 @@ func TestReviewAcceptRefusesToPromoteOverUncommittedWork(t *testing.T) {
 
 	execQuery(t, st, "INSERT INTO session_notes (id, actor, text, created_at) "+
 		"VALUES ('01J000000000000000000NOTE', 'user', 'uncommitted', '2026-08-02 12:00:00')")
-	if _, err := st.AcceptProposal(ctx, staged.ID, reviewer); err == nil {
+	if _, err := st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions); err == nil {
 		t.Fatal("accepted a proposal over uncommitted work")
 	} else if !strings.Contains(err.Error(), "refusing to promote a proposal") || strings.Contains(err.Error(), "stage a proposal") {
 		t.Fatalf("refusal %q does not accurately describe blocked promotion", err)
@@ -975,7 +1244,7 @@ func TestReviewAcceptRefusesToPromoteOverUncommittedWork(t *testing.T) {
 
 	execQuery(t, st, "CALL DOLT_RESET('--hard')")
 	execQuery(t, st, "CALL DOLT_CLEAN()")
-	if _, err := st.AcceptProposal(ctx, staged.ID, reviewer); err != nil {
+	if _, err := st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions); err != nil {
 		t.Fatalf("accept once the working set is clean: %v", err)
 	}
 }
@@ -1080,7 +1349,7 @@ func TestReviewAcceptScansTheDenyListAgain(t *testing.T) {
 		"proposal payload": payloadStaged,
 		"proposal actor":   actorStaged,
 	} {
-		_, err = st.AcceptProposal(ctx, staged.ID, reviewer)
+		_, err = st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions)
 		if err == nil {
 			t.Fatalf("the accept promoted the denied %s", name)
 		}
@@ -1107,7 +1376,7 @@ func TestReviewAcceptScansTheDenyListAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("propose a clean fact: %v", err)
 	}
-	if _, err := st.AcceptProposal(ctx, clean.ID, reviewer); err != nil {
+	if _, err := st.AcceptProposal(ctx, clean.ID, reviewer, testAcceptOptions); err != nil {
 		t.Fatalf("accept a proposal the deny-list does not match: %v", err)
 	}
 }
@@ -1175,7 +1444,7 @@ func TestReviewSupersedeScanSparesUnchangedDurableProse(t *testing.T) {
 	}
 
 	// And the accept promotes: the rule binds staged prose, not history.
-	if _, err := st.AcceptProposal(ctx, staged.ID, reviewer); err != nil {
+	if _, err := st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions); err != nil {
 		t.Fatalf("accept a supersese whose diff leaves denied durable prose unchanged: %v", err)
 	}
 	old := readStagedFact(t, st, localdolt.MainBranch, supersededID)
@@ -1229,7 +1498,7 @@ func TestReviewAcceptStillRefusesDeniedStagedProse(t *testing.T) {
 	writeDenyList(t, base, `AKIA[0-9A-Z]{16}`)
 	mainCommits := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log")
 
-	_, err = st.AcceptProposal(ctx, staged.ID, reviewer)
+	_, err = st.AcceptProposal(ctx, staged.ID, reviewer, testAcceptOptions)
 	if !errors.Is(err, store.ErrDenied) {
 		t.Fatalf("accept error = %v, want one matching store.ErrDenied", err)
 	}

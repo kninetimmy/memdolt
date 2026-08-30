@@ -29,19 +29,12 @@ func (s *Store) EmbeddingSources(ctx context.Context) ([]store.EmbeddingSource, 
 		{
 			sourceType: "fact",
 			sql:        "SELECT id, COALESCE(`key`, ''), COALESCE(value, ''), '' FROM facts AS OF 'HEAD' ORDER BY id",
-			text: func(key, value, _ string) string {
-				return key + ": " + value
-			},
+			text:       func(key, value, _ string) string { return factSemanticText(key, value) },
 		},
 		{
 			sourceType: "decision",
 			sql:        "SELECT id, COALESCE(title, ''), COALESCE(rationale, ''), COALESCE(summary, '') FROM decisions AS OF 'HEAD' ORDER BY id",
-			text: func(title, rationale, summary string) string {
-				if summary != "" {
-					return summary + "\n\n" + title + "\n\n" + rationale
-				}
-				return title + "\n\n" + rationale
-			},
+			text:       decisionSemanticText,
 		},
 		{
 			sourceType: "task",
@@ -89,4 +82,13 @@ func (s *Store) EmbeddingSources(ctx context.Context) ([]store.EmbeddingSource, 
 		}
 	}
 	return sources, nil
+}
+
+func factSemanticText(key, value string) string { return key + ": " + value }
+
+func decisionSemanticText(title, rationale, summary string) string {
+	if summary != "" {
+		return summary + "\n\n" + title + "\n\n" + rationale
+	}
+	return title + "\n\n" + rationale
 }

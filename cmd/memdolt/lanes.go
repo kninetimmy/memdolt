@@ -37,6 +37,7 @@ type storeFlags struct {
 type commandStore interface {
 	storeipc.Backend
 	DataDir() string
+	ReviewAccept(context.Context, string, store.Actor, bool) (localdolt.AcceptResult, error)
 }
 
 // bind adds the flags a read needs.
@@ -116,7 +117,7 @@ func openCommandStore(ctx context.Context, baseDir string, actor store.Actor) (c
 	if err := st.Open(ctx); err != nil {
 		return nil, err
 	}
-	return st, nil
+	return &localCommandStore{Store: st, baseDir: baseDir}, nil
 }
 
 // requireCurrentSchema refuses a store the shipped statements would not

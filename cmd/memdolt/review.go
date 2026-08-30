@@ -10,7 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
+	reviewgate "github.com/kninetimmy/memdolt/internal/review"
+	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
@@ -31,6 +34,27 @@ const defaultExpireAfter = 30 * 24 * time.Hour
 // name proposals heading for expiry while accepting them is still an
 // option.
 const defaultStaleAfter = 7 * 24 * time.Hour
+
+// localCommandStore adapts the embedded store to the same application-level
+// accept operation OwnerStore carries over IPC. The review policy stays in
+// internal/review.Accept on both sides of that transport boundary.
+type localCommandStore struct {
+	*localdolt.Store
+	baseDir string
+}
+
+func (s *localCommandStore) ReviewAccept(
+	ctx context.Context,
+	id string,
+	reviewer store.Actor,
+	force bool,
+) (localdolt.AcceptResult, error) {
+	paths, err := layout.New(s.baseDir)
+	if err != nil {
+		return localdolt.AcceptResult{}, err
+	}
+	return reviewgate.Accept(ctx, s.Store, paths.ConfigFile(), id, reviewer, force)
+}
 
 func newReviewCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -183,6 +207,7 @@ func changeLines(change localdolt.ProposalChange) []string {
 
 func newReviewAcceptCommand() *cobra.Command {
 	var flags storeFlags
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "accept <id>",
@@ -190,13 +215,15 @@ func newReviewAcceptCommand() *cobra.Command {
 		Long: "Merge a proposal into main, making the row it proposes durable, and delete the\n" +
 			"branch. What merges is the one commit the proposal was staged with — the commit\n" +
 			"`review show` renders — so a branch carrying anything else is refused rather\n" +
-			"than merged past review. The merge is fail-closed (PRD §6.3): a data conflict, a\n" +
+			"than merged past review. Facts and decisions are compared with durable reviewed\n" +
+			"rows by the shipped cross-encoder; --force explicitly bypasses only that probe.\n" +
+			"The merge is fail-closed (PRD §6.3): a data conflict, a\n" +
 			"constraint violation that verification shows is real, or a row memdolt cannot\n" +
 			"attribute leaves main exactly where it was and the proposal still pending.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return flags.runStore(cmd, func(ctx context.Context, st commandStore, actor memory.Actor) error {
-				result, err := st.AcceptProposal(ctx, args[0], actor.CommitAuthor())
+				result, err := st.ReviewAccept(ctx, args[0], actor.CommitAuthor(), force)
 				if err != nil {
 					return err
 				}
@@ -211,6 +238,8 @@ func newReviewAcceptCommand() *cobra.Command {
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false,
+		"explicitly accept despite the contradiction probe; deny-list and merge guards still apply")
 
 	return flags.bindWriter(cmd)
 }
