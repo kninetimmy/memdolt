@@ -56,12 +56,47 @@ export GOFLAGS=-tags=gms_pure_go
   issue #103, the root command had no `serve` child and the owner lifecycle was
   exercised only by lower-level IPC tests and the soak; after it, `serve`
   stops protocol handling, closes pending session work, then closes IPC and
-  the store.** That ordering binds `cmd/memdolt.runServe` alone, not every CLI
-  command or every go-sdk server. Existing short-lived commands still route
-  through a live owner and otherwise open the store directly. Attribution
-  middleware installed by `internal/mcpserver.New` binds every `tools/call`
-  handled by that server, not arbitrary go-sdk servers or non-tool requests;
-  `tools/list` alone receives the static long-TTL cache hint.
+  the store.** The complete structural blast radius is:
+
+  - `cmd/memdolt/main.go` now gives Cobra an interrupt/SIGTERM context. Normal
+    command execution and the existing stderr plus nonzero-exit error behavior
+    still hold; only cancellation delivery is new.
+  - `cmd/memdolt/root.go` retains every existing command and adds `serve`.
+    `cmd/memdolt/serve.go` alone owns the new long-lived ordering above. It
+    opens one `LocalStore`, reuses the existing authenticated IPC handler and
+    `localCommandStore`, and closes protocol, pending work, IPC, then store.
+    Existing short-lived direct/owner routing, the IPC operation allow-list,
+    schema guard, actor propagation, and contradiction-gated `ReviewAccept`
+    behavior still hold. The ordering restriction binds `runServe`, not every
+    CLI command, store owner, or go-sdk server.
+  - `internal/mcpserver/server.go` adds modern discovery, legacy initialize,
+    the embedded instructions, and request attribution. Middleware installed
+    by `internal/mcpserver.New` applies attribution to every `tools/call` that
+    server handles, not arbitrary go-sdk servers or non-tool requests;
+    `tools/list` alone receives the static 24-hour `ttlMs` cache hint.
+  - `memory.NormalizeActor` is reused and unchanged: empty input and the
+    case-insensitive literal `user` select the trusted human CLI actor, while
+    every other accepted identity becomes `agent:<name>`. That behavior binds
+    every direct caller of `NormalizeActor`; it is intentionally not sufficient
+    by itself at the MCP trust boundary. **Before the review-cycle fix, MCP
+    `clientInfo.name = user` inherited that CLI-only mapping and could claim
+    human provenance; after it, `mcpserver.actorFor` forces every present,
+    accepted modern or legacy MCP identity into the agent class, so `user` and
+    already-prefixed variants are `agent:user`.** This MCP-specific rule binds
+    `actorFor` calls reached by `New`'s `tools/call` middleware alone, not CLI
+    callers or every `NormalizeActor` use. Missing identity still becomes
+    `agent:unknown`; raw provenance is retained; raw `cli` still becomes
+    canonical `agent:opencode`; and the existing raw/canonical length and
+    invalid-name errors still fail closed.
+  - `internal/mcpserver/instructions.md` is a new checked-in policy artifact
+    and replaces no prior instructions. `server_test.go` and
+    `cmd/memdolt/serve_test.go` are additive protocol, attribution, stdio, and
+    lifecycle coverage; they change no production behavior.
+  - `go.mod` and `go.sum` add the approved go-sdk v1.7.0 graph and its selected
+    transitive upgrades. Existing Dolt, CLI, retrieval, and inference
+    dependencies and behavior still hold. This `AGENTS.md` record preserves
+    the before-and-after above; all other guidance and its managed block are
+    unchanged.
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,

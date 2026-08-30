@@ -102,6 +102,51 @@ func TestPerRequestAttributionChangesWithinOneConnection(t *testing.T) {
 	closeSessions(t, clientSession, serverSession)
 }
 
+func TestModernUserIdentityCannotClaimHumanActor(t *testing.T) {
+	server, actors := identityServer()
+	clientSession, serverSession := connect(t, server,
+		&mcp.Implementation{Name: "session-client", Version: "1"}, false)
+
+	for _, info := range []*mcp.Implementation{
+		{Name: "user", Version: "1"},
+		{Name: "User", Version: "1"},
+		{Name: "agent:user", Version: "1"},
+		{Name: "agent:User", Version: "1"},
+	} {
+		callIdentity(t, clientSession, info)
+		if got := <-actors; got != (memory.Actor{Name: "agent:user", Raw: info.Name}) {
+			t.Fatalf("modern actor for %q = %#v", info.Name, got)
+		}
+	}
+
+	closeSessions(t, clientSession, serverSession)
+}
+
+func TestLegacyUserIdentityCannotClaimHumanActor(t *testing.T) {
+	server, actors := identityServer()
+	clientSession, serverSession := connect(t, server,
+		&mcp.Implementation{Name: "user", Version: "1"}, true)
+
+	callIdentity(t, clientSession, nil)
+	if got := <-actors; got != (memory.Actor{Name: "agent:user", Raw: "user"}) {
+		t.Fatalf("legacy user actor = %#v", got)
+	}
+
+	closeSessions(t, clientSession, serverSession)
+}
+
+func TestMCPIdentityRetainsNormalizationValidation(t *testing.T) {
+	for _, raw := range []string{
+		"agent:???",
+		strings.Repeat("a", 60),
+		strings.Repeat("verbose", 40),
+	} {
+		if actor, err := actorFor(&mcp.Implementation{Name: raw}); err == nil {
+			t.Errorf("actorFor(%q) = %+v, want an error", raw, actor)
+		}
+	}
+}
+
 func TestMissingIdentityFailsClosedAndOpenCodeKeepsRawName(t *testing.T) {
 	server, actors := identityServer()
 	clientSession, serverSession := connect(t, server,
@@ -122,7 +167,7 @@ func TestMissingIdentityFailsClosedAndOpenCodeKeepsRawName(t *testing.T) {
 
 func identityServer() (*mcp.Server, <-chan memory.Actor) {
 	server := New("test")
-	actors := make(chan memory.Actor, 3)
+	actors := make(chan memory.Actor, 4)
 	mcp.AddTool(server, &mcp.Tool{Name: "identity"},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, struct{}, error) {
 			actors <- ActorFromContext(ctx)

@@ -98,18 +98,18 @@ func actorFor(info *mcp.Implementation) (memory.Actor, error) {
 		return unknownActor, nil
 	}
 	raw := strings.TrimSpace(info.Name)
+	normalized := raw
 	if strings.EqualFold(raw, "cli") {
-		actor, err := memory.NormalizeActor("opencode")
-		if err != nil {
-			return memory.Actor{}, err
-		}
-		actor.Raw = raw
-		return actor, nil
+		normalized = "opencode"
 	}
-	actor, err := memory.NormalizeActor(raw)
+	actor, err := memory.NormalizeActor(normalized)
 	if err != nil {
 		return memory.Actor{}, fmt.Errorf("mcpserver: invalid clientInfo name: %w", err)
 	}
+	if !strings.HasPrefix(actor.Name, memory.AgentPrefix) {
+		actor.Name = memory.AgentPrefix + actor.Name
+	}
+	actor.Raw = raw
 	return actor, nil
 }
 
