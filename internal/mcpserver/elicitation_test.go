@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,6 +31,28 @@ type afterAcceptBackend struct {
 type postMergeErrorBackend struct {
 	*elicitationBackend
 	failed bool
+}
+
+type recountFailureBackend struct {
+	*elicitationBackend
+	cleanupAt   int32
+	pendingCall atomic.Int32
+	acceptCall  atomic.Int32
+}
+
+func (s *recountFailureBackend) PendingProposals(ctx context.Context) ([]localdolt.PendingProposal, error) {
+	if s.pendingCall.Add(1) > 1 {
+		return nil, errors.New("injected terminal recount failure")
+	}
+	return s.elicitationBackend.PendingProposals(ctx)
+}
+
+func (s *recountFailureBackend) ReviewAcceptExpected(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+	result, err := s.elicitationBackend.ReviewAcceptExpected(ctx, id, expectedCommit, reviewer, force)
+	if err == nil && s.acceptCall.Add(1) == s.cleanupAt {
+		return result, errors.New("proposal merged but cleanup failed")
+	}
+	return result, err
 }
 
 func (s *postMergeErrorBackend) ReviewAcceptExpected(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
@@ -533,6 +556,75 @@ func TestReviewPendingReportsPostMergeCleanupFailureInEveryReviewMode(t *testing
 			pending, err := inner.PendingProposals(context.Background())
 			if err != nil || len(pending) != 1 || pending[0].ID != second.ID {
 				t.Fatalf("partial cleanup-failure queue = %+v (err %v)", pending, err)
+			}
+
+			closeSessions(t, client, serverSession)
+			if err := tools.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestReviewPendingPreservesLandedResultsWhenTerminalRecountFails(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		mode      string
+		legacy    bool
+		proposals int
+		cleanupAt int32
+	}{
+		{name: "successive", mode: "successive", proposals: 1, cleanupAt: 1},
+		{name: "batch with prior acceptance", mode: "batch", proposals: 2, cleanupAt: 2},
+		{name: "genuine legacy", mode: "successive", legacy: true, proposals: 1, cleanupAt: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base, inner := initializedElicitationBackend(t)
+			staged := make([]localdolt.StagedProposal, test.proposals)
+			for i := range staged {
+				if i%2 == 0 {
+					staged[i] = stageReviewFact(t, inner.Store, localdolt.TargetRepo,
+						fmt.Sprintf("review.recount.%d", i), fmt.Sprintf("landed fact %d", i))
+				} else {
+					staged[i] = stageReviewDecision(t, inner.Store, localdolt.TargetRepo,
+						fmt.Sprintf("Independent landed decision %d", i))
+				}
+			}
+			backend := &recountFailureBackend{elicitationBackend: inner, cleanupAt: test.cleanupAt}
+			server := New("test")
+			tools := RegisterTools(server, base, backend)
+			options := &mcp.ClientOptions{ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+				if test.legacy {
+					content := make(map[string]any, len(staged))
+					for _, proposal := range staged {
+						content[proposal.ID] = "approve"
+					}
+					return &mcp.ElicitResult{Action: "accept", Content: content}, nil
+				}
+				decision := "approve"
+				if test.mode == "batch" {
+					decision = "approve_all"
+				}
+				return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"decision": decision}}, nil
+			}}
+			client, serverSession := connectWithOptions(t, server,
+				&mcp.Implementation{Name: "recount-test", Version: "1"}, test.legacy, options)
+
+			output := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{"mode": test.mode})
+			if output.Status != "cleanup_failed" || len(output.Accepted) != test.proposals ||
+				len(output.Failures) != 1 || output.Failures[0].ProposalID != staged[test.cleanupAt-1].ID ||
+				!strings.Contains(output.Failures[0].Error, "cleanup failed") ||
+				!strings.Contains(output.RecountError, "injected terminal recount failure") ||
+				!strings.Contains(output.Remedy, "memdolt review") {
+				t.Fatalf("recount-failure output = %+v", output)
+			}
+			for i, accepted := range output.Accepted {
+				if accepted.Commit == "" || accepted.Proposal.ID != staged[i].ID {
+					t.Fatalf("accepted result %d = %+v, want %s", i, accepted, staged[i].ID)
+				}
+			}
+			if got := testCount(t, inner.Store, "SELECT (SELECT COUNT(*) FROM facts AS OF 'main') + (SELECT COUNT(*) FROM decisions AS OF 'main')"); got != test.proposals {
+				t.Fatalf("terminal recount failure left %d durable reviewed rows, want %d", got, test.proposals)
 			}
 
 			closeSessions(t, client, serverSession)

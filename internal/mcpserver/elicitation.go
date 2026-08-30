@@ -77,6 +77,7 @@ type reviewPendingOutput struct {
 	GlobalPending int                      `json:"globalPending"`
 	NextCursor    string                   `json:"nextCursor,omitempty"`
 	Remedy        string                   `json:"remedy,omitempty"`
+	RecountError  string                   `json:"recountError,omitempty"`
 }
 
 func (t *Toolset) reviewPending(ctx context.Context, req *mcp.CallToolRequest, in reviewPendingInput) (*mcp.CallToolResult, reviewPendingOutput, error) {
@@ -458,19 +459,23 @@ func recordAcceptedReview(row *pendingElicitation, result localdolt.AcceptResult
 
 func (t *Toolset) reviewTerminal(ctx context.Context, mode, status string, row pendingElicitation, failures []reviewFailure) (*mcp.CallToolResult, reviewPendingOutput, error) {
 	pending, err := t.store.PendingProposals(ctx)
-	if err != nil {
-		return nil, reviewPendingOutput{}, err
-	}
 	var repo, global int
-	for _, proposal := range pending {
-		if proposal.Target == localdolt.TargetGlobal {
-			global++
-		} else {
-			repo++
+	recountError := ""
+	if err != nil {
+		recountError = fmt.Sprintf("could not refresh pending proposal counts: %v", err)
+	} else {
+		for _, proposal := range pending {
+			if proposal.Target == localdolt.TargetGlobal {
+				global++
+			} else {
+				repo++
+			}
 		}
 	}
 	remedy := ""
-	if status == "cli_required" && repo > 0 {
+	if recountError != "" {
+		remedy = "Pending proposal counts could not be refreshed — run `memdolt review` in a terminal."
+	} else if status == "cli_required" && repo > 0 {
 		remedy = fmt.Sprintf(
 			"%d repository and %d global proposals pending — this client lacks form elicitation; run `memdolt review` in a terminal.",
 			repo, global)
@@ -488,7 +493,8 @@ func (t *Toolset) reviewTerminal(ctx context.Context, mode, status string, row p
 	}
 	return &mcp.CallToolResult{}, reviewPendingOutput{
 		Mode: mode, Status: status, Accepted: row.Accepted, Skipped: row.Skipped,
-		Failures: failures, RepoPending: repo, GlobalPending: global, NextCursor: row.NextCursor, Remedy: remedy,
+		Failures: failures, RepoPending: repo, GlobalPending: global, NextCursor: row.NextCursor,
+		Remedy: remedy, RecountError: recountError,
 	}, nil
 }
 

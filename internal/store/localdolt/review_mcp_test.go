@@ -5,7 +5,6 @@ import (
 	"errors"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -145,8 +144,8 @@ func TestExpectedCommitAcceptPreservesExternalMutationAfterValidation(t *testing
 			result, err := st.AcceptProposalAfterExpectedCommit(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
 				Force: true, ExpectedCommit: staged.Commit,
 			}, func() { test.mutate(t, st, staged) })
-			if err == nil || result.Commit == "" || !strings.Contains(err.Error(), "head changed") {
-				t.Fatalf("accept result=%+v error=%v, want landed merge plus changed-branch cleanup error", result, err)
+			if err != nil || result.Commit == "" {
+				t.Fatalf("accept result=%+v error=%v, want landed merge with retained changed branch", result, err)
 			}
 			if parents := parentsOf(t, st, result.Commit); len(parents) != 2 || parents[0] != mainHead || parents[1] != staged.Commit {
 				t.Fatalf("merge parents = %v, want [%s %s]", parents, mainHead, staged.Commit)
@@ -159,6 +158,85 @@ func TestExpectedCommitAcceptPreservesExternalMutationAfterValidation(t *testing
 				t.Fatalf("changed branch was not retained as the only pending proposal: %+v (err %v)", pending, pendingErr)
 			}
 		})
+	}
+}
+
+func TestExpectedCommitAcceptLeavesHiddenCleanupResidue(t *testing.T) {
+	ctx := context.Background()
+	st := migratedStore(t)
+	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "retain merged MCP cleanup residue",
+		Actor:     stagingActor,
+		Target:    localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "review.cleanup-residue", Value: "the reviewed value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := st.AcceptProposal(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
+		Force: true, ExpectedCommit: staged.Commit,
+	})
+	if err != nil || result.Commit == "" {
+		t.Fatalf("expected-commit accept result=%+v error=%v", result, err)
+	}
+	requireProposalBranches(t, st, staged.Branch)
+	if pending, pendingErr := st.PendingProposals(ctx); pendingErr != nil || len(pending) != 0 {
+		t.Fatalf("merged cleanup residue was offered for review: %+v (err %v)", pending, pendingErr)
+	}
+}
+
+func TestExpectedCommitAcceptPreservesForeignCommitAtCleanupBoundary(t *testing.T) {
+	ctx := context.Background()
+	st := migratedStore(t)
+	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "never delete unseen foreign branch content",
+		Actor:     stagingActor,
+		Target:    localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "review.cleanup-boundary", Value: "the reviewed value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const foreignID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+	result, err := st.AcceptProposalBeforeCleanup(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
+		Force: true, ExpectedCommit: staged.Commit,
+	}, func() {
+		err := st.RunOnBranch(context.Background(), staged.Branch,
+			store.Statement{
+				SQL:  "INSERT INTO facts (id, `key`, value, source, created_at) VALUES (?, ?, ?, ?, ?)",
+				Args: []any{foreignID, "review.foreign-content", "must survive", stagingActor.Name, "2026-08-30 12:00:00"},
+			},
+			store.Statement{
+				SQL:  "CALL DOLT_COMMIT('-A', '-m', ?, '--author', ?)",
+				Args: []any{"foreign commit in the former cleanup interval", stagingActor.String()},
+			},
+		)
+		if err != nil {
+			t.Fatalf("add foreign branch content at cleanup boundary: %v", err)
+		}
+	})
+	if err != nil || result.Commit == "" {
+		t.Fatalf("expected-commit accept result=%+v error=%v", result, err)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM facts AS OF 'main' WHERE id = ?", foreignID); got != 0 {
+		t.Fatalf("foreign branch fact appeared on main %d time(s)", got)
+	}
+	pending, pendingErr := st.PendingProposals(ctx)
+	if pendingErr != nil || len(pending) != 1 || pending[0].ID != staged.ID || pending[0].Commit == staged.Commit {
+		t.Fatalf("foreign branch content was not retained for review: %+v (err %v)", pending, pendingErr)
+	}
+	diff, diffErr := st.ProposalDiff(ctx, staged.ID)
+	if diffErr != nil {
+		t.Fatal(diffErr)
+	}
+	var found bool
+	for _, change := range diff.Changes {
+		if change.Table == "facts" && change.To["id"] == foreignID && change.To["value"] == "must survive" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("retained branch diff does not contain foreign fact: %+v", diff.Changes)
 	}
 }
 
@@ -207,8 +285,8 @@ func TestExpectedCommitAcceptSerializesRejectAndExpire(t *testing.T) {
 					return
 				}
 				expired, mutationErr := st.ExpireProposals(ctx, time.Now().Add(time.Hour))
-				if mutationErr == nil && len(expired) != 0 {
-					mutationErr = errors.New("expiry removed the proposal after acceptance had validated it")
+				if mutationErr == nil && len(expired) != 1 {
+					mutationErr = errors.New("expiry did not remove the merged cleanup residue after acceptance finished")
 				}
 				mutationDone <- mutationErr
 			}()
@@ -225,10 +303,7 @@ func TestExpectedCommitAcceptSerializesRejectAndExpire(t *testing.T) {
 				t.Fatalf("accept outcome = %+v", accepted)
 			}
 			mutationErr := <-mutationDone
-			if operation == "reject" && mutationErr == nil {
-				t.Fatal("reject succeeded after accept had already consumed the branch")
-			}
-			if operation == "expire" && mutationErr != nil {
+			if mutationErr != nil {
 				t.Fatal(mutationErr)
 			}
 			if parents := parentsOf(t, st, accepted.result.Commit); len(parents) != 2 || parents[1] != staged.Commit {
@@ -252,7 +327,7 @@ func TestAcceptCleanupFailureReturnsLandedResultWithoutReofferingBranch(t *testi
 	}
 
 	result, err := st.AcceptProposalWithCleanupError(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
-		Force: true, ExpectedCommit: staged.Commit,
+		Force: true,
 	}, errors.New("injected branch deletion failure"))
 	if err == nil || result.Commit == "" || result.Proposal.ID != staged.ID {
 		t.Fatalf("accept result=%+v error=%v, want landed result plus cleanup error", result, err)

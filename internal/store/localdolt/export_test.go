@@ -89,6 +89,19 @@ func (s *Store) AcceptProposalAfterExpectedCommit(
 	return s.acceptProposal(ctx, id, reviewer, options, acceptHooks{afterExpectedCommit: after})
 }
 
+// AcceptProposalBeforeCleanup exposes the final post-merge boundary so a test
+// can prove expected-commit acceptance never deletes a foreign commit created
+// where eager cleanup used to race it.
+func (s *Store) AcceptProposalBeforeCleanup(
+	ctx context.Context,
+	id string,
+	reviewer store.Actor,
+	options AcceptOptions,
+	before func(),
+) (AcceptResult, error) {
+	return s.acceptProposal(ctx, id, reviewer, options, acceptHooks{beforeCleanup: before})
+}
+
 // AcceptProposalWithCleanupError leaves the already-merged branch in place and
 // proves the established populated-result-plus-error cleanup contract.
 func (s *Store) AcceptProposalWithCleanupError(

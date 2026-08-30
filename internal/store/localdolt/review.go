@@ -221,7 +221,8 @@ type AcceptOptions struct {
 	Force bool
 	// ExpectedCommit, when non-empty, is the staging commit an elicited
 	// reviewer saw. AcceptProposal compares it with the branch head inside its
-	// proposal-mutation critical section before any merge work starts.
+	// proposal-mutation critical section before any merge work starts and
+	// retains the merged branch as cleanup residue instead of deleting it.
 	ExpectedCommit              string
 	ValidateContradictionConfig func() error
 	OpenContradictionScorer     func(context.Context) (ContradictionScorer, error)
@@ -386,9 +387,10 @@ func (s *Store) ExpireProposals(ctx context.Context, before time.Time) ([]Pendin
 	return expired, nil
 }
 
-// AcceptProposal promotes one proposal into durable truth: it merges
-// exactly the one commit that proposal was staged with into main and
-// deletes its branch (PRD §3.1, §7.1).
+// AcceptProposal promotes one proposal into durable truth: it merges exactly
+// the one commit that proposal was staged with into main (PRD §3.1, §7.1).
+// CLI acceptance then deletes the branch. Expected-commit acceptance retains
+// it as cleanup residue because Dolt has no expected-head branch deletion.
 //
 // "Exactly one commit" is checked rather than assumed, and the commit is
 // named by hash rather than by branch. Before this the accept merged the
@@ -420,6 +422,7 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 
 type acceptHooks struct {
 	afterExpectedCommit func()
+	beforeCleanup       func()
 	cleanupError        func() error
 }
 
@@ -547,10 +550,22 @@ func (s *Store) acceptProposal(
 	if err != nil {
 		return AcceptResult{}, err
 	}
+	if hooks.beforeCleanup != nil {
+		hooks.beforeCleanup()
+	}
 
-	// The branch is deleted after the merge has landed, never before: a
-	// deletion that ran first would discard the proposal if the merge then
-	// failed.
+	// DOLT_BRANCH -D accepts only a branch name. A read of dolt_branches
+	// followed by that call cannot atomically prove that a foreign session did
+	// not move the branch in between. Expected-commit acceptance is the MCP
+	// path, so preserve its merged branch as hidden cleanup residue rather than
+	// risk deleting content created after the human reviewed it.
+	if options.ExpectedCommit != "" {
+		return result, nil
+	}
+
+	// The CLI contract still attempts cleanup after the merge has landed, never
+	// before: a deletion that ran first would discard the proposal if the merge
+	// then failed.
 	var cleanupErr error
 	if hooks.cleanupError != nil {
 		cleanupErr = hooks.cleanupError()
@@ -1411,9 +1426,12 @@ func commitMergedIntoMain(ctx context.Context, q branchQuerier, commit string) (
 	return base == commit, nil
 }
 
-// deleteProposalBranch re-reads a branch's head immediately before deletion.
-// The proposal mutex excludes memdolt-owned mutations; this comparison is the
-// fail-closed boundary for a foreign Dolt session that does not share it.
+// deleteProposalBranch performs the established best-effort cleanup for CLI
+// review verbs and abandoned staging. The proposal mutex excludes
+// memdolt-owned mutations, and the comparison catches a foreign change that
+// precedes the read. Dolt exposes no expected-head delete, so a foreign change
+// after the read can still race DOLT_BRANCH -D. Expected-commit acceptance
+// therefore never calls this helper.
 func deleteProposalBranch(ctx context.Context, q branchMutator, observed branchRecord, operation string) error {
 	current, err := findProposalBranch(ctx, q, observed.name)
 	if err != nil {
