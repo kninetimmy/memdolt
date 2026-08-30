@@ -9,10 +9,10 @@
 // (§3.1, §3.2). Nothing in this package writes an audit row, because the
 // commit graph is the audit trail.
 //
-// One call here is one commit. §3.1's note batching — notes accumulating
-// in the working set behind a five-minute timer — is MCP-server behavior
-// for a long-lived session; a CLI process that exits after a single write
-// has nothing to batch with.
+// One call here is one commit. §3.1's note batching — prepared notes
+// accumulating in the MCP Toolset's process memory behind a five-minute
+// timer — is server behavior for a long-lived session; a CLI process that
+// exits after a single write has nothing to batch with.
 //
 // Every read and write goes through store.Store, the one path the CLI and
 // the MCP server share (§5.1). This package opens no database of its own
@@ -291,7 +291,7 @@ func (l *Lanes) Task(ctx context.Context, id string) (Task, error) {
 	if id == "" {
 		return Task{}, errors.New("a task id is required")
 	}
-	tasks, err := l.queryTasks(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = ?", id)
+	tasks, err := l.queryTasks(ctx, "SELECT "+taskColumns+" FROM tasks AS OF 'main' WHERE id = ?", id)
 	if err != nil {
 		return Task{}, err
 	}
@@ -308,13 +308,13 @@ func (l *Lanes) Task(ctx context.Context, id string) (Task, error) {
 func (l *Lanes) Tasks(ctx context.Context, status string) ([]Task, error) {
 	status = strings.TrimSpace(status)
 	if status == "" || status == StatusAny {
-		return l.queryTasks(ctx, "SELECT "+taskColumns+" FROM tasks ORDER BY created_at, id")
+		return l.queryTasks(ctx, "SELECT "+taskColumns+" FROM tasks AS OF 'main' ORDER BY created_at, id")
 	}
 	if err := validate("task status", status, TaskStatuses, StatusAny); err != nil {
 		return nil, err
 	}
 	return l.queryTasks(ctx,
-		"SELECT "+taskColumns+" FROM tasks WHERE status = ? ORDER BY created_at, id", status)
+		"SELECT "+taskColumns+" FROM tasks AS OF 'main' WHERE status = ? ORDER BY created_at, id", status)
 }
 
 func (l *Lanes) queryTasks(ctx context.Context, query string, args ...any) (tasks []Task, err error) {
@@ -355,27 +355,71 @@ type Note struct {
 // the five-minute timer. It must not reuse a general DOLT_COMMIT('-A') path or
 // weaken the clean-working-set guards around proposal staging and review.
 func (l *Lanes) LogNote(ctx context.Context, body string) (Note, string, error) {
+	note, err := l.PrepareNote(body)
+	if err != nil {
+		return Note{}, "", err
+	}
+	hash, err := l.write(ctx, "note add "+summarize(note.Text), []string{note.Text, note.ActorRaw}, noteStatement(note))
+	if err != nil {
+		return Note{}, "", fmt.Errorf("log session note: %w", err)
+	}
+	return note, hash, nil
+}
+
+// PrepareNote validates and mints a note without writing it. The MCP server
+// uses this narrow seam to accumulate rows in memory; LogNote remains the
+// CLI's one-note/one-commit operation.
+func (l *Lanes) PrepareNote(body string) (Note, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
-		return Note{}, "", errors.New("a session note needs text")
+		return Note{}, errors.New("a session note needs text")
 	}
 
-	note := Note{
+	return Note{
 		ID:        newID(),
 		Actor:     l.actor.Name,
 		ActorRaw:  l.actor.Raw,
 		Text:      body,
 		CreatedAt: now(),
+	}, nil
+}
+
+// CommitNotes writes only notes prepared for this lane's actor as one batch.
+// RequireClean prevents DOLT_COMMIT('-A') from sweeping an unrelated dirty
+// working set into the note commit.
+func (l *Lanes) CommitNotes(ctx context.Context, notes []Note) (string, error) {
+	if len(notes) == 0 {
+		return "", errors.New("a note batch needs at least one note")
 	}
-	hash, err := l.write(ctx, "note add "+summarize(note.Text), []string{note.Text, note.ActorRaw}, store.Statement{
+	statements := make([]store.Statement, 0, len(notes))
+	text := make([]string, 0, len(notes)*2)
+	for _, note := range notes {
+		if note.Actor != l.actor.Name || note.ActorRaw != l.actor.Raw {
+			return "", fmt.Errorf("note %s belongs to %s (%q), not batch actor %s (%q)",
+				note.ID, note.Actor, note.ActorRaw, l.actor.Name, l.actor.Raw)
+		}
+		statements = append(statements, noteStatement(note))
+		text = append(text, note.Text, note.ActorRaw)
+	}
+	result, err := l.store.Commit(ctx, store.CommitRequest{
+		Statements:   statements,
+		Text:         text,
+		RequireClean: true,
+		Message:      fmt.Sprintf("note batch (%d)", len(notes)),
+		Author:       l.actor.CommitAuthor(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("commit session-note batch: %w", err)
+	}
+	return result.Hash, nil
+}
+
+func noteStatement(note Note) store.Statement {
+	return store.Statement{
 		SQL: "INSERT INTO session_notes (id, actor, actor_raw, text, created_at) " +
 			"VALUES (?, ?, ?, ?, ?)",
 		Args: []any{note.ID, note.Actor, note.ActorRaw, note.Text, note.CreatedAt},
-	})
-	if err != nil {
-		return Note{}, "", fmt.Errorf("log session note: %w", err)
 	}
-	return note, hash, nil
 }
 
 // Notes lists the most recent session notes, newest first. A limit of zero
@@ -495,7 +539,7 @@ func (l *Lanes) Command(ctx context.Context, kind string) (command Command, err 
 
 	rows, err := l.store.Query(ctx,
 		"SELECT kind, cmdline, last_exit_code, last_run_at, success_count, fail_count "+
-			"FROM commands WHERE kind = ?", kind)
+			"FROM commands AS OF 'main' WHERE kind = ?", kind)
 	if err != nil {
 		return Command{}, fmt.Errorf("read %s command: %w", kind, err)
 	}

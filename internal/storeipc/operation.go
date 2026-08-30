@@ -24,6 +24,7 @@ const (
 	opRecallFTS        = "recall_fts"
 	opSearchDecisions  = "search_decisions"
 	opLastChanged      = "last_changed"
+	opCheckWriteText   = "check_write_text"
 	opRecordCommand    = "record_command"
 	opProposeFact      = "propose_fact"
 	opProposeDecision  = "propose_decision"
@@ -47,6 +48,7 @@ type Backend interface {
 	RecallFTS(context.Context, string, []string) ([]store.LexicalHit, error)
 	SearchDecisions(context.Context, string, int) ([]store.DecisionSearchHit, error)
 	LastChanged(context.Context, string, string) (*store.CommitProvenance, error)
+	CheckWriteText(context.Context, []string) error
 	ProposeFact(context.Context, localdolt.Proposal, localdolt.Fact) (localdolt.StagedProposal, error)
 	ProposeDecision(context.Context, localdolt.Proposal, localdolt.Decision) (localdolt.StagedProposal, error)
 	ProposeSupersede(context.Context, localdolt.Proposal, string, localdolt.Fact) (localdolt.StagedProposal, error)
@@ -76,6 +78,10 @@ type searchDecisionsArgs struct {
 type lastChangedArgs struct {
 	SourceType string `json:"sourceType"`
 	SourceID   string `json:"sourceId"`
+}
+
+type checkWriteTextArgs struct {
+	Text []string `json:"text"`
 }
 
 type recordCommandArgs struct {
@@ -167,6 +173,14 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		result, err = h.store.LastChanged(ctx, args.SourceType, args.SourceID)
+	case opCheckWriteText:
+		args, decodeErr := operationArgs[checkWriteTextArgs](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		err = h.store.CheckWriteText(ctx, args.Text)
+		result = struct{}{}
 	case opRecordCommand:
 		args, decodeErr := operationArgs[recordCommandArgs](req.Args)
 		if decodeErr != nil {

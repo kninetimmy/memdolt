@@ -751,6 +751,9 @@ func TestOwnerRoutedWritePreservesDenyListAndAtomicCommit(t *testing.T) {
 	if err := os.WriteFile(config, []byte("[deny_list]\npatterns = ['blocked routed text']\n"), 0o600); err != nil {
 		t.Fatalf("write deny-list: %v", err)
 	}
+	if err := routed.CheckWriteText(ctx, []string{"blocked routed text"}); err == nil || !strings.Contains(err.Error(), "blocked routed text") {
+		t.Fatalf("routed deny-list preflight error = %v, want named rule", err)
+	}
 	before = queryInt(t, direct, "SELECT COUNT(*) FROM dolt_log")
 	_, _, err = memory.New(routed, actor).AddTask(ctx, "blocked routed text", "must not land")
 	if err == nil || !strings.Contains(err.Error(), "blocked routed text") {

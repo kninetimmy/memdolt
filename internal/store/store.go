@@ -258,6 +258,13 @@ type CommitRequest struct {
 	// before anything else can.
 	NoText bool
 
+	// RequireClean refuses the commit when its branch already has any
+	// uncommitted table change. Session-note batching sets this because
+	// DOLT_COMMIT stages every table: a pending note batch may commit its own
+	// INSERTs, never an unrelated working-set change it happened to find.
+	// Other CommitRequest callers retain their existing behavior.
+	RequireClean bool
+
 	// Message is the commit message. PRD §3.1 wants a structured
 	// one-liner: "propose fact msrv=1.24", "note batch (3)",
 	// "review accept #42". It is commit metadata, not automatic deny-list

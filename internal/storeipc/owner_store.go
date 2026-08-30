@@ -78,11 +78,12 @@ func (s *OwnerStore) Commit(ctx context.Context, req store.CommitRequest) (store
 		statements[i] = Statement{SQL: statement.SQL, Args: wireArgs(statement.Args)}
 	}
 	result, err := s.client.Commit(ctx, CommitRequest{
-		Statements: statements,
-		Text:       req.Text,
-		NoText:     req.NoText,
-		Message:    req.Message,
-		Author:     Actor{Name: req.Author.Name, Email: req.Author.Email},
+		Statements:   statements,
+		Text:         req.Text,
+		NoText:       req.NoText,
+		RequireClean: req.RequireClean,
+		Message:      req.Message,
+		Author:       Actor{Name: req.Author.Name, Email: req.Author.Email},
 	})
 	if err != nil {
 		return store.CommitResult{}, err
@@ -156,6 +157,10 @@ func (s *OwnerStore) LastChanged(ctx context.Context, sourceType, sourceID strin
 	var result *store.CommitProvenance
 	err := s.operation(ctx, opLastChanged, lastChangedArgs{SourceType: sourceType, SourceID: sourceID}, &result)
 	return result, err
+}
+
+func (s *OwnerStore) CheckWriteText(ctx context.Context, text []string) error {
+	return s.operation(ctx, opCheckWriteText, checkWriteTextArgs{Text: text}, &struct{}{})
 }
 
 // RecordCommand keeps the lane's incrementing upsert and read-back inside one

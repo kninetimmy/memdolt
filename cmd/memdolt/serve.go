@@ -64,6 +64,8 @@ func runServe(
 		return err
 	}
 	defer func() { err = errors.Join(err, endpoint.Close()) }()
+	tools := mcpserver.RegisterTools(server, baseDir, owner)
+	defer func() { err = errors.Join(err, tools.Close()) }()
 	if pendingWork != nil {
 		defer func() { err = errors.Join(err, pendingWork.Close()) }()
 	}

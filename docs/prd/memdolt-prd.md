@@ -79,7 +79,7 @@ Each project's memory is a Dolt database. The commit graph is the write-ahead lo
 | `proposal/<ulid>` | agent, via `propose_*` | exactly one staged fact/decision/supersede, one commit | merged on accept, deleted on reject |
 
 - **One branch per proposal, not per session.** Branches are cheap in Dolt; per-proposal branches preserve memhub's per-proposal accept/reject granularity exactly, keep merges tiny, and make `review show <id>` a single-commit diff. **[design]**
-- **Direct lanes** (no review gate, matching memhub's semantics): `tasks`, `session_notes`, `commands`, `project_state`/`project_arch` narratives, doc ingestion. These commit straight to `main`, **batched**: one commit per MCP tool call for tasks/narratives; notes accumulate in the working set and commit on session end or a 5-minute timer, whichever first (Dolt commits are prolly-tree updates — materially heavier than a SQLite INSERT — so note-per-commit is prohibited). **[design]**
+- **Direct lanes** (no review gate, matching memhub's semantics): `tasks`, `session_notes`, `commands`, `project_state`/`project_arch` narratives, doc ingestion. **Before issue #104, this paragraph said:** “These commit straight to `main`, **batched**: one commit per MCP tool call for tasks/narratives; notes accumulate in the working set and commit on session end or a 5-minute timer, whichever first (Dolt commits are prolly-tree updates — materially heavier than a SQLite INSERT — so note-per-commit is prohibited).” **After issue #104:** direct writes still commit to `main`, but only the long-lived MCP `log_session_note` path batches notes. It keeps prepared rows in `mcpserver.Toolset` process memory, grouped by actor, until the five-minute deadline or orderly session end; the Dolt working set is not the queue. Each successful actor group becomes one clean-working-set-guarded commit and is removed immediately, while a group that fails at the deadline remains in memory for one orderly-shutdown retry without blocking other groups. A final shutdown failure is returned and that failed group is discarded when the toolset closes; a crash or forced termination likewise loses every not-yet-committed in-memory note. The short-lived CLI note lane remains one note per commit. These batching and loss boundaries bind the MCP `Toolset` accumulator alone, not every `session_notes` writer or every direct lane. **[design]**
 - Commit metadata is load-bearing: author = normalized actor (`agent:claude-code`, `agent:codex`, `user`), message = structured one-liner (`propose fact msrv=1.24`, `note batch (3)`, `review accept #42`). `dolt_log` + `dolt_blame` then answer provenance queries with zero app code. **[V]** (system tables exist as documented.)
 - Agents never `ALTER TABLE`. Schema changes ship only in migrations run by the binary on `main` (§6.4). This keeps Dolt schema-conflict machinery **[V]** out of the daily path entirely.
 
@@ -666,6 +666,21 @@ A `global` Dolt database on the hub, cloned to `~/.memdolt/global/` on each mach
 | Repo ops | `repo_status` (ahead/behind/diverged + working-set state), `repo_pull` (merge; conflicts elicited per §6.3 policy), `repo_push`. **No `sync_adopt` — no destructive counterpart exists.** |
 | History (new) | `history` — blame/log/AS-OF lookups for a fact/decision ("when did this change and who changed it") or the `project_state`/`project_arch` narrative tables ("how did our status/architecture evolve", §3.2) |
 | Gated | `archive_transcript` (confirm=true; unredacted warning — memhub parity) |
+
+**Approved M3 phasing (2026-08-30, issue #104).** Before this delivery, the
+table above described the destination surface without distinguishing which
+names the first M3 server could honestly advertise, while the runtime
+foundation itself registered no memory tools. After it, M3 registers exactly
+the implemented read tools `status`, `recall`, `search`, `list_tasks`,
+`list_decisions`, `list_facts`, `list_proposals`, and `get_command`; direct
+tools `task_add`, `task_done`, `log_session_note`, and `record_command`; and
+staged tools `propose_fact`, `propose_decision`, and `propose_supersede`.
+`review_pending` and its fact-key elicitation remain a separate M3 delivery.
+The later-backed names `locate`, `doc_add`, `render`, `repo_status`,
+`repo_pull`, `repo_push`, `history`, and `archive_transcript` are absent from
+`tools/list`, not refusal stubs. This is a registration restriction on the
+first M3 implementation alone, not removal of those tools from the destination
+contract or permission to substitute a stub before its backend lands.
 
 Server instructions embed memhub's routing rules (recall-before-ledger, locate-before-grep, turn-1 PROJECT.md, never-write-durable-directly) adapted to memdolt names, plus two memdolt-native additions **[design]**: the fact-key namespace convention (§6.1 — `build.*`, `convention.*`, `env.*`, `gotcha.*`, and similar dotted prefixes) so agents file under an existing prefix instead of inventing ad hoc keys, and the filing rule that decides fact vs. decision — **facts state what is true; decisions record what we chose and why — if there's a "because," it's a decision.**
 

@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"database/sql"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,19 @@ import (
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
+
+func TestFactIsStaleHorizonBoundaries(t *testing.T) {
+	now := time.Now().UTC()
+	if FactIsStale(now.Add(-24*time.Hour), now, 1) {
+		t.Fatal("fact exactly at the one-day horizon is stale")
+	}
+	if !FactIsStale(now.Add(-24*time.Hour-time.Nanosecond), now, 1) {
+		t.Fatal("fact past the one-day horizon is not stale")
+	}
+	if FactIsStale(now.Add(-365*24*time.Hour), now, math.MaxInt64) {
+		t.Fatal("365-day-old fact is stale under max-int64 day horizon")
+	}
+}
 
 type recallFixture struct {
 	ctx  context.Context

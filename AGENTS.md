@@ -97,6 +97,97 @@ export GOFLAGS=-tags=gms_pure_go
     dependencies and behavior still hold. This `AGENTS.md` record preserves
     the before-and-after above; all other guidance and its managed block are
     unchanged.
+
+  **Before issue #104, `serve` had the protocol and attribution foundation but
+  registered no memory tools. After it, production registers exactly the 15
+  real M3 tools named in PRD §11.1's approved phasing; deferred names are absent,
+  not stubs.** The complete structural blast radius is:
+
+  - `internal/mcpserver/tools.go` adds `RegisterTools`/`Toolset`, the 15 typed
+    handlers, committed-main list readers, and the session note accumulator.
+    Existing `internal/mcpserver.New`, discovery, instructions, cache hints and
+    `actorFor` behavior still hold. In particular, every handler still receives
+    `New`'s tools/call attribution: all MCP identities remain agent-class, raw
+    `cli` remains canonical `agent:opencode` with raw `cli` provenance, and a
+    missing identity remains `agent:unknown`. The fixed-name restriction binds
+    `RegisterTools` alone, not arbitrary go-sdk servers or the destination tool
+    table. `list_facts` alone interprets `prefix` as one literal dotted prefix,
+    uses an explicit non-backslash LIKE escape so percent and underscore are
+    escaped in the bound value while backslash stays ordinary, appends the
+    terminal SQL wildcard itself, and retains superseded rows; this is not
+    permission for other list filters to accept wildcard syntax.
+    `Toolset.flushLocked` attempts every queued actor group even when another
+    group fails, removes each success immediately, and retains only failures for
+    the orderly-shutdown retry. `Toolset.Close` reports both deadline and final
+    failures, then discards any still-failed in-memory rows because a closed
+    session cannot retry them. This retry/discard rule binds the MCP `Toolset`
+    accumulator alone, not every batch loop or direct-lane write.
+  - `cmd/memdolt/serve.go` registers that toolset on the already-open owner and
+    closes it after protocol serving but before IPC and the store. The issue
+    #103 lifecycle ordering, schema gate and authenticated owner endpoint still
+    hold; only `runServe` owns this ordering, not every CLI command or MCP
+    server. `cmd/memdolt/serve_test.go` retains the lifecycle and stdio checks
+    and now verifies production advertises 15 tools.
+  - `internal/memory.Lanes.PrepareNote` mints an in-memory row and
+    `CommitNotes` commits one actor's accumulated rows as `note batch (N)`.
+    `LogNote` still gives the short-lived CLI one note and one attributed commit;
+    task and command validation, ordering, commit messages and attribution still
+    hold. Their reads now say `AS OF 'main'` explicitly: before they depended on
+    the store session being on main; after they refuse to expose a proposal or
+    uncommitted branch view. The note-batch rule binds `CommitNotes` and the MCP
+    accumulator alone, not every `Lanes` write. Multiple request actors are
+    committed in separate attributed batches because one Dolt commit has one
+    author.
+  - `store.CommitRequest.RequireClean` is an opt-in guard used by note batches.
+    `localdolt.commitConn` still validates and deny-list scans every request
+    before writing, but a guarded request also refuses an already-dirty working
+    set before its transaction opens, so `DOLT_COMMIT('-A')` cannot sweep an
+    unrelated change. The restriction binds requests that set this field alone,
+    not every `CommitRequest`, proposal stage or review accept; their established
+    clean-working-set rules remain separate. `localdolt.CheckWriteText` exposes
+    the same scanner for an early visible MCP refusal, while the real commit
+    checks again and remains authoritative.
+  - `internal/storeipc.CommitRequest`, `Backend`, `handleOperation` and
+    `OwnerStore` carry `RequireClean` and `CheckWriteText` without changing the
+    token gate, explicit operation allow-list, one-submit write rule, SQL argument
+    binding, error visibility or existing direct/routed parity. These additions
+    bind this owner transport, not arbitrary HTTP handlers.
+  - `retrieval.Run` now owns config loading, effective-mode selection, inference
+    open/close and close-error joining for both surfaces. `cmd/memdolt/recall.go`
+    still builds the same options and emits the same response; retrieval ranking,
+    filters, warnings, observability and provenance are unchanged.
+    `retrieval.FactIsStale` applies recall's floating-point day comparison to
+    `list_facts` too, so every positive int64 horizon remains valid without a
+    `time.Duration` conversion. This helper binds fact staleness in recall and
+    MCP fact listing alone, not every age or retention calculation. `search.Run`,
+    `memory.Lanes`, and the `localdolt.Propose*` methods remain the sole business
+    logic for the corresponding MCP and CLI operations.
+  - `internal/mcpserver/tools_test.go` is additive in-memory client coverage for
+    all 15 registered tools and confirms each has non-nil input and output schemas.
+    It checks representative successes and visible refusals, main/proposal
+    separation, attribution, literal fact-prefix and superseded-row retention,
+    recall provenance, note deadlines, and orderly shutdown. Its mixed
+    denied/allowed regression proves the first flush attempts both actor groups in
+    that fixture despite one failure, leaves only the failed group pending, and
+    does not recommit the successful group when `Close` reports the failure and
+    discards pending rows. It does not directly observe the failed group's shutdown
+    retry attempt. More precisely, this file asserts the exact tool names, non-nil
+    input and output schemas for all 15 tools, recall's exact source-type
+    description, deferred-name absence, structured successes and visible refusals,
+    task and note attribution, proposal/main isolation, command lookup,
+    duplicate-key and file-search refusals, superseded fact retention, literal
+    percent/underscore/backslash/escape-character prefixes, max-int64 fact
+    staleness, recall fact provenance, and advertised `doc_chunk` acceptance. It
+    does not claim exhaustive coverage of every ordering, filter, warning, or
+    schema structure.
+    `server_test.go`
+    keeps the backend-free `New` foundation expectation but updates its diagnostic
+    wording. `localdolt/note_batch_internal_test.go` and the added
+    `storeipc_test.go` assertion cover dirty-working-set and routed deny-list
+    preflight behavior. They change no production behavior. PRD §§3.1 and 11.1
+    preserve the batching and phasing before/after records; no dependency, schema
+    migration, deferred backend, elicited review, host registration or provenance
+    workflow is added.
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
