@@ -130,6 +130,31 @@ type Fact struct {
 	Evidence string
 }
 
+// FactSnapshot is the exact durable row a fact-conflict dialog showed. The
+// nullable fields stay pointers so changing NULL to an empty string is still a
+// changed row. ProposeFactResolution validates this image on the proposal
+// branch it just cut from main before it writes anything.
+type FactSnapshot struct {
+	ID           string     `json:"id"`
+	Key          string     `json:"key"`
+	Value        string     `json:"value"`
+	Source       *string    `json:"source,omitempty"`
+	Kind         *string    `json:"kind,omitempty"`
+	Evidence     *string    `json:"evidence,omitempty"`
+	VerifiedAt   *time.Time `json:"verifiedAt,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	SupersededBy *string    `json:"supersededBy,omitempty"`
+}
+
+// FactResolution is one staging outcome from PRD §11.1's live-key dialog.
+type FactResolution string
+
+const (
+	FactResolutionOverwrite FactResolution = "overwrite"
+	FactResolutionSupersede FactResolution = "supersede"
+	FactResolutionKeepBoth  FactResolution = "keep_both"
+)
+
 func (f Fact) validate() error {
 	if strings.TrimSpace(f.Key) == "" {
 		return errors.New("a fact requires a key")
@@ -219,8 +244,8 @@ type StagedProposal struct {
 // PRD §11.1's fact-key elicitation is for — overwrite, supersede, keep-both
 // under a distinct key, or cancel — so it is reported here rather than
 // resolved: a staged write that quietly became something else would defeat
-// the review gate. ProposeFactOverwrite and ProposeSupersede are the two
-// same-key answers that stage a change.
+// the review gate. ProposeFactResolution is the expected-snapshot seam for
+// those answers; the ordinary ProposeSupersede API remains available too.
 func (s *Store) ProposeFact(ctx context.Context, p Proposal, f Fact) (StagedProposal, error) {
 	if err := f.validate(); err != nil {
 		return StagedProposal{}, fmt.Errorf("localdolt: propose fact: %w", err)
@@ -239,35 +264,65 @@ func (s *Store) ProposeFact(ctx context.Context, p Proposal, f Fact) (StagedProp
 	})
 }
 
-// ProposeFactOverwrite stages a reviewed in-place replacement of one live
-// fact. It is the overwrite answer to PRD §11.1's fact-key conflict dialog;
-// supersession remains a separate link-plus-replacement proposal.
-func (s *Store) ProposeFactOverwrite(ctx context.Context, p Proposal, overwrittenID string, replacement Fact) (StagedProposal, error) {
-	if strings.TrimSpace(overwrittenID) == "" {
-		return StagedProposal{}, errors.New("localdolt: propose fact overwrite: the id of the fact to overwrite is required")
+// ProposeFactResolution stages one reviewed answer to a live-key dialog. The
+// branch is cut from main before expected is compared, so a main change before
+// the response fails without leaving a proposal branch, while a later main
+// change is handled by the normal accept-time merge guards.
+func (s *Store) ProposeFactResolution(
+	ctx context.Context,
+	p Proposal,
+	expected FactSnapshot,
+	replacement Fact,
+	resolution FactResolution,
+) (StagedProposal, error) {
+	if err := expected.validateLive(); err != nil {
+		return StagedProposal{}, fmt.Errorf("localdolt: propose fact resolution: %w", err)
 	}
 	if err := replacement.validate(); err != nil {
-		return StagedProposal{}, fmt.Errorf("localdolt: propose fact overwrite: %w", err)
+		return StagedProposal{}, fmt.Errorf("localdolt: propose fact resolution: %w", err)
 	}
 	now := time.Now().UTC()
-	return s.stage(ctx, stagedWrite{
-		kind:           KindFact,
-		proposal:       p,
-		rowID:          overwrittenID,
-		now:            now,
-		message:        "propose overwrite fact " + replacement.Key,
-		text:           replacement.text(),
-		overwrittenID:  overwrittenID,
-		overwrittenKey: replacement.Key,
-		statements: []store.Statement{{
+	w := stagedWrite{proposal: p, now: now, text: replacement.text(), expectedFact: &expected}
+	switch resolution {
+	case FactResolutionOverwrite:
+		if replacement.Key != expected.Key {
+			return StagedProposal{}, errors.New("localdolt: an overwrite must keep the shown fact key")
+		}
+		w.kind = KindFact
+		w.rowID = expected.ID
+		w.message = "propose overwrite fact " + replacement.Key
+		w.statements = []store.Statement{{
 			SQL: "UPDATE facts SET value = ?, source = ?, kind = ?, evidence = ?, verified_at = NULL " +
 				"WHERE id = ? AND `key` = ? AND superseded_by IS NULL",
 			Args: []any{
 				replacement.Value, p.Actor.Name, nullable(replacement.Kind), nullable(replacement.Evidence),
-				overwrittenID, replacement.Key,
+				expected.ID, expected.Key,
 			},
-		}},
-	})
+		}}
+	case FactResolutionSupersede:
+		if replacement.Key != expected.Key {
+			return StagedProposal{}, errors.New("localdolt: a supersede replacement must keep the shown fact key")
+		}
+		w.kind = KindSupersede
+		w.rowID = newID()
+		w.message = "propose supersede fact " + replacement.Key
+		w.statements = []store.Statement{
+			{SQL: "UPDATE facts SET superseded_by = ? WHERE id = ?", Args: []any{w.rowID, expected.ID}},
+			insertFact(w.rowID, replacement, p.Actor, now),
+		}
+	case FactResolutionKeepBoth:
+		if !validDistinctDottedKey(replacement.Key, expected.Key) {
+			return StagedProposal{}, errors.New("localdolt: keep-both requires a distinct dotted fact key with no empty segment")
+		}
+		w.kind = KindFact
+		w.rowID = newID()
+		w.message = "propose fact " + replacement.Key
+		w.statements = []store.Statement{insertFact(w.rowID, replacement, p.Actor, now)}
+		w.newFactKey = replacement.Key
+	default:
+		return StagedProposal{}, fmt.Errorf("localdolt: unknown fact resolution %q", resolution)
+	}
+	return s.stage(ctx, w)
 }
 
 // ProposeDecision stages a new decision for review (PRD §6.2), on its own
@@ -370,14 +425,14 @@ type stagedWrite struct {
 	// stage verifies it is live on the branch before anything is written.
 	supersededID string
 
-	// overwrittenID, when set, is the live same-key row an overwrite proposal
-	// updates in place. stage verifies the id and key before writing.
-	overwrittenID  string
-	overwrittenKey string
+	// expectedFact, when set, is the exact live row a caller showed before it
+	// asked how to resolve a key conflict. stage validates it on the branch it
+	// just cut from main before applying the selected write.
+	expectedFact *FactSnapshot
 
-	// newFactKey is set only by ProposeFact. A plain fact insert must not
-	// collide with a live key; supersede deliberately transfers that key and
-	// therefore does not set it.
+	// newFactKey is set by ProposeFact and the keep-both resolution. Their
+	// plain fact inserts must not collide with a live key; supersede deliberately
+	// transfers that key and therefore does not set it.
 	newFactKey string
 
 	// afterCheckout synchronizes the cleanup regression after this write's
@@ -477,6 +532,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 
 // stageOnBranch writes the proposal on the branch conn is checked out to.
 func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite, statements []store.Statement) (store.CommitResult, error) {
+	if w.expectedFact != nil {
+		if err := requireExpectedLiveFact(ctx, conn, *w.expectedFact); err != nil {
+			return store.CommitResult{}, err
+		}
+	}
 	if w.newFactKey != "" {
 		if err := requireUnusedFactKey(ctx, conn, w.newFactKey); err != nil {
 			return store.CommitResult{}, err
@@ -484,11 +544,6 @@ func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite
 	}
 	if w.supersededID != "" {
 		if err := requireLiveFact(ctx, conn, w.supersededID); err != nil {
-			return store.CommitResult{}, err
-		}
-	}
-	if w.overwrittenID != "" {
-		if err := requireLiveFactWithKey(ctx, conn, w.overwrittenID, w.overwrittenKey); err != nil {
 			return store.CommitResult{}, err
 		}
 	}
@@ -559,17 +614,87 @@ func requireLiveFact(ctx context.Context, conn *sql.Conn, id string) error {
 	return nil
 }
 
-func requireLiveFactWithKey(ctx context.Context, conn *sql.Conn, id, key string) error {
-	var live int
-	err := conn.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM facts WHERE id = ? AND live_key = ?", id, key).Scan(&live)
-	if err != nil {
-		return fmt.Errorf("localdolt: look up the fact %q to overwrite: %w", id, err)
+func (f FactSnapshot) validateLive() error {
+	if strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.Key) == "" {
+		return errors.New("the shown live fact requires an id and key")
 	}
-	if live == 0 {
-		return fmt.Errorf("localdolt: no live fact with id %q and key %q to overwrite", id, key)
+	if f.SupersededBy != nil {
+		return errors.New("the shown fact is not live")
 	}
 	return nil
+}
+
+func requireExpectedLiveFact(ctx context.Context, conn *sql.Conn, expected FactSnapshot) error {
+	actual, err := factSnapshotByID(ctx, conn, expected.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("localdolt: the live fact %q changed after it was shown; no proposal was staged", expected.ID)
+		}
+		return fmt.Errorf("localdolt: read the shown fact %q: %w", expected.ID, err)
+	}
+	if !sameFactSnapshot(actual, expected) || actual.SupersededBy != nil {
+		return fmt.Errorf("localdolt: the live fact %q changed after it was shown; no proposal was staged", expected.ID)
+	}
+	return nil
+}
+
+func factSnapshotByID(ctx context.Context, conn *sql.Conn, id string) (FactSnapshot, error) {
+	var fact FactSnapshot
+	var source, kind, evidence, superseded sql.NullString
+	var verified, created sql.NullTime
+	err := conn.QueryRowContext(ctx,
+		"SELECT id, `key`, value, source, kind, evidence, verified_at, created_at, superseded_by "+
+			"FROM facts WHERE id = ?", id).Scan(
+		&fact.ID, &fact.Key, &fact.Value, &source, &kind, &evidence, &verified, &created, &superseded)
+	if err != nil {
+		return FactSnapshot{}, err
+	}
+	fact.Source = nullStringPointer(source)
+	fact.Kind = nullStringPointer(kind)
+	fact.Evidence = nullStringPointer(evidence)
+	fact.SupersededBy = nullStringPointer(superseded)
+	if verified.Valid {
+		stamp := verified.Time
+		fact.VerifiedAt = &stamp
+	}
+	if created.Valid {
+		fact.CreatedAt = created.Time
+	}
+	return fact, nil
+}
+
+func nullStringPointer(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
+}
+
+func sameFactSnapshot(a, b FactSnapshot) bool {
+	return a.ID == b.ID && a.Key == b.Key && a.Value == b.Value &&
+		equalStringPointers(a.Source, b.Source) && equalStringPointers(a.Kind, b.Kind) &&
+		equalStringPointers(a.Evidence, b.Evidence) && equalStringPointers(a.SupersededBy, b.SupersededBy) &&
+		equalTimePointers(a.VerifiedAt, b.VerifiedAt) && a.CreatedAt.Equal(b.CreatedAt)
+}
+
+func equalStringPointers(a, b *string) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+func equalTimePointers(a, b *time.Time) bool {
+	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
+}
+
+func validDistinctDottedKey(key, old string) bool {
+	if key == old || key != strings.TrimSpace(key) || !strings.Contains(key, ".") {
+		return false
+	}
+	for _, part := range strings.Split(key, ".") {
+		if part == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func checkoutBranch(ctx context.Context, conn *sql.Conn, branch string) error {

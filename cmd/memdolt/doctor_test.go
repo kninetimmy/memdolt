@@ -215,8 +215,8 @@ func serveStore(t *testing.T, base string) *ipc.Server {
 	configPath := pathsFor(t, base).ConfigFile()
 	handler, err := storeipc.NewHandler(storeipc.Config{
 		Store: st,
-		ReviewAccept: func(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
-			return reviewgate.Accept(ctx, st, configPath, id, reviewer, force)
+		ReviewAccept: func(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+			return reviewgate.AcceptExpected(ctx, st, configPath, id, expectedCommit, reviewer, force)
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})

@@ -33,7 +33,7 @@ const (
 type Backend interface {
 	storeipc.Backend
 	DataDir() string
-	ReviewAccept(context.Context, string, store.Actor, bool) (localdolt.AcceptResult, error)
+	ReviewAcceptExpected(context.Context, string, string, store.Actor, bool) (localdolt.AcceptResult, error)
 }
 
 // Toolset owns the fixed M3 tools and their session-scoped state: notes waiting

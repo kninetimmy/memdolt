@@ -21,6 +21,7 @@ const elicitationStateSchema = `CREATE TABLE pending_elicitations (
   actor_name TEXT NOT NULL,
   actor_raw TEXT NOT NULL,
   proposal_ids TEXT NOT NULL,
+  proposal_commits TEXT NOT NULL,
   queue_position INTEGER NOT NULL,
   action TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
@@ -32,9 +33,11 @@ const elicitationStateSchema = `CREATE TABLE pending_elicitations (
 var errElicitationStateNotFound = errors.New("requestState is missing, forged, or already used")
 
 // elicitationStateStore is a process-local relational store. A real row makes
-// requestState consumption atomic and lets every storage failure fail closed,
-// while an in-memory SQLite database keeps ephemeral approval material out of
-// Dolt history and the embedding side-store.
+// requestState consumption atomic, and authorization insert/consume failures
+// fail before promotion. A continuation progress update may instead fail after
+// an authorized merge; the caller reports that accepted prefix and stops.
+// In-memory SQLite keeps ephemeral approval material out of Dolt history and
+// the embedding side-store.
 type elicitationStateStore struct {
 	db *sql.DB
 
@@ -59,7 +62,7 @@ func newElicitationStateStore() (*elicitationStateStore, error) {
 }
 
 func (s *elicitationStateStore) insert(ctx context.Context, state string, row pendingElicitation) error {
-	proposalIDs, accepted, skipped, fact, err := encodePendingElicitation(row)
+	proposalIDs, proposalCommits, accepted, skipped, fact, err := encodePendingElicitation(row)
 	if err != nil {
 		return err
 	}
@@ -72,9 +75,9 @@ func (s *elicitationStateStore) insert(ctx context.Context, state string, row pe
 		return fmt.Errorf("prune expired requestState rows: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO pending_elicitations
-    (state_hash, repository, actor_name, actor_raw, proposal_ids, queue_position, action, expires_at, accepted, skipped, fact)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		requestStateHash(state), row.Repository, row.Actor.Name, row.Actor.Raw, proposalIDs,
+	    (state_hash, repository, actor_name, actor_raw, proposal_ids, proposal_commits, queue_position, action, expires_at, accepted, skipped, fact)
+	    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		requestStateHash(state), row.Repository, row.Actor.Name, row.Actor.Raw, proposalIDs, proposalCommits,
 		row.Position, row.Action, row.ExpiresAt.UnixNano(), accepted, skipped, fact)
 	if err != nil {
 		_ = tx.Rollback()
@@ -165,7 +168,7 @@ func (s *elicitationStateStore) Close() error {
 	return s.closeErr
 }
 
-const pendingElicitationSelect = `SELECT repository, actor_name, actor_raw, proposal_ids,
+const pendingElicitationSelect = `SELECT repository, actor_name, actor_raw, proposal_ids, proposal_commits,
   queue_position, action, expires_at, accepted, skipped, fact
   FROM pending_elicitations WHERE state_hash = ?`
 
@@ -175,10 +178,10 @@ type rowScanner interface {
 
 func scanPendingElicitation(scanner rowScanner) (pendingElicitation, error) {
 	var row pendingElicitation
-	var proposalIDs, accepted, skipped, fact string
+	var proposalIDs, proposalCommits, accepted, skipped, fact string
 	var expiresAt int64
 	if err := scanner.Scan(
-		&row.Repository, &row.Actor.Name, &row.Actor.Raw, &proposalIDs, &row.Position,
+		&row.Repository, &row.Actor.Name, &row.Actor.Raw, &proposalIDs, &proposalCommits, &row.Position,
 		&row.Action, &expiresAt, &accepted, &skipped, &fact,
 	); err != nil {
 		return pendingElicitation{}, err
@@ -186,6 +189,9 @@ func scanPendingElicitation(scanner rowScanner) (pendingElicitation, error) {
 	row.ExpiresAt = time.Unix(0, expiresAt).UTC()
 	if err := json.Unmarshal([]byte(proposalIDs), &row.ProposalIDs); err != nil {
 		return pendingElicitation{}, fmt.Errorf("decode requestState proposal ids: %w", err)
+	}
+	if err := json.Unmarshal([]byte(proposalCommits), &row.ProposalCommits); err != nil {
+		return pendingElicitation{}, fmt.Errorf("decode requestState proposal commits: %w", err)
 	}
 	if err := json.Unmarshal([]byte(accepted), &row.Accepted); err != nil {
 		return pendingElicitation{}, fmt.Errorf("decode requestState accepted progress: %w", err)
@@ -199,13 +205,14 @@ func scanPendingElicitation(scanner rowScanner) (pendingElicitation, error) {
 	return row, nil
 }
 
-func encodePendingElicitation(row pendingElicitation) (proposalIDs, accepted, skipped, fact string, err error) {
+func encodePendingElicitation(row pendingElicitation) (proposalIDs, proposalCommits, accepted, skipped, fact string, err error) {
 	values := []struct {
 		name  string
 		value any
 		out   *string
 	}{
 		{name: "proposal ids", value: row.ProposalIDs, out: &proposalIDs},
+		{name: "proposal commits", value: row.ProposalCommits, out: &proposalCommits},
 		{name: "accepted progress", value: row.Accepted, out: &accepted},
 		{name: "skipped progress", value: row.Skipped, out: &skipped},
 		{name: "fact conflict", value: row.Fact, out: &fact},
@@ -213,11 +220,11 @@ func encodePendingElicitation(row pendingElicitation) (proposalIDs, accepted, sk
 	for _, value := range values {
 		encoded, encodeErr := json.Marshal(value.value)
 		if encodeErr != nil {
-			return "", "", "", "", fmt.Errorf("encode requestState %s: %w", value.name, encodeErr)
+			return "", "", "", "", "", fmt.Errorf("encode requestState %s: %w", value.name, encodeErr)
 		}
 		*value.out = string(encoded)
 	}
-	return proposalIDs, accepted, skipped, fact, nil
+	return proposalIDs, proposalCommits, accepted, skipped, fact, nil
 }
 
 func requestStateHash(state string) []byte {

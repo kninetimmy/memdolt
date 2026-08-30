@@ -208,59 +208,92 @@ export GOFLAGS=-tags=gms_pure_go
     row in process-local in-memory SQLite. Each 256-bit cryptographically random
     `requestState` is stored only as a SHA-256 lookup hash, expires after two
     minutes, is atomically deleted before response interpretation, and is bound
-    to the repository data directory, attributed MCP client, exact proposal
-    IDs, queue position, and action. Storage errors and missing, expired,
-    mismatched, forged, replayed, malformed, incomplete, declined, or canceled
-    responses cannot promote or discard a proposal. Before, `Toolset` held only
+    to the repository data directory, attributed MCP client, exact proposal IDs
+    and staging commits, queue position, and action. Before the cycle-1 fix,
+    proposal IDs and position were stored but the displayed commit was not, so a
+    branch reset to another single commit under the same ID could pass approval;
+    after it, every displayed commit is stored and passed into the serialized
+    accept gate. Missing, expired, mismatched, forged, replayed, malformed,
+    incomplete, declined, or canceled responses cannot promote or discard a
+    proposal. Authorization-state insert or consume failure happens before
+    promotion and fails closed. Continuation bookkeeping is different: its
+    progress update runs after a selected proposal may already have merged, so
+    a failure stops traversal and reports that accepted prefix rather than
+    claiming the merge did not happen. Before issue #106, `Toolset` held only
     pending note groups; after, it also owns this short-lived relational state,
     which restart or `Close` destroys. This discipline binds states minted by
     this toolset alone, not every go-sdk `requestState`; no Dolt migration,
     persistent side-store file, or embedding-side-store table stores approval
     material.
-  - `review_pending` offers repo proposals oldest-first, successively (up to the
-    SDK's nine-input-round call limit, with later calls continuing) or as one
-    exact batch. Global proposals never enter a dialog and every terminal
-    result reports their count with the `memdolt review` terminal remedy. A
-    client without elicitation gets the same CLI path and changes nothing; a
-    global-only queue can still report its terminal remedy. This exclusion
-    binds `review_pending` alone: `list_proposals` and every CLI review verb keep
-    their prior global visibility and behavior.
-  - Confirmed MCP acceptance calls the existing application `ReviewAccept` as
-    reviewer `user` with `force=false`. `internal/review.Accept` and
-    `localdolt.AcceptProposal` are unchanged, so contradiction validation and
-    inference, accept-time deny-list scanning, one-commit and supersede-shape
+  - `review_pending` offers repo proposals oldest-first. Modern 2026-07-28
+    successive review performs at most nine input rounds per call and returns a
+    single-use, expiry-bound continuation cursor carrying the untouched snapshot
+    and progress; using it reaches proposal ten without re-showing skipped
+    entries. Before the cycle-1 fix, the queue was truncated to nine and a later
+    call restarted at the same skipped entries, making the tail unreachable.
+    Genuinely legacy sessions use one form elicitation containing an approve or
+    skip field for every shown proposal, because the SDK legacy shim reinvokes a
+    handler only once; batch mode remains one form round on both protocols.
+    Batch approval is sequential, not atomic: each successful accept lands, and
+    a later guard refusal stops with the accepted prefix still durable. The
+    dialog and result now state that partial-progress rule; before the fix they
+    incorrectly promised that cancel or failure left the whole batch pending.
+    Global proposals never enter a dialog. Every terminal result reports their
+    count and terminal `memdolt review` remedy; a mixed queue on a client without
+    form elicitation reports both repo and global counts. Empty elicitation
+    capabilities retain the protocol's assumed-form compatibility, while a
+    URL-only capability gets the CLI fallback. These restrictions bind
+    `review_pending` alone: `list_proposals` and every CLI review verb keep their
+    prior global visibility and behavior.
+  - Confirmed MCP acceptance calls `ReviewAcceptExpected` as reviewer `user`
+    with `force=false`; `internal/review.AcceptExpected` carries the displayed
+    commit into `localdolt.AcceptOptions.ExpectedCommit`.
+    `localdolt.AcceptProposal` compares that commit inside its existing
+    per-store acceptance lock before any merge. Its contradiction validation
+    and inference, accept-time deny-list scan, one-commit and supersede-shape
     checks, conflict/constraint verification, reviewer-authored merge, and
-    post-commit branch deletion all still run. This no-force rule binds
-    elicited MCP accepts only; CLI `review accept --force` remains available.
+    post-commit branch deletion still run. The expected-commit/no-force rule
+    binds elicited MCP accepts only. CLI `ReviewAccept` passes no expected
+    commit, and CLI `review accept --force` retains its prior operator behavior.
+    `cmd/memdolt.localCommandStore` implements both application seams, while
+    `runServe` gives owner IPC the expected variant; command selection,
+    application config loading, and the existing CLI output remain unchanged.
   - On a live repository key, `propose_fact` shows the current and proposed
-    facts and binds its response to both. Overwrite stages an in-place reviewed
-    update; supersede stages the existing link-first/replacement-second shape;
-    keep-both requires a different key with at least two non-empty dotted
-    segments and uses ordinary `ProposeFact`; cancel, decline, malformed input,
-    a changed current row, or missing elicitation writes nothing. Fresh-key
-    staging and all three original staged tools otherwise behave as before, and
-    every successful choice remains a proposal branch off `main`.
-  - `localdolt.Store.ProposeFactOverwrite` alone adds the overwrite operation.
-    It verifies the shown id is still live under the same key, stages one
-    value/source/kind/evidence update plus proposal metadata in one commit,
-    clears `verified_at`, and leaves `main` unchanged. Before, no staged method
-    represented overwrite; after, this named method does. It does not change
-    every fact update, ordinary `ProposeFact`, supersede history, proposal kinds,
-    or the durable schema.
+    facts and binds its response to both. Before the cycle-1 fix, the handler
+    re-read the shown row and then separately called a staging method, so main
+    could change between comparison and branch cut; after it,
+    `localdolt.Store.ProposeFactResolution` receives the exact nullable row
+    image, cuts its proposal branch from main, and compares that image on the
+    new branch before applying the selected write. A change before branch cut
+    therefore deletes the abandoned branch and stages nothing; a main change
+    after the cut remains an ordinary accept-time merge conflict. Overwrite
+    stages an in-place value/source/kind/evidence update and clears
+    `verified_at`; supersede stages the existing link-first/replacement-second
+    shape; keep-both validates and inserts a distinct dotted key. Cancel,
+    decline, malformed input, changed current row, or missing elicitation writes
+    nothing. This expected-snapshot rule binds `ProposeFactResolution` alone,
+    not every `ProposeFact`, `ProposeSupersede`, or fact write. Fresh-key staging
+    and all three original staged tools retain their prior contracts, and every
+    successful conflict choice remains a one-commit proposal off `main`.
   - `storeipc.Backend`, the explicit operation allow-list, and `OwnerStore`
-    carry overwrite without changing authenticated ownership, actor
-    propagation, bound SQL arguments, visible errors, or the one-submit/no-retry
-    write boundary. This addition binds that owner transport, not arbitrary
-    HTTP handlers.
+    carry the expected-snapshot fact resolution and expected-commit review
+    fields without changing authenticated ownership, actor propagation, bound
+    SQL arguments, visible errors, or the one-submit/no-retry write boundary.
+    The additions bind that owner transport, not arbitrary HTTP handlers.
   - `internal/mcpserver/elicitation_test.go` adds modern MRTR and legacy-shim
-    coverage, successive/batch/global/no-capability paths, accept-guard and
-    request-state attacks, and all fact-conflict outcomes. `tools_test.go` and
-    `cmd/memdolt/serve_test.go` now expect the prior 15 plus `review_pending`;
-    `server_test.go` only exposes client options to those fixtures; and
-    `storeipc_test.go` adds direct/routed overwrite parity. Tests change no
-    production behavior. PRD §11.1 preserves the matching before/after. No new
-    dependency, persistent side store, host registration, global promotion,
-    CLI review, or provenance schema is added.
+    coverage, real one-round legacy multi-proposal review, proposal-ten cursor
+    traversal, mixed and URL-only fallback, partial batch progress, the two
+    storage-failure phases, request-state attacks, and atomic fact-conflict
+    outcomes. `localdolt/review_mcp_test.go` resets successive and batch branches
+    to different single commits after display and proves neither main nor the
+    proposal branch is changed by approval. `tools_test.go` and
+    `cmd/memdolt/serve_test.go` still expect the prior 15 plus
+    `review_pending`; `server_test.go` only exposes client options to these
+    fixtures; `storeipc_test.go` covers routed resolution and expected-commit
+    parity; and the callback signature updates in doctor/soak fixtures change no
+    shipped behavior. PRD §11.1 preserves the matching before/after. No new
+    dependency, persistent side store, durable schema, host registration,
+    global promotion, CLI review behavior, or provenance schema is added.
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,

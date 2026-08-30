@@ -54,7 +54,7 @@ func runServe(
 	}
 	routes, err := storeipc.NewHandler(storeipc.Config{
 		Store:        owner,
-		ReviewAccept: owner.ReviewAccept,
+		ReviewAccept: owner.ReviewAcceptExpected,
 	})
 	if err != nil {
 		return err

@@ -218,7 +218,11 @@ type ContradictionScorer interface {
 // nil callbacks fail closed. Supersede proposals and explicit Force accepts
 // deliberately skip both callbacks and still use the same merge flow.
 type AcceptOptions struct {
-	Force                       bool
+	Force bool
+	// ExpectedCommit, when non-empty, is the staging commit an elicited
+	// reviewer saw. AcceptProposal compares it with the branch head inside its
+	// serialized promotion critical section before any merge work starts.
+	ExpectedCommit              string
 	ValidateContradictionConfig func() error
 	OpenContradictionScorer     func(context.Context) (ContradictionScorer, error)
 }
@@ -450,6 +454,11 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 	proposal, err := hydrate(ctx, conn, record)
 	if err != nil {
 		return AcceptResult{}, err
+	}
+	if options.ExpectedCommit != "" && proposal.Commit != options.ExpectedCommit {
+		return AcceptResult{}, fmt.Errorf(
+			"localdolt: proposal %s changed after review showed commit %s; current commit is %s; nothing was promoted or removed",
+			id, options.ExpectedCommit, proposal.Commit)
 	}
 	// PRD §10 promotes a global proposal by copying it into the global
 	// database, which does not exist yet. Merging it into this repository's

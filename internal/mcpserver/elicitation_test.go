@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -20,12 +21,27 @@ type elicitationBackend struct {
 	baseDir string
 }
 
-func (s *elicitationBackend) ReviewAccept(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+type afterAcceptBackend struct {
+	*elicitationBackend
+	afterAccept func()
+}
+
+func (s *afterAcceptBackend) ReviewAcceptExpected(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+	result, err := s.elicitationBackend.ReviewAcceptExpected(ctx, id, expectedCommit, reviewer, force)
+	if err == nil && s.afterAccept != nil {
+		after := s.afterAccept
+		s.afterAccept = nil
+		after()
+	}
+	return result, err
+}
+
+func (s *elicitationBackend) ReviewAcceptExpected(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
 	paths, err := layout.New(s.baseDir)
 	if err != nil {
 		return localdolt.AcceptResult{}, err
 	}
-	return reviewgate.Accept(ctx, s.Store, paths.ConfigFile(), id, reviewer, force)
+	return reviewgate.AcceptExpected(ctx, s.Store, paths.ConfigFile(), id, expectedCommit, reviewer, force)
 }
 
 func initializedElicitationBackend(t *testing.T) (string, *elicitationBackend) {
@@ -119,15 +135,140 @@ func TestReviewPendingSuccessiveApprovesAndSkips(t *testing.T) {
 	}
 }
 
-func TestReviewPendingWithoutElicitationKeepsTheCLIPath(t *testing.T) {
+func TestReviewPendingLegacySuccessiveUsesOneFormRound(t *testing.T) {
+	base, st := initializedElicitationBackend(t)
+	first := stageReviewFact(t, st.Store, localdolt.TargetRepo, "review.legacy.first", "approve me")
+	second := stageReviewDecision(t, st.Store, localdolt.TargetRepo, "Skip this legacy proposal")
+
+	server := New("test")
+	tools := RegisterTools(server, base, st)
+	var rounds int
+	options := &mcp.ClientOptions{
+		MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},
+		ElicitationHandler: func(_ context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+			rounds++
+			if !strings.Contains(req.Params.Message, first.ID) || !strings.Contains(req.Params.Message, second.ID) {
+				t.Fatalf("legacy one-round review omitted proposals: %s", req.Params.Message)
+			}
+			return &mcp.ElicitResult{Action: "accept", Content: map[string]any{
+				first.ID: "approve", second.ID: "skip",
+			}}, nil
+		},
+	}
+	client, serverSession := connectWithOptions(t, server,
+		&mcp.Implementation{Name: "legacy-client", Version: "1"}, true, options)
+
+	output := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{})
+	if rounds != 1 || output.Status != "complete" || len(output.Accepted) != 1 ||
+		output.Accepted[0].Proposal.ID != first.ID || len(output.Skipped) != 1 || output.Skipped[0] != second.ID {
+		t.Fatalf("legacy successive output = %+v after %d form rounds", output, rounds)
+	}
+
+	closeSessions(t, client, serverSession)
+	if err := tools.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewPendingSuccessiveCursorReachesProposalTen(t *testing.T) {
+	base, st := initializedElicitationBackend(t)
+	proposals := make([]localdolt.StagedProposal, 10)
+	for i := range proposals {
+		proposals[i] = stageReviewDecision(t, st.Store, localdolt.TargetRepo, fmt.Sprintf("Cursor proposal %02d", i+1))
+	}
+
+	server := New("test")
+	tools := RegisterTools(server, base, st)
+	var rounds int
+	options := &mcp.ClientOptions{ElicitationHandler: func(_ context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+		rounds++
+		if !strings.Contains(req.Params.Message, proposals[rounds-1].ID) {
+			t.Fatalf("round %d showed the wrong proposal: %s", rounds, req.Params.Message)
+		}
+		decision := "skip"
+		if rounds == 10 {
+			decision = "approve"
+		}
+		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"decision": decision}}, nil
+	}}
+	client, serverSession := connectWithOptions(t, server,
+		&mcp.Implementation{Name: "Codex", Version: "1"}, false, options)
+
+	firstPage := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{})
+	if rounds != 9 || firstPage.Status != "partial" || firstPage.NextCursor == "" ||
+		len(firstPage.Skipped) != 9 || len(firstPage.Accepted) != 0 || firstPage.RepoPending != 10 {
+		t.Fatalf("first successive page = %+v after %d rounds", firstPage, rounds)
+	}
+	final := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{"cursor": firstPage.NextCursor})
+	if rounds != 10 || final.Status != "complete" || len(final.Accepted) != 1 ||
+		final.Accepted[0].Proposal.ID != proposals[9].ID || len(final.Skipped) != 9 || final.RepoPending != 9 {
+		t.Fatalf("continued successive review = %+v after %d rounds", final, rounds)
+	}
+	replay, err := client.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "review_pending", Arguments: map[string]any{"cursor": firstPage.NextCursor},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replay.IsError {
+		t.Fatal("used continuation cursor was replayable")
+	}
+
+	closeSessions(t, client, serverSession)
+	if err := tools.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewPendingWithoutElicitationReportsMixedCLIPath(t *testing.T) {
 	base, st := initializedElicitationBackend(t)
 	stageReviewFact(t, st.Store, localdolt.TargetRepo, "review.cli.fact", "review in a terminal")
+	stageReviewDecision(t, st.Store, localdolt.TargetGlobal, "Global also stays in the terminal")
 	server := New("test")
 	tools := RegisterTools(server, base, st)
 	client, serverSession := connect(t, server,
 		&mcp.Implementation{Name: "no-elicitation-client", Version: "1"}, false)
 
-	callError(t, client, "review_pending", map[string]any{}, "memdolt review")
+	output := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{})
+	if output.Status != "cli_required" || output.RepoPending != 1 || output.GlobalPending != 1 ||
+		!strings.Contains(output.Remedy, "1 global") || !strings.Contains(output.Remedy, "memdolt review") {
+		t.Fatalf("mixed CLI fallback = %+v", output)
+	}
+	if pending, err := st.PendingProposals(context.Background()); err != nil || len(pending) != 2 {
+		t.Fatalf("mixed CLI fallback changed proposals: %+v (err %v)", pending, err)
+	}
+	if got := testCount(t, st.Store, "SELECT COUNT(*) FROM facts AS OF 'main'"); got != 0 {
+		t.Fatalf("CLI fallback wrote %d facts", got)
+	}
+
+	closeSessions(t, client, serverSession)
+	if err := tools.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewPendingURLOnlyElicitationUsesCLIPath(t *testing.T) {
+	base, st := initializedElicitationBackend(t)
+	stageReviewFact(t, st.Store, localdolt.TargetRepo, "review.url.fact", "URL mode cannot render this form")
+	server := New("test")
+	tools := RegisterTools(server, base, st)
+	var elicited bool
+	options := &mcp.ClientOptions{
+		Capabilities: &mcp.ClientCapabilities{Elicitation: &mcp.ElicitationCapabilities{
+			URL: &mcp.URLElicitationCapabilities{},
+		}},
+		ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+			elicited = true
+			return &mcp.ElicitResult{Action: "cancel"}, nil
+		},
+	}
+	client, serverSession := connectWithOptions(t, server,
+		&mcp.Implementation{Name: "url-only", Version: "1"}, false, options)
+
+	output := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{})
+	if elicited || output.Status != "cli_required" || output.RepoPending != 1 || !strings.Contains(output.Remedy, "memdolt review") {
+		t.Fatalf("URL-only fallback elicited=%v output=%+v", elicited, output)
+	}
 	assertOnePendingNoDurableFacts(t, st.Store)
 
 	closeSessions(t, client, serverSession)
@@ -188,7 +329,8 @@ func TestReviewPendingStateIsSingleUseBoundAndFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if bound.Repository != st.DataDir() || bound.Actor.Name != "agent:claude-code" ||
-		len(bound.ProposalIDs) != 1 || bound.Position != 0 || bound.Action != actionReviewOne {
+		len(bound.ProposalIDs) != 1 || len(bound.ProposalCommits) != 1 || bound.ProposalCommits[0] == "" ||
+		bound.Position != 0 || bound.Action != actionReviewOne {
 		t.Fatalf("pending requestState row is not exactly bound: %+v", bound)
 	}
 	missing := callManualReview(t, client, missingResponseState, nil, "successive")
@@ -289,6 +431,48 @@ func TestReviewPendingStillUsesAcceptTimeGuards(t *testing.T) {
 	}
 }
 
+func TestReviewPendingBatchReportsPartialProgressOnLaterGuardFailure(t *testing.T) {
+	base, st := initializedElicitationBackend(t)
+	first := stageReviewFact(t, st.Store, localdolt.TargetRepo, "review.partial.first", "safe first fact")
+	second := stageReviewFact(t, st.Store, localdolt.TargetRepo, "review.partial.second", "BLOCKED second fact")
+	paths, err := layout.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile(), []byte("[deny_list]\npatterns = ['BLOCKED']\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := New("test")
+	tools := RegisterTools(server, base, st)
+	var shown string
+	options := &mcp.ClientOptions{ElicitationHandler: func(_ context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+		shown = req.Params.Message
+		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"decision": "approve_all"}}, nil
+	}}
+	client, serverSession := connectWithOptions(t, server,
+		&mcp.Implementation{Name: "Codex", Version: "1"}, false, options)
+
+	output := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{"mode": "batch"})
+	if !strings.Contains(shown, "without undoing earlier approvals") || output.Status != "blocked" ||
+		len(output.Accepted) != 1 || output.Accepted[0].Proposal.ID != first.ID ||
+		len(output.Failures) != 1 || output.Failures[0].ProposalID != second.ID || output.RepoPending != 1 {
+		t.Fatalf("partial batch output = %+v; dialog = %q", output, shown)
+	}
+	if got := testCount(t, st.Store, "SELECT COUNT(*) FROM facts AS OF 'main'"); got != 1 {
+		t.Fatalf("partial batch left %d durable facts, want the first one", got)
+	}
+	pending, err := st.PendingProposals(context.Background())
+	if err != nil || len(pending) != 1 || pending[0].ID != second.ID {
+		t.Fatalf("partial batch pending = %+v (err %v)", pending, err)
+	}
+
+	closeSessions(t, client, serverSession)
+	if err := tools.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReviewPendingStateStorageFailureLeavesProposalPending(t *testing.T) {
 	base, st := initializedElicitationBackend(t)
 	stageReviewFact(t, st.Store, localdolt.TargetRepo, "review.storage.fact", "storage must fail closed")
@@ -313,6 +497,36 @@ func TestReviewPendingStateStorageFailureLeavesProposalPending(t *testing.T) {
 		t.Fatal("closed requestState storage approved a proposal")
 	}
 	assertOnePendingNoDurableFacts(t, st.Store)
+
+	closeSessions(t, client, serverSession)
+	if err := tools.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewPendingContinuationStorageFailureReportsLandedApproval(t *testing.T) {
+	base, inner := initializedElicitationBackend(t)
+	first := stageReviewFact(t, inner.Store, localdolt.TargetRepo, "review.storage.first", "lands before bookkeeping fails")
+	stageReviewDecision(t, inner.Store, localdolt.TargetRepo, "Never reached after bookkeeping failure")
+	backend := &afterAcceptBackend{elicitationBackend: inner}
+	server := New("test")
+	tools := RegisterTools(server, base, backend)
+	backend.afterAccept = func() { _ = tools.elicit.Close() }
+	options := &mcp.ClientOptions{ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"decision": "approve"}}, nil
+	}}
+	client, serverSession := connectWithOptions(t, server,
+		&mcp.Implementation{Name: "Codex", Version: "1"}, false, options)
+
+	output := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{})
+	if output.Status != "stopped" || len(output.Accepted) != 1 ||
+		output.Accepted[0].Proposal.ID != first.ID || len(output.Failures) != 1 ||
+		!strings.Contains(output.Failures[0].Error, "closed") || output.RepoPending != 1 {
+		t.Fatalf("post-approval bookkeeping failure output = %+v", output)
+	}
+	if got := testCount(t, inner.Store, "SELECT COUNT(*) FROM facts AS OF 'main'"); got != 1 {
+		t.Fatalf("bookkeeping failure lost the authorized merge; durable facts = %d", got)
+	}
 
 	closeSessions(t, client, serverSession)
 	if err := tools.Close(); err != nil {
@@ -422,6 +636,64 @@ func TestProposeFactConflictDeclineAndInvalidKeepBothWriteNothing(t *testing.T) 
 			if got := testCount(t, st, "SELECT COUNT(*) FROM facts AS OF 'main'"); got != 1 {
 				t.Fatalf("invalid/declined response left %d durable facts, want 1", got)
 			}
+			closeSessions(t, client, serverSession)
+			if err := tools.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestProposeFactConflictCurrentChangeCannotStageStaleResolution(t *testing.T) {
+	for _, action := range []string{"overwrite", "supersede"} {
+		t.Run(action, func(t *testing.T) {
+			base, st := initializedToolStore(t)
+			currentID := seedDurableFact(t, st, "build.command", "go test ./...")
+			server := New("test")
+			backend := testElicitationBackend(base, st)
+			tools := RegisterTools(server, base, backend)
+			current, err := tools.liveFactByKey(context.Background(), "build.command")
+			if err != nil {
+				t.Fatal(err)
+			}
+			changer, err := st.ProposeFactResolution(context.Background(), localdolt.Proposal{
+				Rationale: "change the current row while its old image is displayed",
+				Actor:     memory.Actor{Name: "agent:concurrent"}.CommitAuthor(),
+				Target:    localdolt.TargetRepo,
+			}, *current, localdolt.Fact{Key: "build.command", Value: "go test -count=1 ./..."}, localdolt.FactResolutionOverwrite)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var mainAfterConcurrentChange string
+			options := &mcp.ClientOptions{ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+				if _, err := st.AcceptProposal(context.Background(), changer.ID, memory.UserActor.CommitAuthor(), localdolt.AcceptOptions{Force: true}); err != nil {
+					t.Fatalf("accept concurrent current-row change: %v", err)
+				}
+				mainAfterConcurrentChange = testText(t, st, "SELECT commit_hash FROM dolt_log ORDER BY date DESC LIMIT 1")
+				return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"action": action}}, nil
+			}}
+			client, serverSession := connectWithOptions(t, server,
+				&mcp.Implementation{Name: "Claude Code", Version: "1"}, false, options)
+
+			result, err := client.CallTool(context.Background(), &mcp.CallToolParams{Name: "propose_fact", Arguments: map[string]any{
+				"key": "build.command", "value": "go test -race ./...", "rationale": "respond against the displayed old row",
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.IsError {
+				t.Fatalf("stale %s response staged a proposal: %+v", action, result.Content)
+			}
+			if got := testText(t, st, "SELECT value FROM facts AS OF 'main' WHERE id = ?", currentID); got != "go test -count=1 ./..." {
+				t.Fatalf("main fact after stale response = %q", got)
+			}
+			if got := testText(t, st, "SELECT commit_hash FROM dolt_log ORDER BY date DESC LIMIT 1"); got != mainAfterConcurrentChange {
+				t.Fatalf("stale %s response moved main from %s to %s", action, mainAfterConcurrentChange, got)
+			}
+			if pending, err := st.PendingProposals(context.Background()); err != nil || len(pending) != 0 {
+				t.Fatalf("stale %s response left proposals %+v (err %v)", action, pending, err)
+			}
+
 			closeSessions(t, client, serverSession)
 			if err := tools.Close(); err != nil {
 				t.Fatal(err)

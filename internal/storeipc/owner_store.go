@@ -185,10 +185,16 @@ func (s *OwnerStore) ProposeFact(ctx context.Context, proposal localdolt.Proposa
 	return result, err
 }
 
-func (s *OwnerStore) ProposeFactOverwrite(ctx context.Context, proposal localdolt.Proposal, overwrittenID string, replacement localdolt.Fact) (localdolt.StagedProposal, error) {
+func (s *OwnerStore) ProposeFactResolution(
+	ctx context.Context,
+	proposal localdolt.Proposal,
+	expected localdolt.FactSnapshot,
+	replacement localdolt.Fact,
+	resolution localdolt.FactResolution,
+) (localdolt.StagedProposal, error) {
 	var result localdolt.StagedProposal
-	err := s.operation(ctx, opOverwriteFact, overwriteFactArgs{
-		Proposal: proposal, OverwrittenID: overwrittenID, Replacement: replacement,
+	err := s.operation(ctx, opResolveFact, resolveFactArgs{
+		Proposal: proposal, Expected: expected, Replacement: replacement, Resolution: resolution,
 	}, &result)
 	return result, err
 }
@@ -231,8 +237,17 @@ func (s *OwnerStore) ExpireProposals(ctx context.Context, before time.Time) ([]l
 // transported as operator intent; no model callback or config path crosses the
 // process boundary.
 func (s *OwnerStore) ReviewAccept(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+	return s.ReviewAcceptExpected(ctx, id, "", reviewer, force)
+}
+
+// ReviewAcceptExpected additionally binds an elicited approval to the exact
+// staging commit the human saw. An empty expected commit preserves the CLI
+// review contract.
+func (s *OwnerStore) ReviewAcceptExpected(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
 	var result localdolt.AcceptResult
-	return result, s.operation(ctx, opReviewAccept, acceptProposalArgs{ID: id, Reviewer: reviewer, Force: force}, &result)
+	return result, s.operation(ctx, opReviewAccept, acceptProposalArgs{
+		ID: id, ExpectedCommit: expectedCommit, Reviewer: reviewer, Force: force,
+	}, &result)
 }
 
 type ownerRows struct {

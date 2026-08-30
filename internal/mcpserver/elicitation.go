@@ -26,7 +26,9 @@ const (
 	factConflictResponseID = "fact_conflict"
 
 	actionReviewOne    = "review_accept_one"
+	actionReviewLegacy = "review_accept_legacy"
 	actionReviewBatch  = "review_accept_batch"
+	actionReviewCursor = "review_continue"
 	actionFactConflict = "propose_fact_conflict"
 )
 
@@ -38,21 +40,26 @@ type pendingElicitation struct {
 	Repository  string
 	Actor       memory.Actor
 	ProposalIDs []string
-	Position    int
-	Action      string
-	ExpiresAt   time.Time
-	Accepted    []localdolt.AcceptResult
-	Skipped     []string
-	Fact        *pendingFactConflict
+	// ProposalCommits is parallel to ProposalIDs and binds every approval to
+	// the exact staging commit its dialog rendered.
+	ProposalCommits []string
+	Position        int
+	Action          string
+	ExpiresAt       time.Time
+	Accepted        []localdolt.AcceptResult
+	Skipped         []string
+	Fact            *pendingFactConflict
+	NextCursor      string
 }
 
 type pendingFactConflict struct {
 	Input   proposeFactInput
-	Current factRecord
+	Current localdolt.FactSnapshot
 }
 
 type reviewPendingInput struct {
-	Mode string `json:"mode,omitempty" jsonschema:"successive (default) or batch"`
+	Mode   string `json:"mode,omitempty" jsonschema:"successive (default) or batch"`
+	Cursor string `json:"cursor,omitempty" jsonschema:"single-use continuation returned after nine modern successive rounds"`
 }
 
 type reviewFailure struct {
@@ -68,6 +75,7 @@ type reviewPendingOutput struct {
 	Failures      []reviewFailure          `json:"failures"`
 	RepoPending   int                      `json:"repoPending"`
 	GlobalPending int                      `json:"globalPending"`
+	NextCursor    string                   `json:"nextCursor,omitempty"`
 	Remedy        string                   `json:"remedy,omitempty"`
 }
 
@@ -84,6 +92,15 @@ func (t *Toolset) reviewPending(ctx context.Context, req *mcp.CallToolRequest, i
 		if actor.Name == unknownActor.Name {
 			return nil, reviewPendingOutput{}, errors.New("review_pending requires attributed clientInfo; use `memdolt review` in a terminal")
 		}
+		if in.Cursor != "" {
+			if mode != "successive" {
+				return nil, reviewPendingOutput{}, errors.New("review_pending: a continuation cursor is valid only in successive mode")
+			}
+			return t.continueReview(ctx, req, actor, mode, in.Cursor)
+		}
+		if action == actionReviewOne && isLegacyRequest(req) {
+			action = actionReviewLegacy
+		}
 		return t.startReview(ctx, req, actor, mode, action)
 	}
 	if req.Params.RequestState == "" {
@@ -98,6 +115,9 @@ func (t *Toolset) reviewPending(ctx context.Context, req *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, reviewPendingOutput{}, err
 	}
+	if action == actionReviewOne && isLegacyRequest(req) {
+		action = actionReviewLegacy
+	}
 	if row.Action != action {
 		return nil, reviewPendingOutput{}, errors.New("review_pending: requestState does not match the requested review action; nothing was approved")
 	}
@@ -107,6 +127,9 @@ func (t *Toolset) reviewPending(ctx context.Context, req *mcp.CallToolRequest, i
 	}
 	if response.Action == "decline" || response.Action == "cancel" {
 		return t.reviewTerminal(ctx, mode, response.Action, row, nil)
+	}
+	if action == actionReviewLegacy {
+		return t.finishLegacySuccessiveReview(ctx, mode, row, response)
 	}
 	decision, err := responseChoice(response, "decision")
 	if err != nil {
@@ -119,6 +142,28 @@ func (t *Toolset) reviewPending(ctx context.Context, req *mcp.CallToolRequest, i
 		return t.finishBatchReview(ctx, mode, row, decision)
 	}
 	return t.finishSuccessiveReview(ctx, mode, row, decision)
+}
+
+func isLegacyRequest(req *mcp.CallToolRequest) bool {
+	return req.ProtocolVersion() < modernProtocolVersion
+}
+
+func (t *Toolset) continueReview(
+	ctx context.Context,
+	req *mcp.CallToolRequest,
+	actor memory.Actor,
+	mode, cursor string,
+) (*mcp.CallToolResult, reviewPendingOutput, error) {
+	row, err := t.consumeElicitation(ctx, cursor, actor, actionReviewCursor)
+	if err != nil {
+		return nil, reviewPendingOutput{}, fmt.Errorf("review_pending: %w", err)
+	}
+	if !supportsFormElicitation(req) {
+		return t.reviewTerminal(ctx, mode, "cli_required", row, nil)
+	}
+	row.Action = actionReviewOne
+	result, _, err := t.issueSuccessiveReview(ctx, row)
+	return result, reviewPendingOutput{}, err
 }
 
 func reviewMode(raw string) (mode, action string, err error) {
@@ -142,26 +187,29 @@ func (t *Toolset) startReview(ctx context.Context, req *mcp.CallToolRequest, act
 		return nil, reviewPendingOutput{}, err
 	}
 	ids := make([]string, 0, len(pending))
+	commits := make([]string, 0, len(pending))
 	for _, proposal := range pending {
 		if proposal.Target == localdolt.TargetRepo {
 			ids = append(ids, proposal.ID)
+			commits = append(commits, proposal.Commit)
 		}
 	}
 	if len(ids) == 0 {
 		return t.reviewTerminal(ctx, mode, "empty", pendingElicitation{Actor: actor}, nil)
 	}
-	if !supportsElicitation(req) {
-		return nil, reviewPendingOutput{}, errors.New("review_pending: this client does not support elicitation; use `memdolt review` in a terminal")
-	}
-	if mode == "successive" && len(ids) > maxSuccessiveReviews {
-		ids = ids[:maxSuccessiveReviews]
+	if !supportsFormElicitation(req) {
+		return t.reviewTerminal(ctx, mode, "cli_required", pendingElicitation{Actor: actor}, nil)
 	}
 	row := pendingElicitation{
-		Actor: actor, ProposalIDs: ids, Position: 0, Action: action,
+		Actor: actor, ProposalIDs: ids, ProposalCommits: commits, Position: 0, Action: action,
 		Accepted: []localdolt.AcceptResult{}, Skipped: []string{},
 	}
 	if mode == "batch" {
 		result, _, err := t.issueBatchReview(ctx, row)
+		return result, reviewPendingOutput{}, err
+	}
+	if action == actionReviewLegacy {
+		result, _, err := t.issueLegacySuccessiveReview(ctx, row)
 		return result, reviewPendingOutput{}, err
 	}
 	result, _, err := t.issueSuccessiveReview(ctx, row)
@@ -172,12 +220,9 @@ func (t *Toolset) issueSuccessiveReview(ctx context.Context, row pendingElicitat
 	if row.Position < 0 || row.Position >= len(row.ProposalIDs) {
 		return nil, "", errors.New("review_pending: invalid queue position")
 	}
-	diff, err := t.store.ProposalDiff(ctx, row.ProposalIDs[row.Position])
+	diff, err := t.proposalDiffAtSnapshot(ctx, row, row.Position)
 	if err != nil {
 		return nil, "", err
-	}
-	if diff.Proposal.Target != localdolt.TargetRepo || diff.Proposal.ID != row.ProposalIDs[row.Position] {
-		return nil, "", errors.New("review_pending: the queued proposal no longer matches its repository review state")
 	}
 	encoded, err := json.MarshalIndent(diff, "", "  ")
 	if err != nil {
@@ -190,13 +235,10 @@ func (t *Toolset) issueSuccessiveReview(ctx context.Context, row pendingElicitat
 
 func (t *Toolset) issueBatchReview(ctx context.Context, row pendingElicitation) (*mcp.CallToolResult, string, error) {
 	diffs := make([]localdolt.ProposalDiff, 0, len(row.ProposalIDs))
-	for _, id := range row.ProposalIDs {
-		diff, err := t.store.ProposalDiff(ctx, id)
+	for position := range row.ProposalIDs {
+		diff, err := t.proposalDiffAtSnapshot(ctx, row, position)
 		if err != nil {
 			return nil, "", err
-		}
-		if diff.Proposal.Target != localdolt.TargetRepo || diff.Proposal.ID != id {
-			return nil, "", errors.New("review_pending: the batch no longer matches its repository review state")
 		}
 		diffs = append(diffs, diff)
 	}
@@ -204,13 +246,60 @@ func (t *Toolset) issueBatchReview(ctx context.Context, row pendingElicitation) 
 	if err != nil {
 		return nil, "", fmt.Errorf("review_pending: encode proposal batch: %w", err)
 	}
-	message := fmt.Sprintf("Approve this exact batch of %d repository proposals:\n%s", len(diffs), encoded)
-	schema := choiceSchema("decision", []string{"approve_all", "cancel"}, "Approve every shown proposal or leave all of them pending.")
+	message := fmt.Sprintf(
+		"Approve these %d repository proposals in order. Each successful proposal lands immediately; a later guard refusal stops the batch without undoing earlier approvals:\n%s",
+		len(diffs), encoded)
+	schema := choiceSchema("decision", []string{"approve_all", "cancel"}, "Approve the shown proposals sequentially, allowing partial progress if a later guard refuses, or cancel before any approval.")
 	return t.issueElicitation(ctx, row, reviewResponseID, message, schema)
 }
 
+func (t *Toolset) issueLegacySuccessiveReview(ctx context.Context, row pendingElicitation) (*mcp.CallToolResult, string, error) {
+	diffs := make([]localdolt.ProposalDiff, 0, len(row.ProposalIDs))
+	properties := make(map[string]any, len(row.ProposalIDs))
+	required := make([]string, 0, len(row.ProposalIDs))
+	for position, id := range row.ProposalIDs {
+		diff, err := t.proposalDiffAtSnapshot(ctx, row, position)
+		if err != nil {
+			return nil, "", err
+		}
+		diffs = append(diffs, diff)
+		properties[id] = map[string]any{
+			"type": "string", "enum": []any{"approve", "skip"},
+			"description": "Approve this exact proposal or leave it pending.",
+		}
+		required = append(required, id)
+	}
+	encoded, err := json.MarshalIndent(diffs, "", "  ")
+	if err != nil {
+		return nil, "", fmt.Errorf("review_pending: encode legacy proposal review: %w", err)
+	}
+	message := fmt.Sprintf(
+		"Legacy one-round successive review for %d repository proposals. Choose approve or skip for every proposal; approved entries are applied oldest-first and a later guard refusal does not undo earlier approvals:\n%s",
+		len(diffs), encoded)
+	schema := map[string]any{
+		"type": "object", "properties": properties, "required": required, "additionalProperties": false,
+	}
+	return t.issueElicitation(ctx, row, reviewResponseID, message, schema)
+}
+
+func (t *Toolset) proposalDiffAtSnapshot(ctx context.Context, row pendingElicitation, position int) (localdolt.ProposalDiff, error) {
+	if position < 0 || position >= len(row.ProposalIDs) || len(row.ProposalCommits) != len(row.ProposalIDs) {
+		return localdolt.ProposalDiff{}, errors.New("review_pending: invalid proposal snapshot")
+	}
+	id, commit := row.ProposalIDs[position], row.ProposalCommits[position]
+	diff, err := t.store.ProposalDiff(ctx, id)
+	if err != nil {
+		return localdolt.ProposalDiff{}, err
+	}
+	if diff.Proposal.Target != localdolt.TargetRepo || diff.Proposal.ID != id || diff.Proposal.Commit != commit {
+		return localdolt.ProposalDiff{}, fmt.Errorf(
+			"review_pending: proposal %s no longer matches shown commit %s; nothing was approved", id, commit)
+	}
+	return diff, nil
+}
+
 func (t *Toolset) finishSuccessiveReview(ctx context.Context, mode string, row pendingElicitation, decision string) (*mcp.CallToolResult, reviewPendingOutput, error) {
-	if row.Position < 0 || row.Position >= len(row.ProposalIDs) {
+	if row.Position < 0 || row.Position >= len(row.ProposalIDs) || len(row.ProposalCommits) != len(row.ProposalIDs) {
 		return nil, reviewPendingOutput{}, errors.New("review_pending: invalid queue position in requestState")
 	}
 	if decision == "cancel" {
@@ -222,11 +311,18 @@ func (t *Toolset) finishSuccessiveReview(ctx context.Context, mode string, row p
 
 	var next *mcp.CallToolResult
 	var nextState string
+	var pageBoundary bool
 	if row.Position+1 < len(row.ProposalIDs) {
 		nextRow := row
 		nextRow.Position++
 		var err error
-		next, nextState, err = t.issueSuccessiveReview(ctx, nextRow)
+		if nextRow.Position%maxSuccessiveReviews == 0 {
+			pageBoundary = true
+			nextRow.Action = actionReviewCursor
+			nextState, err = t.mintElicitationState(ctx, nextRow)
+		} else {
+			next, nextState, err = t.issueSuccessiveReview(ctx, nextRow)
+		}
 		if err != nil {
 			return nil, reviewPendingOutput{}, err
 		}
@@ -234,7 +330,8 @@ func (t *Toolset) finishSuccessiveReview(ctx context.Context, mode string, row p
 
 	id := row.ProposalIDs[row.Position]
 	if decision == "approve" {
-		accepted, err := t.store.ReviewAccept(ctx, id, memory.UserActor.CommitAuthor(), false)
+		accepted, err := t.store.ReviewAcceptExpected(
+			ctx, id, row.ProposalCommits[row.Position], memory.UserActor.CommitAuthor(), false)
 		if err != nil {
 			discardErr := t.discardElicitation(ctx, nextState)
 			if discardErr != nil {
@@ -246,13 +343,17 @@ func (t *Toolset) finishSuccessiveReview(ctx context.Context, mode string, row p
 	} else {
 		row.Skipped = append(row.Skipped, id)
 	}
-	if next != nil {
+	if nextState != "" {
 		updated, err := t.updateElicitationProgress(ctx, nextState, row.Accepted, row.Skipped)
 		if err != nil {
 			return t.reviewTerminal(ctx, mode, "stopped", row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
 		}
 		if !updated {
 			return t.reviewTerminal(ctx, mode, "stopped", row, []reviewFailure{{ProposalID: id, Error: "continuation state expired before it could be returned"}})
+		}
+		if pageBoundary {
+			row.NextCursor = nextState
+			return t.reviewTerminal(ctx, mode, "partial", row, nil)
 		}
 		return next, reviewPendingOutput{}, nil
 	}
@@ -269,16 +370,52 @@ func (t *Toolset) finishBatchReview(ctx context.Context, mode string, row pendin
 	// Resolve every id before the first merge. A missing, reordered, or
 	// global-target row makes the batch stale and therefore changes nothing.
 	for position, id := range row.ProposalIDs {
-		diff, err := t.store.ProposalDiff(ctx, id)
-		if err != nil || diff.Proposal.Target != localdolt.TargetRepo || diff.Proposal.ID != id {
-			if err == nil {
-				err = errors.New("proposal no longer matches the repository batch")
-			}
+		_, err := t.proposalDiffAtSnapshot(ctx, row, position)
+		if err != nil {
 			return t.reviewTerminal(ctx, mode, "stale", row, []reviewFailure{{ProposalID: id, Error: fmt.Sprintf("queue position %d: %v", position, err)}})
 		}
 	}
-	for _, id := range row.ProposalIDs {
-		accepted, err := t.store.ReviewAccept(ctx, id, memory.UserActor.CommitAuthor(), false)
+	for position, id := range row.ProposalIDs {
+		accepted, err := t.store.ReviewAcceptExpected(
+			ctx, id, row.ProposalCommits[position], memory.UserActor.CommitAuthor(), false)
+		if err != nil {
+			return t.reviewTerminal(ctx, mode, "blocked", row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
+		}
+		row.Accepted = append(row.Accepted, accepted)
+	}
+	return t.reviewTerminal(ctx, mode, "complete", row, nil)
+}
+
+func (t *Toolset) finishLegacySuccessiveReview(
+	ctx context.Context,
+	mode string,
+	row pendingElicitation,
+	response *mcp.ElicitResult,
+) (*mcp.CallToolResult, reviewPendingOutput, error) {
+	if response.Action != "accept" || response.Content == nil ||
+		len(row.ProposalIDs) == 0 || len(row.ProposalCommits) != len(row.ProposalIDs) ||
+		len(response.Content) != len(row.ProposalIDs) {
+		return nil, reviewPendingOutput{}, errors.New("review_pending: incomplete legacy review response; nothing was approved")
+	}
+	decisions := make([]string, len(row.ProposalIDs))
+	for position, id := range row.ProposalIDs {
+		decision, ok := response.Content[id].(string)
+		if !ok || decision != "approve" && decision != "skip" {
+			return nil, reviewPendingOutput{}, fmt.Errorf(
+				"review_pending: legacy response for proposal %s must be approve or skip; nothing was approved", id)
+		}
+		decisions[position] = decision
+		if _, err := t.proposalDiffAtSnapshot(ctx, row, position); err != nil {
+			return t.reviewTerminal(ctx, mode, "stale", row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
+		}
+	}
+	for position, id := range row.ProposalIDs {
+		if decisions[position] == "skip" {
+			row.Skipped = append(row.Skipped, id)
+			continue
+		}
+		accepted, err := t.store.ReviewAcceptExpected(
+			ctx, id, row.ProposalCommits[position], memory.UserActor.CommitAuthor(), false)
 		if err != nil {
 			return t.reviewTerminal(ctx, mode, "blocked", row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
 		}
@@ -301,7 +438,11 @@ func (t *Toolset) reviewTerminal(ctx context.Context, mode, status string, row p
 		}
 	}
 	remedy := ""
-	if global > 0 {
+	if status == "cli_required" && repo > 0 {
+		remedy = fmt.Sprintf(
+			"%d repository and %d global proposals pending — this client lacks form elicitation; run `memdolt review` in a terminal.",
+			repo, global)
+	} else if global > 0 {
 		remedy = fmt.Sprintf("%d global proposals pending — run `memdolt review` in a terminal.", global)
 	}
 	if row.Accepted == nil {
@@ -315,7 +456,7 @@ func (t *Toolset) reviewTerminal(ctx context.Context, mode, status string, row p
 	}
 	return &mcp.CallToolResult{}, reviewPendingOutput{
 		Mode: mode, Status: status, Accepted: row.Accepted, Skipped: row.Skipped,
-		Failures: failures, RepoPending: repo, GlobalPending: global, Remedy: remedy,
+		Failures: failures, RepoPending: repo, GlobalPending: global, NextCursor: row.NextCursor, Remedy: remedy,
 	}, nil
 }
 
@@ -353,12 +494,12 @@ func (t *Toolset) proposeFactWithConflict(ctx context.Context, req *mcp.CallTool
 	if in.Global {
 		return nil, proposeFactOutput{}, fmt.Errorf("propose_fact: fact key %q: %w; global promotion remains CLI-only", in.Key, localdolt.ErrFactKeyExists)
 	}
-	if !supportsElicitation(req) {
+	if !supportsFormElicitation(req) {
 		return nil, proposeFactOutput{}, fmt.Errorf("propose_fact: fact key %q: %w; this client does not support elicitation", in.Key, localdolt.ErrFactKeyExists)
 	}
 	encoded, err := json.MarshalIndent(struct {
-		Current  factRecord       `json:"current"`
-		Proposed proposeFactInput `json:"proposed"`
+		Current  localdolt.FactSnapshot `json:"current"`
+		Proposed proposeFactInput       `json:"proposed"`
 	}{Current: *current, Proposed: in}, "", "  ")
 	if err != nil {
 		return nil, proposeFactOutput{}, err
@@ -393,38 +534,28 @@ func (t *Toolset) finishFactConflict(ctx context.Context, req *mcp.CallToolReque
 	if action == "cancel" {
 		return &mcp.CallToolResult{}, proposeFactOutput{Actor: row.Actor, Resolution: action, Canceled: true}, nil
 	}
-	current, err := t.liveFactByKey(ctx, in.Key)
-	if err != nil {
-		return nil, proposeFactOutput{}, err
-	}
-	if current == nil || !sameFact(*current, row.Fact.Current) {
-		return nil, proposeFactOutput{}, errors.New("propose_fact: the live fact changed after it was shown; no proposal was staged")
-	}
-
 	p := proposal(row.Actor, in.Rationale, false)
 	fact := factFromInput(in)
-	var staged localdolt.StagedProposal
+	resolution := localdolt.FactResolution(action)
 	switch action {
 	case "overwrite":
 		if _, exists := response.Content["new_key"]; exists {
 			return nil, proposeFactOutput{}, errors.New("propose_fact: new_key is valid only with keep_both")
 		}
-		staged, err = t.store.ProposeFactOverwrite(ctx, p, current.ID, fact)
 	case "supersede":
 		if _, exists := response.Content["new_key"]; exists {
 			return nil, proposeFactOutput{}, errors.New("propose_fact: new_key is valid only with keep_both")
 		}
-		staged, err = t.store.ProposeSupersede(ctx, p, current.ID, fact)
 	case "keep_both":
 		newKey, ok := response.Content["new_key"].(string)
 		if !ok || !validDistinctDottedKey(newKey, in.Key) {
 			return nil, proposeFactOutput{}, errors.New("propose_fact: keep_both requires a distinct dotted new_key with no empty segment")
 		}
 		fact.Key = newKey
-		staged, err = t.store.ProposeFact(ctx, p, fact)
 	default:
 		return nil, proposeFactOutput{}, fmt.Errorf("propose_fact: action %q is not overwrite, supersede, keep_both, or cancel", action)
 	}
+	staged, err := t.store.ProposeFactResolution(ctx, p, row.Fact.Current, fact, resolution)
 	output := factOutput(staged, row.Actor)
 	output.Resolution = action
 	return &mcp.CallToolResult{}, output, err
@@ -453,21 +584,7 @@ func validDistinctDottedKey(key, old string) bool {
 	return true
 }
 
-func sameFact(a, b factRecord) bool {
-	if a.ID != b.ID || a.Key != b.Key || a.Value != b.Value || a.Source != b.Source ||
-		a.Kind != b.Kind || a.Evidence != b.Evidence || a.SupersededBy != b.SupersededBy {
-		return false
-	}
-	if !a.CreatedAt.Equal(b.CreatedAt) {
-		return false
-	}
-	if a.VerifiedAt == nil || b.VerifiedAt == nil {
-		return a.VerifiedAt == nil && b.VerifiedAt == nil
-	}
-	return a.VerifiedAt.Equal(*b.VerifiedAt)
-}
-
-func (t *Toolset) liveFactByKey(ctx context.Context, key string) (_ *factRecord, err error) {
+func (t *Toolset) liveFactByKey(ctx context.Context, key string) (_ *localdolt.FactSnapshot, err error) {
 	rows, err := t.store.Query(ctx, "SELECT id, `key`, value, source, kind, evidence, verified_at, created_at, superseded_by "+
 		"FROM facts AS OF 'main' WHERE live_key = ?", key)
 	if err != nil {
@@ -480,14 +597,17 @@ func (t *Toolset) liveFactByKey(ctx context.Context, key string) (_ *factRecord,
 		}
 		return nil, nil
 	}
-	var fact factRecord
+	var fact localdolt.FactSnapshot
 	var factKey, value, source, kind, evidence, superseded sql.NullString
 	var verified, created sql.NullTime
 	if err := rows.Scan(&fact.ID, &factKey, &value, &source, &kind, &evidence, &verified, &created, &superseded); err != nil {
 		return nil, err
 	}
-	fact.Key, fact.Value, fact.Source = factKey.String, value.String, source.String
-	fact.Kind, fact.Evidence, fact.SupersededBy = kind.String, evidence.String, superseded.String
+	fact.Key, fact.Value = factKey.String, value.String
+	fact.Source = nullableStringPointer(source)
+	fact.Kind = nullableStringPointer(kind)
+	fact.Evidence = nullableStringPointer(evidence)
+	fact.SupersededBy = nullableStringPointer(superseded)
 	if verified.Valid {
 		stamp := verified.Time
 		fact.VerifiedAt = &stamp
@@ -501,9 +621,21 @@ func (t *Toolset) liveFactByKey(ctx context.Context, key string) (_ *factRecord,
 	return &fact, rows.Err()
 }
 
-func supportsElicitation(req *mcp.CallToolRequest) bool {
+func nullableStringPointer(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
+}
+
+func supportsFormElicitation(req *mcp.CallToolRequest) bool {
 	capabilities := req.ClientCapabilities()
-	return capabilities != nil && capabilities.Elicitation != nil
+	if capabilities == nil || capabilities.Elicitation == nil {
+		return false
+	}
+	// The protocol treats an empty elicitation capability as form support for
+	// compatibility. A URL-only declaration is not form support.
+	return capabilities.Elicitation.Form != nil || capabilities.Elicitation.URL == nil
 }
 
 func oneElicitationResponse(req *mcp.CallToolRequest, id string) (*mcp.ElicitResult, error) {
@@ -561,23 +693,31 @@ func choiceSchema(field string, choices []string, description string) map[string
 }
 
 func (t *Toolset) issueElicitation(ctx context.Context, row pendingElicitation, id, message string, schema map[string]any) (*mcp.CallToolResult, string, error) {
-	if t.elicitErr != nil {
-		return nil, "", fmt.Errorf("elicitation state storage is unavailable: %w", t.elicitErr)
-	}
-	row.Repository = t.store.DataDir()
-	row.ExpiresAt = time.Now().UTC().Add(requestStateTTL)
-	random := make([]byte, requestStateBytes)
-	if _, err := io.ReadFull(rand.Reader, random); err != nil {
-		return nil, "", fmt.Errorf("mint cryptographic requestState: %w", err)
-	}
-	state := base64.RawURLEncoding.EncodeToString(random)
-	if err := t.elicit.insert(ctx, state, row); err != nil {
+	state, err := t.mintElicitationState(ctx, row)
+	if err != nil {
 		return nil, "", err
 	}
 	return &mcp.CallToolResult{
 		InputRequests: mcp.InputRequestMap{id: &mcp.ElicitParams{Message: message, RequestedSchema: schema}},
 		RequestState:  state,
 	}, state, nil
+}
+
+func (t *Toolset) mintElicitationState(ctx context.Context, row pendingElicitation) (string, error) {
+	if t.elicitErr != nil {
+		return "", fmt.Errorf("elicitation state storage is unavailable: %w", t.elicitErr)
+	}
+	row.Repository = t.store.DataDir()
+	row.ExpiresAt = time.Now().UTC().Add(requestStateTTL)
+	random := make([]byte, requestStateBytes)
+	if _, err := io.ReadFull(rand.Reader, random); err != nil {
+		return "", fmt.Errorf("mint cryptographic requestState: %w", err)
+	}
+	state := base64.RawURLEncoding.EncodeToString(random)
+	if err := t.elicit.insert(ctx, state, row); err != nil {
+		return "", err
+	}
+	return state, nil
 }
 
 func (t *Toolset) consumeElicitation(ctx context.Context, state string, actor memory.Actor, action string) (pendingElicitation, error) {
