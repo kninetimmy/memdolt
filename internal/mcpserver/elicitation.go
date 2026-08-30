@@ -333,13 +333,21 @@ func (t *Toolset) finishSuccessiveReview(ctx context.Context, mode string, row p
 		accepted, err := t.store.ReviewAcceptExpected(
 			ctx, id, row.ProposalCommits[row.Position], memory.UserActor.CommitAuthor(), false)
 		if err != nil {
+			status := "blocked"
+			if recordAcceptedReview(&row, accepted) {
+				status = "cleanup_failed"
+			}
 			discardErr := t.discardElicitation(ctx, nextState)
 			if discardErr != nil {
 				err = errors.Join(err, discardErr)
 			}
-			return t.reviewTerminal(ctx, mode, "blocked", row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
+			return t.reviewTerminal(ctx, mode, status, row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
 		}
-		row.Accepted = append(row.Accepted, accepted)
+		if !recordAcceptedReview(&row, accepted) {
+			return t.reviewTerminal(ctx, mode, "blocked", row, []reviewFailure{{
+				ProposalID: id, Error: "review gate returned success without a merge commit",
+			}})
+		}
 	} else {
 		row.Skipped = append(row.Skipped, id)
 	}
@@ -379,9 +387,17 @@ func (t *Toolset) finishBatchReview(ctx context.Context, mode string, row pendin
 		accepted, err := t.store.ReviewAcceptExpected(
 			ctx, id, row.ProposalCommits[position], memory.UserActor.CommitAuthor(), false)
 		if err != nil {
-			return t.reviewTerminal(ctx, mode, "blocked", row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
+			status := "blocked"
+			if recordAcceptedReview(&row, accepted) {
+				status = "cleanup_failed"
+			}
+			return t.reviewTerminal(ctx, mode, status, row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
 		}
-		row.Accepted = append(row.Accepted, accepted)
+		if !recordAcceptedReview(&row, accepted) {
+			return t.reviewTerminal(ctx, mode, "blocked", row, []reviewFailure{{
+				ProposalID: id, Error: "review gate returned success without a merge commit",
+			}})
+		}
 	}
 	return t.reviewTerminal(ctx, mode, "complete", row, nil)
 }
@@ -417,11 +433,27 @@ func (t *Toolset) finishLegacySuccessiveReview(
 		accepted, err := t.store.ReviewAcceptExpected(
 			ctx, id, row.ProposalCommits[position], memory.UserActor.CommitAuthor(), false)
 		if err != nil {
-			return t.reviewTerminal(ctx, mode, "blocked", row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
+			status := "blocked"
+			if recordAcceptedReview(&row, accepted) {
+				status = "cleanup_failed"
+			}
+			return t.reviewTerminal(ctx, mode, status, row, []reviewFailure{{ProposalID: id, Error: err.Error()}})
 		}
-		row.Accepted = append(row.Accepted, accepted)
+		if !recordAcceptedReview(&row, accepted) {
+			return t.reviewTerminal(ctx, mode, "blocked", row, []reviewFailure{{
+				ProposalID: id, Error: "review gate returned success without a merge commit",
+			}})
+		}
 	}
 	return t.reviewTerminal(ctx, mode, "complete", row, nil)
+}
+
+func recordAcceptedReview(row *pendingElicitation, result localdolt.AcceptResult) bool {
+	if result.Commit == "" {
+		return false
+	}
+	row.Accepted = append(row.Accepted, result)
+	return true
 }
 
 func (t *Toolset) reviewTerminal(ctx context.Context, mode, status string, row pendingElicitation, failures []reviewFailure) (*mcp.CallToolResult, reviewPendingOutput, error) {

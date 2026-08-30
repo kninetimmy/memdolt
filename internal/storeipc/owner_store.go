@@ -244,10 +244,17 @@ func (s *OwnerStore) ReviewAccept(ctx context.Context, id string, reviewer store
 // staging commit the human saw. An empty expected commit preserves the CLI
 // review contract.
 func (s *OwnerStore) ReviewAcceptExpected(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
-	var result localdolt.AcceptResult
-	return result, s.operation(ctx, opReviewAccept, acceptProposalArgs{
+	var wire reviewAcceptResult
+	err := s.operation(ctx, opReviewAccept, acceptProposalArgs{
 		ID: id, ExpectedCommit: expectedCommit, Reviewer: reviewer, Force: force,
-	}, &result)
+	}, &wire)
+	if err != nil {
+		return localdolt.AcceptResult{}, err
+	}
+	if wire.CleanupError != "" {
+		return wire.Result, errors.New(wire.CleanupError)
+	}
+	return wire.Result, nil
 }
 
 type ownerRows struct {

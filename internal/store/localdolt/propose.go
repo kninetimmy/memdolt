@@ -454,6 +454,11 @@ type stagedWrite struct {
 // branch left behind would be indistinguishable to review from a pending
 // proposal that has something in it.
 func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error) {
+	// Staging creates and may remove a proposal branch. Keep those mutations
+	// in the same critical section as accept, reject, and expiry.
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
 	db, err := s.handle()
 	if err != nil {
 		return StagedProposal{}, err
@@ -490,22 +495,31 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	if err := requireCleanWorkingSet(ctx, conn, "stage a proposal"); err != nil {
 		return StagedProposal{}, err
 	}
+	mainHead, err := branchHead(ctx, conn, MainBranch)
+	if err != nil {
+		return StagedProposal{}, err
+	}
+	created := branchRecord{name: branch, commit: mainHead}
 
 	// Cut from main whatever branch the session is on: main is durable
 	// truth and a proposal is a diff against it (PRD §3.1).
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH(?, ?)", branch, MainBranch); err != nil {
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH(?, ?)", branch, mainHead); err != nil {
 		return StagedProposal{}, fmt.Errorf("localdolt: create proposal branch %q from %q: %w", branch, MainBranch, err)
 	}
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_CHECKOUT(?)", branch); err != nil {
 		return StagedProposal{}, errors.Join(
 			fmt.Errorf("localdolt: check out proposal branch %q: %w", branch, err),
-			deleteBranch(ctx, conn, branch))
+			deleteProposalBranch(ctx, conn, created, "abandoned"))
 	}
 	if w.afterCheckout != nil {
 		w.afterCheckout()
 	}
 
 	result, stageErr := s.stageOnBranch(ctx, conn, w, statements)
+	cleanupRecord := created
+	if result.Hash != "" {
+		cleanupRecord.commit = result.Hash
+	}
 
 	if restoreErr := checkoutBranch(ctx, conn, origin); restoreErr != nil {
 		// The session is stranded on the proposal branch. Whatever else
@@ -515,10 +529,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 		discardConn(conn)
 		return StagedProposal{}, errors.Join(stageErr,
 			fmt.Errorf("localdolt: the session that staged %q could not return to %q: %w", branch, origin, restoreErr),
-			deleteBranchFromPool(context.WithoutCancel(ctx), db, branch))
+			deleteProposalBranchFromPool(context.WithoutCancel(ctx), db, cleanupRecord, "abandoned"))
 	}
 	if stageErr != nil {
-		return StagedProposal{}, errors.Join(stageErr, deleteBranch(context.WithoutCancel(ctx), conn, branch))
+		return StagedProposal{}, errors.Join(stageErr,
+			deleteProposalBranch(context.WithoutCancel(ctx), conn, cleanupRecord, "abandoned"))
 	}
 
 	return StagedProposal{
@@ -707,27 +722,17 @@ func checkoutBranch(ctx context.Context, conn *sql.Conn, branch string) error {
 	return nil
 }
 
-// deleteBranch removes a proposal branch that staging did not fill. -D
-// rather than -d because the branch may hold a commit that main does not,
-// and a rejected proposal is deleted unmerged by design (PRD §3.1).
-func deleteBranch(ctx context.Context, conn *sql.Conn, branch string) error {
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", branch); err != nil {
-		return fmt.Errorf("localdolt: delete the abandoned proposal branch %q: %w", branch, err)
-	}
-	return nil
-}
-
-// deleteBranchFromPool removes an abandoned branch through a fresh session.
+// deleteProposalBranchFromPool removes an abandoned branch through a fresh session.
 // It is used when the staging session cannot return to its origin and is no
 // longer trustworthy; deleting the branch from the session still checked out
 // to it would fail because a branch cannot delete itself.
-func deleteBranchFromPool(ctx context.Context, db *sql.DB, branch string) error {
+func deleteProposalBranchFromPool(ctx context.Context, db *sql.DB, record branchRecord, operation string) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("localdolt: acquire a fresh session to clean up %q: %w", branch, err)
+		return fmt.Errorf("localdolt: acquire a fresh session to clean up %q: %w", record.name, err)
 	}
 	defer func() { _ = conn.Close() }()
-	return deleteBranch(ctx, conn, branch)
+	return deleteProposalBranch(ctx, conn, record, operation)
 }
 
 // discardConn marks a connection unusable so the pool closes it instead of

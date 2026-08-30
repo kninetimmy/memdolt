@@ -440,6 +440,41 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 	assertPendingParity(t, ctx, direct, routed)
 }
 
+func TestOwnerRoutePreservesLandedAcceptResultWithCleanupError(t *testing.T) {
+	ctx := context.Background()
+	base, direct, _ := startOwnerConfigured(t, func(st *localdolt.Store) storeipc.ReviewAcceptFunc {
+		accept := reviewAcceptWithScorer(st, func() localdolt.ContradictionScorer { return fixedScorer(-100) })
+		return func(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+			result, err := accept(ctx, id, expectedCommit, reviewer, force)
+			if err != nil {
+				return result, err
+			}
+			return result, errors.New("proposal merged but branch cleanup failed")
+		}
+	}, nil)
+	if _, err := direct.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := direct.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "preserve post-merge truth over owner IPC", Actor: testActor, Target: localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "routing.cleanup", Value: "main already moved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routed, err := storeipc.DialOwnerStore(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := routed.ReviewAcceptExpected(ctx, staged.ID, staged.Commit, testActor, false)
+	if err == nil || !strings.Contains(err.Error(), "branch cleanup failed") || result.Commit == "" || result.Proposal.ID != staged.ID {
+		t.Fatalf("routed accept result=%+v error=%v, want landed result plus cleanup error", result, err)
+	}
+	if got := queryInt(t, direct, "SELECT COUNT(*) FROM facts AS OF 'main' WHERE id = ?", staged.RowID); got != 1 {
+		t.Fatalf("routed cleanup error left %d durable facts, want 1", got)
+	}
+}
+
 func TestDirectAndOwnerRoutedReviewTrustBoundaryParity(t *testing.T) {
 	t.Run("contradiction refusal and force", func(t *testing.T) {
 		ctx := context.Background()

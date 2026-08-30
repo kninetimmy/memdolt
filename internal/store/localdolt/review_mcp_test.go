@@ -2,8 +2,12 @@ package localdolt_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -117,6 +121,156 @@ func TestElicitedReviewRefusesResetProposalCommit(t *testing.T) {
 	}
 }
 
+func TestExpectedCommitAcceptPreservesExternalMutationAfterValidation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, *localdolt.Store, localdolt.StagedProposal)
+	}{
+		{name: "reset", mutate: resetProposalToDifferentSingleCommit},
+		{name: "amend", mutate: amendProposalCommit},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := migratedStore(t)
+			staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+				Rationale: "merge only the commit the reviewer saw",
+				Actor:     stagingActor,
+				Target:    localdolt.TargetRepo,
+			}, localdolt.Fact{Key: "review.snapshot", Value: "the reviewed value"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mainHead := headCommit(t, st)
+
+			result, err := st.AcceptProposalAfterExpectedCommit(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
+				Force: true, ExpectedCommit: staged.Commit,
+			}, func() { test.mutate(t, st, staged) })
+			if err == nil || result.Commit == "" || !strings.Contains(err.Error(), "head changed") {
+				t.Fatalf("accept result=%+v error=%v, want landed merge plus changed-branch cleanup error", result, err)
+			}
+			if parents := parentsOf(t, st, result.Commit); len(parents) != 2 || parents[0] != mainHead || parents[1] != staged.Commit {
+				t.Fatalf("merge parents = %v, want [%s %s]", parents, mainHead, staged.Commit)
+			}
+			if got := scanString(t, st, "SELECT value FROM facts AS OF 'main' WHERE id = ?", staged.RowID); got != "the reviewed value" {
+				t.Fatalf("main value = %q, want the displayed commit's value", got)
+			}
+			pending, pendingErr := st.PendingProposals(ctx)
+			if pendingErr != nil || len(pending) != 1 || pending[0].ID != staged.ID || pending[0].Commit == staged.Commit {
+				t.Fatalf("changed branch was not retained as the only pending proposal: %+v (err %v)", pending, pendingErr)
+			}
+		})
+	}
+}
+
+func TestExpectedCommitAcceptSerializesRejectAndExpire(t *testing.T) {
+	previous := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previous) })
+
+	for _, operation := range []string{"reject", "expire"} {
+		t.Run(operation, func(t *testing.T) {
+			ctx := context.Background()
+			st := migratedStore(t)
+			staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+				Rationale: "serialize proposal mutation after validation",
+				Actor:     stagingActor,
+				Target:    localdolt.TargetRepo,
+			}, localdolt.Fact{Key: "review." + operation, Value: "the displayed value"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			validated := make(chan struct{})
+			resume := make(chan struct{})
+			type acceptOutcome struct {
+				result localdolt.AcceptResult
+				err    error
+			}
+			acceptDone := make(chan acceptOutcome, 1)
+			go func() {
+				result, acceptErr := st.AcceptProposalAfterExpectedCommit(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
+					Force: true, ExpectedCommit: staged.Commit,
+				}, func() {
+					close(validated)
+					<-resume
+				})
+				acceptDone <- acceptOutcome{result: result, err: acceptErr}
+			}()
+			<-validated
+
+			started := make(chan struct{})
+			mutationDone := make(chan error, 1)
+			go func() {
+				close(started)
+				if operation == "reject" {
+					_, mutationErr := st.RejectProposal(ctx, staged.ID)
+					mutationDone <- mutationErr
+					return
+				}
+				expired, mutationErr := st.ExpireProposals(ctx, time.Now().Add(time.Hour))
+				if mutationErr == nil && len(expired) != 0 {
+					mutationErr = errors.New("expiry removed the proposal after acceptance had validated it")
+				}
+				mutationDone <- mutationErr
+			}()
+			<-started
+			select {
+			case mutationErr := <-mutationDone:
+				t.Fatalf("%s completed inside the acceptance critical section: %v", operation, mutationErr)
+			default:
+			}
+			close(resume)
+
+			accepted := <-acceptDone
+			if accepted.err != nil || accepted.result.Commit == "" {
+				t.Fatalf("accept outcome = %+v", accepted)
+			}
+			mutationErr := <-mutationDone
+			if operation == "reject" && mutationErr == nil {
+				t.Fatal("reject succeeded after accept had already consumed the branch")
+			}
+			if operation == "expire" && mutationErr != nil {
+				t.Fatal(mutationErr)
+			}
+			if parents := parentsOf(t, st, accepted.result.Commit); len(parents) != 2 || parents[1] != staged.Commit {
+				t.Fatalf("merge parents = %v, want displayed commit %s second", parents, staged.Commit)
+			}
+			requireProposalBranches(t, st)
+		})
+	}
+}
+
+func TestAcceptCleanupFailureReturnsLandedResultWithoutReofferingBranch(t *testing.T) {
+	ctx := context.Background()
+	st := migratedStore(t)
+	staged, err := st.ProposeFact(ctx, localdolt.Proposal{
+		Rationale: "preserve durable truth when cleanup fails",
+		Actor:     stagingActor,
+		Target:    localdolt.TargetRepo,
+	}, localdolt.Fact{Key: "review.cleanup", Value: "already merged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := st.AcceptProposalWithCleanupError(ctx, staged.ID, reviewer, localdolt.AcceptOptions{
+		Force: true, ExpectedCommit: staged.Commit,
+	}, errors.New("injected branch deletion failure"))
+	if err == nil || result.Commit == "" || result.Proposal.ID != staged.ID {
+		t.Fatalf("accept result=%+v error=%v, want landed result plus cleanup error", result, err)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM facts AS OF 'main' WHERE id = ?", staged.RowID); got != 1 {
+		t.Fatalf("landed cleanup failure left %d durable facts, want 1", got)
+	}
+	requireProposalBranches(t, st, staged.Branch)
+	pending, pendingErr := st.PendingProposals(ctx)
+	if pendingErr != nil || len(pending) != 0 {
+		t.Fatalf("already-merged leftover branch was re-offered as pending: %+v (err %v)", pending, pendingErr)
+	}
+	if _, err := st.RejectProposal(ctx, staged.ID); err != nil {
+		t.Fatalf("clean up the leftover branch explicitly: %v", err)
+	}
+	requireProposalBranches(t, st)
+}
+
 const reviewResponseIDForTest = "review"
 
 func resetProposalToDifferentSingleCommit(t *testing.T, st *localdolt.Store, staged localdolt.StagedProposal) {
@@ -138,6 +292,18 @@ func resetProposalToDifferentSingleCommit(t *testing.T, st *localdolt.Store, sta
 	)
 	if err != nil {
 		t.Fatalf("reset proposal to a different single commit: %v", err)
+	}
+	requireOnMain(t, st)
+}
+
+func amendProposalCommit(t *testing.T, st *localdolt.Store, staged localdolt.StagedProposal) {
+	t.Helper()
+	err := st.RunOnBranch(context.Background(), staged.Branch, store.Statement{
+		SQL:  "CALL DOLT_COMMIT('--amend', '-m', ?, '--author', ?)",
+		Args: []any{"amend the proposal after display", stagingActor.String()},
+	})
+	if err != nil {
+		t.Fatalf("amend proposal after display: %v", err)
 	}
 	requireOnMain(t, st)
 }

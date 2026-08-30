@@ -136,6 +136,13 @@ type acceptProposalArgs struct {
 	Force          bool        `json:"force,omitempty"`
 }
 
+// reviewAcceptResult preserves the store gate's established post-merge
+// contract over IPC: cleanup may fail after Result proves main moved.
+type reviewAcceptResult struct {
+	Result       localdolt.AcceptResult `json:"result"`
+	CleanupError string                 `json:"cleanupError,omitempty"`
+}
+
 // ReviewAcceptFunc is the application review gate an owner exposes. The
 // production functions are internal/review.Accept and AcceptExpected; keeping
 // it explicit prevents the transport from falling back to a raw storage merge
@@ -258,7 +265,15 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			err = decodeErr
 			break
 		}
-		result, err = h.reviewAccept(ctx, args.ID, args.ExpectedCommit, args.Reviewer, args.Force)
+		accepted, acceptErr := h.reviewAccept(ctx, args.ID, args.ExpectedCommit, args.Reviewer, args.Force)
+		if acceptErr != nil && accepted.Commit == "" {
+			err = acceptErr
+			break
+		}
+		result = reviewAcceptResult{Result: accepted}
+		if acceptErr != nil {
+			result = reviewAcceptResult{Result: accepted, CleanupError: acceptErr.Error()}
+		}
 	default:
 		h.fail(w, http.StatusNotFound, fmt.Errorf("unknown store operation %q", req.Operation))
 		return

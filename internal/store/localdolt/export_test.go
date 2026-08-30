@@ -76,3 +76,27 @@ func (s *Store) StageUntilCanceled(ctx context.Context, checkedOut chan<- struct
 	})
 	return err
 }
+
+// AcceptProposalAfterExpectedCommit exposes the exact post-validation seam to
+// deterministic external mutation and review-verb serialization regressions.
+func (s *Store) AcceptProposalAfterExpectedCommit(
+	ctx context.Context,
+	id string,
+	reviewer store.Actor,
+	options AcceptOptions,
+	after func(),
+) (AcceptResult, error) {
+	return s.acceptProposal(ctx, id, reviewer, options, acceptHooks{afterExpectedCommit: after})
+}
+
+// AcceptProposalWithCleanupError leaves the already-merged branch in place and
+// proves the established populated-result-plus-error cleanup contract.
+func (s *Store) AcceptProposalWithCleanupError(
+	ctx context.Context,
+	id string,
+	reviewer store.Actor,
+	options AcceptOptions,
+	err error,
+) (AcceptResult, error) {
+	return s.acceptProposal(ctx, id, reviewer, options, acceptHooks{cleanupError: func() error { return err }})
+}

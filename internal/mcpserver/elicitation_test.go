@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -24,6 +25,20 @@ type elicitationBackend struct {
 type afterAcceptBackend struct {
 	*elicitationBackend
 	afterAccept func()
+}
+
+type postMergeErrorBackend struct {
+	*elicitationBackend
+	failed bool
+}
+
+func (s *postMergeErrorBackend) ReviewAcceptExpected(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+	result, err := s.elicitationBackend.ReviewAcceptExpected(ctx, id, expectedCommit, reviewer, force)
+	if err == nil && !s.failed {
+		s.failed = true
+		return result, errors.New("proposal merged but branch deletion failed")
+	}
+	return result, err
 }
 
 func (s *afterAcceptBackend) ReviewAcceptExpected(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
@@ -470,6 +485,61 @@ func TestReviewPendingBatchReportsPartialProgressOnLaterGuardFailure(t *testing.
 	closeSessions(t, client, serverSession)
 	if err := tools.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReviewPendingReportsPostMergeCleanupFailureInEveryReviewMode(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mode   string
+		legacy bool
+	}{
+		{name: "successive", mode: "successive"},
+		{name: "batch", mode: "batch"},
+		{name: "legacy successive", mode: "successive", legacy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base, inner := initializedElicitationBackend(t)
+			first := stageReviewFact(t, inner.Store, localdolt.TargetRepo, "review.cleanup.first", "lands before cleanup fails")
+			second := stageReviewFact(t, inner.Store, localdolt.TargetRepo, "review.cleanup.second", "remains pending")
+			backend := &postMergeErrorBackend{elicitationBackend: inner}
+			server := New("test")
+			tools := RegisterTools(server, base, backend)
+			options := &mcp.ClientOptions{ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+				if test.legacy {
+					return &mcp.ElicitResult{Action: "accept", Content: map[string]any{
+						first.ID: "approve", second.ID: "approve",
+					}}, nil
+				}
+				decision := "approve"
+				if test.mode == "batch" {
+					decision = "approve_all"
+				}
+				return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"decision": decision}}, nil
+			}}
+			client, serverSession := connectWithOptions(t, server,
+				&mcp.Implementation{Name: "cleanup-test", Version: "1"}, test.legacy, options)
+
+			output := callAs[reviewPendingOutput](t, client, "review_pending", map[string]any{"mode": test.mode})
+			if output.Status != "cleanup_failed" || len(output.Accepted) != 1 ||
+				output.Accepted[0].Proposal.ID != first.ID || len(output.Failures) != 1 ||
+				output.Failures[0].ProposalID != first.ID || !strings.Contains(output.Failures[0].Error, "branch deletion failed") ||
+				output.RepoPending != 1 {
+				t.Fatalf("post-merge cleanup output = %+v", output)
+			}
+			if got := testCount(t, inner.Store, "SELECT COUNT(*) FROM facts AS OF 'main'"); got != 1 {
+				t.Fatalf("post-merge cleanup failure reported %d durable facts, want 1", got)
+			}
+			pending, err := inner.PendingProposals(context.Background())
+			if err != nil || len(pending) != 1 || pending[0].ID != second.ID {
+				t.Fatalf("partial cleanup-failure queue = %+v (err %v)", pending, err)
+			}
+
+			closeSessions(t, client, serverSession)
+			if err := tools.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

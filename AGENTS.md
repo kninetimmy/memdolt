@@ -212,8 +212,9 @@ export GOFLAGS=-tags=gms_pure_go
     and staging commits, queue position, and action. Before the cycle-1 fix,
     proposal IDs and position were stored but the displayed commit was not, so a
     branch reset to another single commit under the same ID could pass approval;
-    after it, every displayed commit is stored and passed into the serialized
-    accept gate. Missing, expired, mismatched, forged, replayed, malformed,
+    after it, every displayed commit is stored and passed into the
+    proposal-mutation critical section before merge. Missing, expired,
+    mismatched, forged, replayed, malformed,
     incomplete, declined, or canceled responses cannot promote or discard a
     proposal. Authorization-state insert or consume failure happens before
     promotion and fails closed. Continuation bookkeeping is different: its
@@ -242,22 +243,54 @@ export GOFLAGS=-tags=gms_pure_go
     count and terminal `memdolt review` remedy; a mixed queue on a client without
     form elicitation reports both repo and global counts. Empty elicitation
     capabilities retain the protocol's assumed-form compatibility, while a
-    URL-only capability gets the CLI fallback. These restrictions bind
-    `review_pending` alone: `list_proposals` and every CLI review verb keep their
-    prior global visibility and behavior.
+    URL-only capability gets the CLI fallback. The global exclusion binds
+    `review_pending` alone: `list_proposals` and the CLI remain able to see and
+    discard global proposals, subject to the shared mutation and cleanup rules
+    below.
+  - `localdolt.Store.proposalMu` is the one memdolt-owned proposal-mutation
+    boundary on a repository Store. Before the cycle-2 fix, expected-commit
+    validation excluded only another accept; staging, reject, and expiry could
+    mutate the same branch after validation. After it, `stage`,
+    `AcceptProposal`, `RejectProposal`, and `ExpireProposals` share the mutex, so
+    one of those operations finishes before another can act on the branch.
+    `PendingProposals` and `ProposalDiff` remain reads, direct-lane commits still
+    move `main` independently, and a foreign Dolt session does not share the Go
+    mutex. For that external case, every accept/reject/expire and failed-stage
+    deletion re-reads the branch head immediately before `DOLT_BRANCH -D` and
+    refuses deletion if it differs from the commit that operation observed. An
+    externally reset or amended branch can therefore change after expected-commit
+    validation; accept still merges only the displayed hash, then returns its
+    populated `AcceptResult` plus a cleanup error and retains the changed branch.
+    This head comparison binds those named deletion sites, not arbitrary Dolt
+    branch deletion outside memdolt.
   - Confirmed MCP acceptance calls `ReviewAcceptExpected` as reviewer `user`
     with `force=false`; `internal/review.AcceptExpected` carries the displayed
     commit into `localdolt.AcceptOptions.ExpectedCommit`.
-    `localdolt.AcceptProposal` compares that commit inside its existing
-    per-store acceptance lock before any merge. Its contradiction validation
+    `localdolt.AcceptProposal` compares that commit inside the proposal-mutation
+    boundary before any merge. Its contradiction validation
     and inference, accept-time deny-list scan, one-commit and supersede-shape
-    checks, conflict/constraint verification, reviewer-authored merge, and
-    post-commit branch deletion still run. The expected-commit/no-force rule
+    checks, conflict/constraint verification, and reviewer-authored merge still
+    run; branch deletion now adds the immediate head revalidation above. The
+    expected-commit/no-force rule
     binds elicited MCP accepts only. CLI `ReviewAccept` passes no expected
     commit, and CLI `review accept --force` retains its prior operator behavior.
     `cmd/memdolt.localCommandStore` implements both application seams, while
     `runServe` gives owner IPC the expected variant; command selection,
     application config loading, and the existing CLI output remain unchanged.
+  - `AcceptProposal` retains its established post-merge contract: a branch
+    cleanup failure returns the populated result proving `main` moved together
+    with the error. Before the cycle-2 fix, successive, batch, and legacy
+    elicitation discarded that result and reported the proposal as blocked.
+    After it, each mode records the accepted proposal and merge, reports the
+    cleanup error separately in `failures`, returns `cleanup_failed`, and stops
+    without attempting later entries; earlier batch acceptances remain reported
+    too. Before this fix, `PendingProposals` treated every physical proposal
+    branch as pending, so an unchanged branch left after a landed merge could be
+    offered again. After it, a branch whose current head is reachable from
+    `main` is cleanup residue and is excluded from pending results, while a branch
+    changed to an unmerged head remains pending for review. This reachability
+    filter binds `PendingProposals` and its callers, not `ProposalDiff`, reject,
+    expiry, or the physical branch itself.
   - On a live repository key, `propose_fact` shows the current and proposed
     facts and binds its response to both. Before the cycle-1 fix, the handler
     re-read the shown row and then separately called a staging method, so main
@@ -279,21 +312,35 @@ export GOFLAGS=-tags=gms_pure_go
     carry the expected-snapshot fact resolution and expected-commit review
     fields without changing authenticated ownership, actor propagation, bound
     SQL arguments, visible errors, or the one-submit/no-retry write boundary.
-    The additions bind that owner transport, not arbitrary HTTP handlers.
+    The review operation now carries a populated post-merge result and cleanup
+    error in one authenticated response; `OwnerStore` restores the same
+    result-plus-error Go contract without retrying the write. Ordinary pre-merge
+    failures retain the existing non-200 error path. These additions bind that
+    owner transport, not arbitrary HTTP handlers or other operation results.
   - `internal/mcpserver/elicitation_test.go` adds modern MRTR and legacy-shim
     coverage, real one-round legacy multi-proposal review, proposal-ten cursor
     traversal, mixed and URL-only fallback, partial batch progress, the two
     storage-failure phases, request-state attacks, and atomic fact-conflict
-    outcomes. `localdolt/review_mcp_test.go` resets successive and batch branches
-    to different single commits after display and proves neither main nor the
-    proposal branch is changed by approval. `tools_test.go` and
+    outcomes. It now also covers populated-result cleanup failure in modern
+    successive, batch, and genuine legacy review, including the accepted prefix
+    and pending tail. `localdolt/review_mcp_test.go` retains the pre-response
+    successive/batch reset refusals; deterministically pauses after
+    expected-commit validation for reject and expiry serialization; resets and
+    amends externally after that validation to prove only the displayed hash
+    merges and changed branches are retained; and injects post-merge cleanup
+    failure to prove the result is populated and an unchanged merged branch is
+    not pending. `storeipc_test.go` proves that result-plus-error contract
+    survives the authenticated owner route. These tests exercise the named
+    seams and do not claim to coordinate a foreign process inside the Go mutex
+    or exhaust every Dolt branch operation. `tools_test.go` and
     `cmd/memdolt/serve_test.go` still expect the prior 15 plus
     `review_pending`; `server_test.go` only exposes client options to these
     fixtures; `storeipc_test.go` covers routed resolution and expected-commit
     parity; and the callback signature updates in doctor/soak fixtures change no
     shipped behavior. PRD §11.1 preserves the matching before/after. No new
     dependency, persistent side store, durable schema, host registration,
-    global promotion, CLI review behavior, or provenance schema is added.
+    global promotion, or provenance schema is added; CLI review uses the same
+    new mutation, deletion, and pending-list rules rather than a second path.
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
@@ -366,9 +413,13 @@ export GOFLAGS=-tags=gms_pure_go
   target, one-commit, deny-list, conflict, constraint, attribution and branch
   deletion rules above still hold.
 
-  `AcceptProposal` calls on one repository-owning Store are serialized: the
-  second accept probes the first one's durable result. This lock binds that
-  method alone, not reads, staging, direct-lane commits, or every Store.
+  Before issue #106, `AcceptProposal` calls on one repository-owning Store were
+  serialized so the second accept probed the first one's durable result; that
+  lock bound acceptance alone. After issue #106, `proposalMu` retains that
+  ordering and also covers memdolt proposal staging, reject, and expiry. It does
+  not cover reads, direct-lane commits, every Store, or foreign Dolt sessions;
+  the issue #106 blast-radius record above states the external-mutation and
+  deletion behavior.
 
   A branch does not gain the supersede bypass from its metadata label alone:
   accept verifies the exact staged shape (one old live fact linked, one live
