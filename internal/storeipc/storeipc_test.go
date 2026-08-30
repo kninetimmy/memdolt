@@ -337,6 +337,24 @@ func TestDirectAndOwnerRoutedOperationsHaveParity(t *testing.T) {
 		t.Fatalf("routed provenance: %v", err)
 	}
 	assertJSONParity(t, "provenance", directChanged, routedChanged)
+	overwrite, err := routed.ProposeFactOverwrite(ctx, proposal, stagedFact.RowID, localdolt.Fact{
+		Key: "routing.owner", Value: "the proposed overwrite is routed through the owner",
+	})
+	if err != nil {
+		t.Fatalf("routed overwrite proposal: %v", err)
+	}
+	directOverwriteDiff, err := direct.ProposalDiff(ctx, overwrite.ID)
+	if err != nil {
+		t.Fatalf("direct overwrite diff: %v", err)
+	}
+	routedOverwriteDiff, err := routed.ProposalDiff(ctx, overwrite.ID)
+	if err != nil {
+		t.Fatalf("routed overwrite diff: %v", err)
+	}
+	assertJSONParity(t, "overwrite diffs", directOverwriteDiff, routedOverwriteDiff)
+	if _, err := routed.RejectProposal(ctx, overwrite.ID); err != nil {
+		t.Fatalf("reject routed overwrite: %v", err)
+	}
 	supersede, err := routed.ProposeSupersede(ctx, proposal, stagedFact.RowID, localdolt.Fact{
 		Key: "routing.owner", Value: "the replacement is staged through the owner",
 	})

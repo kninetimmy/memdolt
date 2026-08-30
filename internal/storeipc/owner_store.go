@@ -185,6 +185,14 @@ func (s *OwnerStore) ProposeFact(ctx context.Context, proposal localdolt.Proposa
 	return result, err
 }
 
+func (s *OwnerStore) ProposeFactOverwrite(ctx context.Context, proposal localdolt.Proposal, overwrittenID string, replacement localdolt.Fact) (localdolt.StagedProposal, error) {
+	var result localdolt.StagedProposal
+	err := s.operation(ctx, opOverwriteFact, overwriteFactArgs{
+		Proposal: proposal, OverwrittenID: overwrittenID, Replacement: replacement,
+	}, &result)
+	return result, err
+}
+
 func (s *OwnerStore) ProposeDecision(ctx context.Context, proposal localdolt.Proposal, decision localdolt.Decision) (localdolt.StagedProposal, error) {
 	var result localdolt.StagedProposal
 	err := s.operation(ctx, opProposeDecision, proposeDecisionArgs{Proposal: proposal, Decision: decision}, &result)

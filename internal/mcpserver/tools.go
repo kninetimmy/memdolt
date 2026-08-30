@@ -27,14 +27,18 @@ const (
 )
 
 // Backend is the already-open owner store the MCP application uses. It is the
-// same typed and store.Store surface the CLI reaches directly or over IPC.
+// same typed and store.Store surface the CLI reaches directly or over IPC,
+// plus the complete application review gate; a raw storage merge cannot be
+// registered as review_pending.
 type Backend interface {
 	storeipc.Backend
 	DataDir() string
+	ReviewAccept(context.Context, string, store.Actor, bool) (localdolt.AcceptResult, error)
 }
 
-// Toolset owns the fixed M3 tools and their only session-scoped state: notes
-// waiting for the five-minute or orderly-shutdown flush.
+// Toolset owns the fixed M3 tools and their session-scoped state: notes waiting
+// for the five-minute or orderly-shutdown flush and single-use elicitation
+// rows waiting for one short-lived response.
 type Toolset struct {
 	store    Backend
 	baseDir  string
@@ -45,6 +49,9 @@ type Toolset struct {
 	timer    *time.Timer
 	flushErr error
 	closed   bool
+
+	elicit    *elicitationStateStore
+	elicitErr error
 }
 
 type noteGroup struct {
@@ -59,7 +66,11 @@ func RegisterTools(server *mcp.Server, baseDir string, st Backend) *Toolset {
 }
 
 func registerTools(server *mcp.Server, baseDir string, st Backend, interval time.Duration) *Toolset {
-	tools := &Toolset{store: st, baseDir: baseDir, interval: interval}
+	elicit, elicitErr := newElicitationStateStore()
+	tools := &Toolset{
+		store: st, baseDir: baseDir, interval: interval,
+		elicit: elicit, elicitErr: elicitErr,
+	}
 	mcp.AddTool(server, &mcp.Tool{Name: "status", Description: "Return the current schema and committed-memory counts."}, tools.status)
 	mcp.AddTool(server, &mcp.Tool{Name: "recall", Description: "Recall ranked committed facts, decisions, tasks, and document chunks."}, tools.recall)
 	mcp.AddTool(server, &mcp.Tool{Name: "search", Description: "Search committed decision titles and rationales."}, tools.search)
@@ -75,6 +86,7 @@ func registerTools(server *mcp.Server, baseDir string, st Backend, interval time
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_fact", Description: "Stage a fact on a single-commit proposal branch without moving main."}, tools.proposeFact)
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_decision", Description: "Stage a decision on a single-commit proposal branch without moving main."}, tools.proposeDecision)
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_supersede", Description: "Stage a fact supersession and replacement on a single-commit proposal branch without moving main."}, tools.proposeSupersede)
+	mcp.AddTool(server, &mcp.Tool{Name: "review_pending", Description: "Offer repository proposals for human elicitation review; global proposals remain CLI-only."}, tools.reviewPending)
 	return tools
 }
 
@@ -433,12 +445,19 @@ type stagedProposalOutput struct {
 	Actor  memory.Actor           `json:"actor"`
 }
 
-func (t *Toolset) proposeFact(ctx context.Context, _ *mcp.CallToolRequest, in proposeFactInput) (*mcp.CallToolResult, stagedProposalOutput, error) {
-	actor := ActorFromContext(ctx)
-	staged, err := t.store.ProposeFact(ctx, proposal(actor, in.Rationale, in.Global), localdolt.Fact{
-		Key: in.Key, Value: in.Value, Kind: in.Kind, Evidence: in.Evidence,
-	})
-	return &mcp.CallToolResult{}, stagedOutput(staged, actor), err
+type proposeFactOutput struct {
+	ID         string                 `json:"id"`
+	Branch     string                 `json:"branch"`
+	Kind       localdolt.ProposalKind `json:"kind"`
+	RowID      string                 `json:"rowId"`
+	Commit     string                 `json:"commit"`
+	Actor      memory.Actor           `json:"actor"`
+	Resolution string                 `json:"resolution,omitempty"`
+	Canceled   bool                   `json:"canceled,omitempty"`
+}
+
+func (t *Toolset) proposeFact(ctx context.Context, req *mcp.CallToolRequest, in proposeFactInput) (*mcp.CallToolResult, proposeFactOutput, error) {
+	return t.proposeFactWithConflict(ctx, req, in)
 }
 
 type proposeDecisionInput struct {
@@ -568,7 +587,7 @@ func (t *Toolset) Close() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), noteFlushTimeout)
 	defer cancel()
-	t.flushErr = errors.Join(t.flushErr, t.flushLocked(ctx))
+	t.flushErr = errors.Join(t.flushErr, t.flushLocked(ctx), t.closeElicitationState())
 	t.groups = nil
 	return t.flushErr
 }

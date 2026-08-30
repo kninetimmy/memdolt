@@ -201,7 +201,8 @@ type StagedProposal struct {
 
 	// RowID is the ULID of the facts or decisions row the branch proposes.
 	// For a supersede proposal it is the replacement row, which is also the
-	// value written into the superseded row's superseded_by.
+	// value written into the superseded row's superseded_by. For an overwrite
+	// it is the existing row whose reviewed fields change.
 	RowID string
 
 	// Commit is the hash of the branch's single commit.
@@ -218,7 +219,8 @@ type StagedProposal struct {
 // PRD §11.1's fact-key elicitation is for — overwrite, supersede, keep-both
 // under a distinct key, or cancel — so it is reported here rather than
 // resolved: a staged write that quietly became something else would defeat
-// the review gate. ProposeSupersede is the supersede answer.
+// the review gate. ProposeFactOverwrite and ProposeSupersede are the two
+// same-key answers that stage a change.
 func (s *Store) ProposeFact(ctx context.Context, p Proposal, f Fact) (StagedProposal, error) {
 	if err := f.validate(); err != nil {
 		return StagedProposal{}, fmt.Errorf("localdolt: propose fact: %w", err)
@@ -234,6 +236,37 @@ func (s *Store) ProposeFact(ctx context.Context, p Proposal, f Fact) (StagedProp
 		statements: []store.Statement{insertFact(rowID, f, p.Actor, now)},
 		text:       f.text(),
 		newFactKey: f.Key,
+	})
+}
+
+// ProposeFactOverwrite stages a reviewed in-place replacement of one live
+// fact. It is the overwrite answer to PRD §11.1's fact-key conflict dialog;
+// supersession remains a separate link-plus-replacement proposal.
+func (s *Store) ProposeFactOverwrite(ctx context.Context, p Proposal, overwrittenID string, replacement Fact) (StagedProposal, error) {
+	if strings.TrimSpace(overwrittenID) == "" {
+		return StagedProposal{}, errors.New("localdolt: propose fact overwrite: the id of the fact to overwrite is required")
+	}
+	if err := replacement.validate(); err != nil {
+		return StagedProposal{}, fmt.Errorf("localdolt: propose fact overwrite: %w", err)
+	}
+	now := time.Now().UTC()
+	return s.stage(ctx, stagedWrite{
+		kind:           KindFact,
+		proposal:       p,
+		rowID:          overwrittenID,
+		now:            now,
+		message:        "propose overwrite fact " + replacement.Key,
+		text:           replacement.text(),
+		overwrittenID:  overwrittenID,
+		overwrittenKey: replacement.Key,
+		statements: []store.Statement{{
+			SQL: "UPDATE facts SET value = ?, source = ?, kind = ?, evidence = ?, verified_at = NULL " +
+				"WHERE id = ? AND `key` = ? AND superseded_by IS NULL",
+			Args: []any{
+				replacement.Value, p.Actor.Name, nullable(replacement.Kind), nullable(replacement.Evidence),
+				overwrittenID, replacement.Key,
+			},
+		}},
 	})
 }
 
@@ -313,9 +346,9 @@ type stagedWrite struct {
 	// rowID is the ULID of the facts or decisions row being proposed.
 	rowID string
 
-	// now stamps the proposed row and the proposals row, so the two agree
-	// on when the proposal was made. The ids beside them carry their own
-	// mint time, a moment later, from the ULID library's clock.
+	// now stamps the proposed row and the proposals row, so the two agree on
+	// when the proposal was made. An overwrite preserves the existing row's
+	// created_at and uses now only for its proposals row.
 	now time.Time
 
 	// message is the commit's structured one-liner (PRD §3.1). It names the
@@ -336,6 +369,11 @@ type stagedWrite struct {
 	// supersededID, when set, is the live fact the first statement links.
 	// stage verifies it is live on the branch before anything is written.
 	supersededID string
+
+	// overwrittenID, when set, is the live same-key row an overwrite proposal
+	// updates in place. stage verifies the id and key before writing.
+	overwrittenID  string
+	overwrittenKey string
 
 	// newFactKey is set only by ProposeFact. A plain fact insert must not
 	// collide with a live key; supersede deliberately transfers that key and
@@ -449,6 +487,11 @@ func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite
 			return store.CommitResult{}, err
 		}
 	}
+	if w.overwrittenID != "" {
+		if err := requireLiveFactWithKey(ctx, conn, w.overwrittenID, w.overwrittenKey); err != nil {
+			return store.CommitResult{}, err
+		}
+	}
 	return s.commitConn(ctx, conn, store.CommitRequest{
 		Statements: statements,
 		Text:       w.text,
@@ -512,6 +555,19 @@ func requireLiveFact(ctx context.Context, conn *sql.Conn, id string) error {
 	}
 	if live == 0 {
 		return fmt.Errorf("localdolt: no live fact with id %q to supersede", id)
+	}
+	return nil
+}
+
+func requireLiveFactWithKey(ctx context.Context, conn *sql.Conn, id, key string) error {
+	var live int
+	err := conn.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM facts WHERE id = ? AND live_key = ?", id, key).Scan(&live)
+	if err != nil {
+		return fmt.Errorf("localdolt: look up the fact %q to overwrite: %w", id, err)
+	}
+	if live == 0 {
+		return fmt.Errorf("localdolt: no live fact with id %q and key %q to overwrite", id, key)
 	}
 	return nil
 }

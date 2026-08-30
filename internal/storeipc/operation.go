@@ -27,6 +27,7 @@ const (
 	opCheckWriteText   = "check_write_text"
 	opRecordCommand    = "record_command"
 	opProposeFact      = "propose_fact"
+	opOverwriteFact    = "propose_fact_overwrite"
 	opProposeDecision  = "propose_decision"
 	opProposeSupersede = "propose_supersede"
 	opPendingProposals = "pending_proposals"
@@ -50,6 +51,7 @@ type Backend interface {
 	LastChanged(context.Context, string, string) (*store.CommitProvenance, error)
 	CheckWriteText(context.Context, []string) error
 	ProposeFact(context.Context, localdolt.Proposal, localdolt.Fact) (localdolt.StagedProposal, error)
+	ProposeFactOverwrite(context.Context, localdolt.Proposal, string, localdolt.Fact) (localdolt.StagedProposal, error)
 	ProposeDecision(context.Context, localdolt.Proposal, localdolt.Decision) (localdolt.StagedProposal, error)
 	ProposeSupersede(context.Context, localdolt.Proposal, string, localdolt.Fact) (localdolt.StagedProposal, error)
 	PendingProposals(context.Context) ([]localdolt.PendingProposal, error)
@@ -99,6 +101,12 @@ type recordCommandResult struct {
 type proposeFactArgs struct {
 	Proposal localdolt.Proposal `json:"proposal"`
 	Fact     localdolt.Fact     `json:"fact"`
+}
+
+type overwriteFactArgs struct {
+	Proposal      localdolt.Proposal `json:"proposal"`
+	OverwrittenID string             `json:"overwrittenId"`
+	Replacement   localdolt.Fact     `json:"replacement"`
 }
 
 type proposeDecisionArgs struct {
@@ -197,6 +205,13 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		result, err = h.store.ProposeFact(ctx, args.Proposal, args.Fact)
+	case opOverwriteFact:
+		args, decodeErr := operationArgs[overwriteFactArgs](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		result, err = h.store.ProposeFactOverwrite(ctx, args.Proposal, args.OverwrittenID, args.Replacement)
 	case opProposeDecision:
 		args, decodeErr := operationArgs[proposeDecisionArgs](req.Args)
 		if decodeErr != nil {

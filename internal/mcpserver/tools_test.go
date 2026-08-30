@@ -21,14 +21,14 @@ import (
 var m3ToolNames = []string{
 	"get_command", "list_decisions", "list_facts", "list_proposals", "list_tasks",
 	"log_session_note", "propose_decision", "propose_fact", "propose_supersede",
-	"recall", "record_command", "search", "status", "task_add", "task_done",
+	"recall", "record_command", "review_pending", "search", "status", "task_add", "task_done",
 }
 
 func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
 	ctx := context.Background()
 	base, st := initializedToolStore(t)
 	server := New("test")
-	tools := RegisterTools(server, base, st)
+	tools := RegisterTools(server, base, testElicitationBackend(base, st))
 	client, serverSession := connect(t, server, &mcp.Implementation{Name: "Claude Code", Version: "1"}, false)
 
 	listed, err := client.ListTools(ctx, nil)
@@ -163,7 +163,7 @@ func TestListFactsTreatsPrefixCharactersLiterallyAndLargeHorizonDoesNotOverflow(
 	ctx := context.Background()
 	base, st := initializedToolStore(t)
 	server := New("test")
-	tools := RegisterTools(server, base, st)
+	tools := RegisterTools(server, base, testElicitationBackend(base, st))
 	client, serverSession := connect(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false)
 
 	tests := []struct {
@@ -247,7 +247,7 @@ func TestSessionNoteDeadlineFlushesAndDenyListRefusesVisibly(t *testing.T) {
 	t.Run("deadline", func(t *testing.T) {
 		base, st := initializedToolStore(t)
 		server := New("test")
-		tools := registerTools(server, base, st, 20*time.Millisecond)
+		tools := registerTools(server, base, testElicitationBackend(base, st), 20*time.Millisecond)
 		client, serverSession := connect(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false)
 		callOK(t, client, "log_session_note", map[string]any{"text": "flush me on the timer"})
 
@@ -274,7 +274,7 @@ func TestSessionNoteDeadlineFlushesAndDenyListRefusesVisibly(t *testing.T) {
 			t.Fatal(err)
 		}
 		server := New("test")
-		tools := RegisterTools(server, base, st)
+		tools := RegisterTools(server, base, testElicitationBackend(base, st))
 		client, serverSession := connect(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false)
 		callError(t, client, "log_session_note", map[string]any{"text": "BLOCKED secret"}, "deny-list")
 		if got := testCount(t, st, "SELECT COUNT(*) FROM session_notes AS OF 'main'"); got != 0 {
@@ -293,7 +293,7 @@ func TestSessionNoteDeadlineFlushesAndDenyListRefusesVisibly(t *testing.T) {
 			t.Fatal(err)
 		}
 		server := New("test")
-		tools := RegisterTools(server, base, st)
+		tools := RegisterTools(server, base, testElicitationBackend(base, st))
 		client, serverSession := connect(t, server, &mcp.Implementation{Name: "session-client", Version: "1"}, false)
 		for _, note := range []struct {
 			actor string
@@ -362,7 +362,7 @@ func TestSessionNoteDeadlineFlushesAndDenyListRefusesVisibly(t *testing.T) {
 func TestSessionNoteBatchesPreservePerRequestAuthors(t *testing.T) {
 	base, st := initializedToolStore(t)
 	server := New("test")
-	tools := RegisterTools(server, base, st)
+	tools := RegisterTools(server, base, testElicitationBackend(base, st))
 	client, serverSession := connect(t, server, &mcp.Implementation{Name: "session-client", Version: "1"}, false)
 
 	for _, name := range []string{"Claude Code", "Codex"} {
