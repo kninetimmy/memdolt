@@ -27,6 +27,7 @@ const (
 	opCheckWriteText   = "check_write_text"
 	opRecordCommand    = "record_command"
 	opProposeFact      = "propose_fact"
+	opResolveFact      = "propose_fact_resolution"
 	opProposeDecision  = "propose_decision"
 	opProposeSupersede = "propose_supersede"
 	opPendingProposals = "pending_proposals"
@@ -50,6 +51,7 @@ type Backend interface {
 	LastChanged(context.Context, string, string) (*store.CommitProvenance, error)
 	CheckWriteText(context.Context, []string) error
 	ProposeFact(context.Context, localdolt.Proposal, localdolt.Fact) (localdolt.StagedProposal, error)
+	ProposeFactResolution(context.Context, localdolt.Proposal, localdolt.FactSnapshot, localdolt.Fact, localdolt.FactResolution) (localdolt.StagedProposal, error)
 	ProposeDecision(context.Context, localdolt.Proposal, localdolt.Decision) (localdolt.StagedProposal, error)
 	ProposeSupersede(context.Context, localdolt.Proposal, string, localdolt.Fact) (localdolt.StagedProposal, error)
 	PendingProposals(context.Context) ([]localdolt.PendingProposal, error)
@@ -101,6 +103,13 @@ type proposeFactArgs struct {
 	Fact     localdolt.Fact     `json:"fact"`
 }
 
+type resolveFactArgs struct {
+	Proposal    localdolt.Proposal       `json:"proposal"`
+	Expected    localdolt.FactSnapshot   `json:"expected"`
+	Replacement localdolt.Fact           `json:"replacement"`
+	Resolution  localdolt.FactResolution `json:"resolution"`
+}
+
 type proposeDecisionArgs struct {
 	Proposal localdolt.Proposal `json:"proposal"`
 	Decision localdolt.Decision `json:"decision"`
@@ -121,16 +130,25 @@ type expireProposalsArgs struct {
 }
 
 type acceptProposalArgs struct {
-	ID       string      `json:"id"`
-	Reviewer store.Actor `json:"reviewer"`
-	Force    bool        `json:"force,omitempty"`
+	ID             string      `json:"id"`
+	ExpectedCommit string      `json:"expectedCommit,omitempty"`
+	Reviewer       store.Actor `json:"reviewer"`
+	Force          bool        `json:"force,omitempty"`
+}
+
+// reviewAcceptResult preserves the store gate's established post-merge
+// contract over IPC: cleanup may fail after Result proves main moved.
+type reviewAcceptResult struct {
+	Result       localdolt.AcceptResult `json:"result"`
+	CleanupError string                 `json:"cleanupError,omitempty"`
 }
 
 // ReviewAcceptFunc is the application review gate an owner exposes. The
-// production function is internal/review.Accept; keeping it explicit prevents
-// the transport from falling back to a raw storage merge that omits the
-// contradiction configuration, force semantics, or future application guards.
-type ReviewAcceptFunc func(context.Context, string, store.Actor, bool) (localdolt.AcceptResult, error)
+// production functions are internal/review.Accept and AcceptExpected; keeping
+// it explicit prevents the transport from falling back to a raw storage merge
+// that omits commit binding, contradiction configuration, force semantics, or
+// future application guards.
+type ReviewAcceptFunc func(context.Context, string, string, store.Actor, bool) (localdolt.AcceptResult, error)
 
 func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var req operationRequest
@@ -197,6 +215,13 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		result, err = h.store.ProposeFact(ctx, args.Proposal, args.Fact)
+	case opResolveFact:
+		args, decodeErr := operationArgs[resolveFactArgs](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		result, err = h.store.ProposeFactResolution(ctx, args.Proposal, args.Expected, args.Replacement, args.Resolution)
 	case opProposeDecision:
 		args, decodeErr := operationArgs[proposeDecisionArgs](req.Args)
 		if decodeErr != nil {
@@ -240,7 +265,15 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			err = decodeErr
 			break
 		}
-		result, err = h.reviewAccept(ctx, args.ID, args.Reviewer, args.Force)
+		accepted, acceptErr := h.reviewAccept(ctx, args.ID, args.ExpectedCommit, args.Reviewer, args.Force)
+		if acceptErr != nil && accepted.Commit == "" {
+			err = acceptErr
+			break
+		}
+		result = reviewAcceptResult{Result: accepted}
+		if acceptErr != nil {
+			result = reviewAcceptResult{Result: accepted, CleanupError: acceptErr.Error()}
+		}
 	default:
 		h.fail(w, http.StatusNotFound, fmt.Errorf("unknown store operation %q", req.Operation))
 		return

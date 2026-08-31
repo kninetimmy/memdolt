@@ -21,8 +21,32 @@ func Accept(
 	reviewer store.Actor,
 	force bool,
 ) (localdolt.AcceptResult, error) {
+	return accept(ctx, st, configPath, id, "", reviewer, force)
+}
+
+// AcceptExpected is the MCP review variant: expectedCommit is the exact
+// proposal commit the elicitation displayed. CLI acceptance calls Accept and
+// keeps its established current-head behavior.
+func AcceptExpected(
+	ctx context.Context,
+	st *localdolt.Store,
+	configPath, id, expectedCommit string,
+	reviewer store.Actor,
+	force bool,
+) (localdolt.AcceptResult, error) {
+	return accept(ctx, st, configPath, id, expectedCommit, reviewer, force)
+}
+
+func accept(
+	ctx context.Context,
+	st *localdolt.Store,
+	configPath, id, expectedCommit string,
+	reviewer store.Actor,
+	force bool,
+) (localdolt.AcceptResult, error) {
 	return st.AcceptProposal(ctx, id, reviewer, localdolt.AcceptOptions{
-		Force: force,
+		Force:          force,
+		ExpectedCommit: expectedCommit,
 		ValidateContradictionConfig: func() error {
 			_, err := retrieval.LoadConfig(configPath)
 			return err

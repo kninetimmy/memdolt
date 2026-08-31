@@ -188,6 +188,186 @@ export GOFLAGS=-tags=gms_pure_go
     preserve the batching and phasing before/after records; no dependency, schema
     migration, deferred backend, elicited review, host registration or provenance
     workflow is added.
+
+  **Before issue #106, production advertised those exact 15 tools,
+  `propose_fact` returned a live-key collision directly, and elicited review was
+  still absent. After it, the 15 tools and their behavior remain, and
+  `review_pending` is the sixteenth tool; an elicitation-capable
+  `propose_fact` also offers the approved same-key dialog.** The complete
+  structural blast radius is:
+
+  - `internal/mcpserver/tools.go` keeps every previous handler and note-batch
+    rule, registers `review_pending`, routes same-key `propose_fact` calls into
+    the new dialog, and clears pending elicitation rows when `Toolset.Close`
+    runs. `cmd/memdolt/serve.go` still registers that one toolset on the live
+    owner, so discovery, cache hints, agent-only attribution, shutdown ordering,
+    and note flush/retry/discard behavior still hold. The exact-sixteen rule
+    binds `RegisterTools` alone, not arbitrary go-sdk servers or deferred names.
+  - `internal/mcpserver/elicitation.go` owns both dialogs and their
+    `pendingElicitation` shape; `elicitation_state.go` stores each one as a real
+    row in process-local in-memory SQLite. Each 256-bit cryptographically random
+    `requestState` is stored only as a SHA-256 lookup hash, expires after two
+    minutes, is atomically deleted before response interpretation, and is bound
+    to the repository data directory, attributed MCP client, exact proposal IDs
+    and staging commits, queue position, and action. Before the cycle-1 fix,
+    proposal IDs and position were stored but the displayed commit was not, so a
+    branch reset to another single commit under the same ID could pass approval;
+    after it, every displayed commit is stored and passed into the
+    proposal-mutation critical section before merge. Missing, expired,
+    mismatched, forged, replayed, malformed,
+    incomplete, declined, or canceled responses cannot promote or discard a
+    proposal. Authorization-state insert or consume failure happens before
+    promotion and fails closed. Continuation bookkeeping is different: its
+    progress update runs after a selected proposal may already have merged, so
+    a failure stops traversal and reports that accepted prefix rather than
+    claiming the merge did not happen. Before issue #106, `Toolset` held only
+    pending note groups; after, it also owns this short-lived relational state,
+    which restart or `Close` destroys. This discipline binds states minted by
+    this toolset alone, not every go-sdk `requestState`; no Dolt migration,
+    persistent side-store file, or embedding-side-store table stores approval
+    material.
+  - `review_pending` offers repo proposals oldest-first. Modern 2026-07-28
+    successive review performs at most nine input rounds per call and returns a
+    single-use, expiry-bound continuation cursor carrying the untouched snapshot
+    and progress; using it reaches proposal ten without re-showing skipped
+    entries. Before the cycle-1 fix, the queue was truncated to nine and a later
+    call restarted at the same skipped entries, making the tail unreachable.
+    Genuinely legacy sessions use one form elicitation containing an approve or
+    skip field for every shown proposal, because the SDK legacy shim reinvokes a
+    handler only once; batch mode remains one form round on both protocols.
+    Batch approval is sequential, not atomic: each successful accept lands, and
+    a later guard refusal stops with the accepted prefix still durable. The
+    dialog and result now state that partial-progress rule; before the fix they
+    incorrectly promised that cancel or failure left the whole batch pending.
+    Global proposals never enter a dialog. Every terminal result reports their
+    count and terminal `memdolt review` remedy; a mixed queue on a client without
+    form elicitation reports both repo and global counts. Empty elicitation
+    capabilities retain the protocol's assumed-form compatibility, while a
+    URL-only capability gets the CLI fallback. The global exclusion binds
+    `review_pending` alone: `list_proposals` and the CLI remain able to see and
+    discard global proposals, subject to the shared mutation and cleanup rules
+    below.
+  - `localdolt.Store.proposalMu` is the one memdolt-owned proposal-mutation
+    boundary on a repository Store. Before the cycle-2 fix, expected-commit
+    validation excluded only another accept; staging, reject, and expiry could
+    mutate the same branch after validation. After it, `stage`,
+    `AcceptProposal`, `RejectProposal`, and `ExpireProposals` share the mutex, so
+    one of those operations finishes before another can act on the branch.
+    `PendingProposals` and `ProposalDiff` remain reads, direct-lane commits still
+    move `main` independently, and a foreign Dolt session does not share the Go
+    mutex. Before the cycle-3 fix, expected-commit acceptance shared the same
+    eager cleanup as CLI accept, reject, expire, and failed staging: it read the
+    branch head, compared it with the observed commit, then called
+    `DOLT_BRANCH -D`. Dolt v1.88.1 exposes branch heads through the read-only
+    `dolt_branches` table and gives `DOLT_BRANCH -D` only a branch name, so a
+    foreign session could move the branch after that read and lose unseen
+    content in the unconditional delete. After the fix, any `AcceptProposal`
+    call with non-empty `ExpectedCommit` merges only the displayed hash and
+    never deletes the branch. Production MCP is the caller with that option;
+    the unchanged merged branch becomes cleanup residue hidden by
+    `PendingProposals`, while a foreign commit makes it pending again and is
+    never removed by elicited acceptance. This no-delete restriction binds
+    expected-commit accepts alone, not every `AcceptProposal` or review verb.
+    CLI accept, reject, expire, and abandoned-stage cleanup intentionally retain
+    their prior automatic `deleteProposalBranch` call. Its read/compare catches
+    a foreign change before the final read and `proposalMu` excludes memdolt-owned
+    races, but no atomic expected-head deletion exists, so those CLI/cleanup
+    paths do not claim protection from a foreign change in the final interval.
+  - Confirmed MCP acceptance calls `ReviewAcceptExpected` as reviewer `user`
+    with `force=false`; `internal/review.AcceptExpected` carries the displayed
+    commit into `localdolt.AcceptOptions.ExpectedCommit`.
+    `localdolt.AcceptProposal` compares that commit inside the proposal-mutation
+    boundary before any merge. Its contradiction validation
+    and inference, accept-time deny-list scan, one-commit and supersede-shape
+    checks, conflict/constraint verification, and reviewer-authored merge still
+    run. The expected-commit/no-force/no-automatic-delete rule binds elicited
+    MCP accepts only. CLI `ReviewAccept` passes no expected commit, still
+    attempts post-merge branch deletion, and CLI `review accept --force`
+    retains its prior operator behavior.
+    `cmd/memdolt.localCommandStore` implements both application seams, while
+    `runServe` gives owner IPC the expected variant; command selection,
+    application config loading, and the existing CLI output remain unchanged.
+  - CLI `AcceptProposal` retains its established post-merge contract: a branch
+    cleanup failure returns the populated result proving `main` moved together
+    with the error. Expected-commit acceptance now returns its populated result
+    with the merged branch deliberately retained, so that policy is not a
+    cleanup failure. The authenticated owner wire still preserves any populated
+    result-plus-error returned by the application gate. Before the cycle-2 fix,
+    successive, batch, and legacy
+    elicitation discarded that result and reported the proposal as blocked.
+    After it, each mode records the accepted proposal and merge, reports the
+    cleanup error separately in `failures`, returns `cleanup_failed`, and stops
+    without attempting later entries; earlier batch acceptances remain reported
+    too. Before this fix, `PendingProposals` treated every physical proposal
+    branch as pending, so an unchanged branch left after a landed merge could be
+    offered again. After it, a branch whose current head is reachable from
+    `main` is cleanup residue and is excluded from pending results, while a branch
+    changed to an unmerged head remains pending for review. This reachability
+    filter binds `PendingProposals` and its callers, not `ProposalDiff`, reject,
+    expiry, or the physical branch itself.
+    Before the cycle-3 terminal fix, `reviewTerminal` replaced all of that
+    landed-result and cleanup-error evidence with an empty tool error if its
+    final `PendingProposals` recount failed. After it, the accepted prefix,
+    status, skips, and failures are primary; repository/global counts are
+    best-effort, `recountError` names a failed refresh separately, and the
+    terminal remedy sends the operator to `memdolt review` rather than
+    presenting zero counts as current. This result-preservation rule binds
+    `reviewTerminal`; the initial queue snapshot in `startReview` still fails
+    closed if `PendingProposals` cannot run.
+  - On a live repository key, `propose_fact` shows the current and proposed
+    facts and binds its response to both. Before the cycle-1 fix, the handler
+    re-read the shown row and then separately called a staging method, so main
+    could change between comparison and branch cut; after it,
+    `localdolt.Store.ProposeFactResolution` receives the exact nullable row
+    image, cuts its proposal branch from main, and compares that image on the
+    new branch before applying the selected write. A change before branch cut
+    therefore deletes the abandoned branch and stages nothing; a main change
+    after the cut remains an ordinary accept-time merge conflict. Overwrite
+    stages an in-place value/source/kind/evidence update and clears
+    `verified_at`; supersede stages the existing link-first/replacement-second
+    shape; keep-both validates and inserts a distinct dotted key. Cancel,
+    decline, malformed input, changed current row, or missing elicitation writes
+    nothing. This expected-snapshot rule binds `ProposeFactResolution` alone,
+    not every `ProposeFact`, `ProposeSupersede`, or fact write. Fresh-key staging
+    and all three original staged tools retain their prior contracts, and every
+    successful conflict choice remains a one-commit proposal off `main`.
+  - `storeipc.Backend`, the explicit operation allow-list, and `OwnerStore`
+    carry the expected-snapshot fact resolution and expected-commit review
+    fields without changing authenticated ownership, actor propagation, bound
+    SQL arguments, visible errors, or the one-submit/no-retry write boundary.
+    The review operation now carries a populated post-merge result and cleanup
+    error in one authenticated response; `OwnerStore` restores the same
+    result-plus-error Go contract without retrying the write. Ordinary pre-merge
+    failures retain the existing non-200 error path. These additions bind that
+    owner transport, not arbitrary HTTP handlers or other operation results.
+  - `internal/mcpserver/elicitation_test.go` adds modern MRTR and legacy-shim
+    coverage, real one-round legacy multi-proposal review, proposal-ten cursor
+    traversal, mixed and URL-only fallback, partial batch progress, the two
+    storage-failure phases, request-state attacks, and atomic fact-conflict
+    outcomes. It now also covers populated-result cleanup failure in modern
+    successive, batch, and genuine legacy review, including the accepted prefix
+    and pending tail, plus terminal recount failure in all three modes and a
+    prior successful batch acceptance. `localdolt/review_mcp_test.go` retains the pre-response
+    successive/batch reset refusals; deterministically pauses after
+    expected-commit validation for reject and expiry serialization; resets and
+    amends externally after that validation to prove only the displayed hash
+    merges and changed branches are retained; deterministically inserts foreign
+    content at the final post-merge cleanup boundary to prove expected-commit
+    acceptance removes nothing; and injects CLI cleanup failure to prove the
+    result is populated and an unchanged merged branch is not pending.
+    `storeipc_test.go` proves that result-plus-error contract
+    survives the authenticated owner route. These tests exercise the named
+    seams and do not claim to coordinate a foreign process inside the Go mutex
+    or exhaust every Dolt branch operation. `tools_test.go` and
+    `cmd/memdolt/serve_test.go` still expect the prior 15 plus
+    `review_pending`; `server_test.go` only exposes client options to these
+    fixtures; `storeipc_test.go` covers routed resolution and expected-commit
+    parity; and the callback signature updates in doctor/soak fixtures change no
+    shipped behavior. PRD §11.1 preserves the matching before/after. No new
+    dependency, persistent side store, durable schema, host registration,
+    global promotion, or provenance schema is added. CLI and MCP use the same
+    mutation, acceptance-guard, result, and pending-list paths; only their
+    post-merge cleanup differs intentionally as stated above.
 - Create a store: `go run ./cmd/memdolt init` makes `.memdolt/dolt` beneath
   the current directory (`--dir` points it elsewhere) and applies every
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
@@ -260,9 +440,13 @@ export GOFLAGS=-tags=gms_pure_go
   target, one-commit, deny-list, conflict, constraint, attribution and branch
   deletion rules above still hold.
 
-  `AcceptProposal` calls on one repository-owning Store are serialized: the
-  second accept probes the first one's durable result. This lock binds that
-  method alone, not reads, staging, direct-lane commits, or every Store.
+  Before issue #106, `AcceptProposal` calls on one repository-owning Store were
+  serialized so the second accept probed the first one's durable result; that
+  lock bound acceptance alone. After issue #106, `proposalMu` retains that
+  ordering and also covers memdolt proposal staging, reject, and expiry. It does
+  not cover reads, direct-lane commits, every Store, or foreign Dolt sessions;
+  the issue #106 blast-radius record above states the external-mutation and
+  deletion behavior.
 
   A branch does not gain the supersede bypass from its metadata label alone:
   accept verifies the exact staged shape (one old live fact linked, one live

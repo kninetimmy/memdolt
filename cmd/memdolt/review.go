@@ -56,6 +56,19 @@ func (s *localCommandStore) ReviewAccept(
 	return reviewgate.Accept(ctx, s.Store, paths.ConfigFile(), id, reviewer, force)
 }
 
+func (s *localCommandStore) ReviewAcceptExpected(
+	ctx context.Context,
+	id, expectedCommit string,
+	reviewer store.Actor,
+	force bool,
+) (localdolt.AcceptResult, error) {
+	paths, err := layout.New(s.baseDir)
+	if err != nil {
+		return localdolt.AcceptResult{}, err
+	}
+	return reviewgate.AcceptExpected(ctx, s.Store, paths.ConfigFile(), id, expectedCommit, reviewer, force)
+}
+
 func newReviewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "review",

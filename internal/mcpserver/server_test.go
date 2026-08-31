@@ -200,6 +200,17 @@ func connect(
 	legacy bool,
 	clientMiddleware ...mcp.Middleware,
 ) (*mcp.ClientSession, *mcp.ServerSession) {
+	return connectWithOptions(t, server, clientInfo, legacy, nil, clientMiddleware...)
+}
+
+func connectWithOptions(
+	t *testing.T,
+	server *mcp.Server,
+	clientInfo *mcp.Implementation,
+	legacy bool,
+	options *mcp.ClientOptions,
+	clientMiddleware ...mcp.Middleware,
+) (*mcp.ClientSession, *mcp.ServerSession) {
 	t.Helper()
 	ctx := context.Background()
 	clientSide, serverSide := mcp.NewInMemoryTransports()
@@ -217,7 +228,7 @@ func connect(
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := mcp.NewClient(clientInfo, nil)
+	client := mcp.NewClient(clientInfo, options)
 	client.AddSendingMiddleware(clientMiddleware...)
 	clientSession, err := client.Connect(ctx, clientSide, nil)
 	if err != nil {

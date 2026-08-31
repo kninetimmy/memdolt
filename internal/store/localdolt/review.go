@@ -91,9 +91,9 @@ const contradictionThreshold = float32(2.0)
 // crockfordAlphabet is ULID's base32 alphabet (PRD §6.1's CHAR(26) keys).
 const crockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-// PendingProposal is one proposal awaiting review: the branch that carries
-// it (PRD §3.2 — a proposal's status is its branch's existence) together
-// with the §6.2 metadata row staged on it.
+// PendingProposal is one proposal awaiting review: an unmerged branch that
+// carries the §6.2 metadata row staged on it. A branch left behind after its
+// head reached main is cleanup residue, not another pending review.
 type PendingProposal struct {
 	// ID is the proposal's ULID, which is also its branch's name.
 	ID string `json:"id"`
@@ -218,7 +218,12 @@ type ContradictionScorer interface {
 // nil callbacks fail closed. Supersede proposals and explicit Force accepts
 // deliberately skip both callbacks and still use the same merge flow.
 type AcceptOptions struct {
-	Force                       bool
+	Force bool
+	// ExpectedCommit, when non-empty, is the staging commit an elicited
+	// reviewer saw. AcceptProposal compares it with the branch head inside its
+	// proposal-mutation critical section before any merge work starts and
+	// retains the merged branch as cleanup residue instead of deleting it.
+	ExpectedCommit              string
 	ValidateContradictionConfig func() error
 	OpenContradictionScorer     func(context.Context) (ContradictionScorer, error)
 }
@@ -246,10 +251,10 @@ func (e *ContradictionError) Error() string {
 
 func (e *ContradictionError) Unwrap() error { return ErrContradiction }
 
-// PendingProposals lists every proposal awaiting review, oldest branch
-// name first. A proposal is pending exactly while its branch exists
-// (PRD §3.2): there is no status column to consult and none to fall out of
-// step with the branch.
+// PendingProposals lists every unmerged proposal awaiting review, oldest branch
+// name first. Branch existence remains the lifecycle record, but a branch whose
+// current head is already reachable from main is cleanup residue from a landed
+// accept and is not offered for approval again.
 func (s *Store) PendingProposals(ctx context.Context) ([]PendingProposal, error) {
 	db, err := s.handle()
 	if err != nil {
@@ -261,6 +266,13 @@ func (s *Store) PendingProposals(ctx context.Context) ([]PendingProposal, error)
 	}
 	pending := make([]PendingProposal, 0, len(branches))
 	for _, branch := range branches {
+		merged, err := commitMergedIntoMain(ctx, db, branch.commit)
+		if err != nil {
+			return nil, err
+		}
+		if merged {
+			continue
+		}
 		proposal, err := hydrate(ctx, db, branch)
 		if err != nil {
 			return nil, err
@@ -310,6 +322,9 @@ func (s *Store) ProposalDiff(ctx context.Context, id string) (ProposalDiff, erro
 // where it was (PRD §3.1). Rejection discards one operator-named proposal;
 // expiry is the other discard path and sweeps old proposal branches by age.
 func (s *Store) RejectProposal(ctx context.Context, id string) (PendingProposal, error) {
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
 	db, err := s.handle()
 	if err != nil {
 		return PendingProposal{}, err
@@ -328,7 +343,7 @@ func (s *Store) RejectProposal(ctx context.Context, id string) (PendingProposal,
 	if err != nil {
 		return PendingProposal{}, err
 	}
-	if _, err := db.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", branch); err != nil {
+	if err := deleteProposalBranch(ctx, db, record, "rejected"); err != nil {
 		return PendingProposal{}, fmt.Errorf("localdolt: delete the rejected proposal branch %q: %w", branch, err)
 	}
 	return proposal, nil
@@ -340,6 +355,9 @@ func (s *Store) RejectProposal(ctx context.Context, id string) (PendingProposal,
 // than the proposals metadata, so a branch whose metadata row cannot be read
 // is swept rather than left behind forever.
 func (s *Store) ExpireProposals(ctx context.Context, before time.Time) ([]PendingProposal, error) {
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
 	db, err := s.handle()
 	if err != nil {
 		return nil, err
@@ -361,7 +379,7 @@ func (s *Store) ExpireProposals(ctx context.Context, before time.Time) ([]Pendin
 		if err != nil {
 			proposal = branch.bare()
 		}
-		if _, err := db.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", branch.name); err != nil {
+		if err := deleteProposalBranch(ctx, db, branch, "expired"); err != nil {
 			return expired, fmt.Errorf("localdolt: delete the expired proposal branch %q: %w", branch.name, err)
 		}
 		expired = append(expired, proposal)
@@ -369,9 +387,10 @@ func (s *Store) ExpireProposals(ctx context.Context, before time.Time) ([]Pendin
 	return expired, nil
 }
 
-// AcceptProposal promotes one proposal into durable truth: it merges
-// exactly the one commit that proposal was staged with into main and
-// deletes its branch (PRD §3.1, §7.1).
+// AcceptProposal promotes one proposal into durable truth: it merges exactly
+// the one commit that proposal was staged with into main (PRD §3.1, §7.1).
+// CLI acceptance then deletes the branch. Expected-commit acceptance retains
+// it as cleanup residue because Dolt has no expected-head branch deletion.
 //
 // "Exactly one commit" is checked rather than assumed, and the commit is
 // named by hash rather than by branch. Before this the accept merged the
@@ -398,12 +417,27 @@ func (s *Store) ExpireProposals(ctx context.Context, before time.Time) ([]Pendin
 // therefore also the abort: main does not move, the working set is clean,
 // both surfaces are empty and the proposal branch is untouched.
 func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Actor, options AcceptOptions) (AcceptResult, error) {
-	// Two reviewed claims must not both probe the same old main and then land
-	// behind each other's backs. One Store owns the repository, so serializing
-	// this one promotion method makes the second accept compare against the
-	// first accept's durable result.
-	s.acceptMu.Lock()
-	defer s.acceptMu.Unlock()
+	return s.acceptProposal(ctx, id, reviewer, options, acceptHooks{})
+}
+
+type acceptHooks struct {
+	afterExpectedCommit func()
+	beforeCleanup       func()
+	cleanupError        func() error
+}
+
+func (s *Store) acceptProposal(
+	ctx context.Context,
+	id string,
+	reviewer store.Actor,
+	options AcceptOptions,
+	hooks acceptHooks,
+) (AcceptResult, error) {
+	// One Store owns proposal-branch mutations. Accept, reject, expiry, and
+	// memdolt staging share this boundary so none can invalidate another's
+	// observed branch between validation and mutation.
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
 
 	db, err := s.handle()
 	if err != nil {
@@ -450,6 +484,14 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 	proposal, err := hydrate(ctx, conn, record)
 	if err != nil {
 		return AcceptResult{}, err
+	}
+	if options.ExpectedCommit != "" && proposal.Commit != options.ExpectedCommit {
+		return AcceptResult{}, fmt.Errorf(
+			"localdolt: proposal %s changed after review showed commit %s; current commit is %s; nothing was promoted or removed",
+			id, options.ExpectedCommit, proposal.Commit)
+	}
+	if hooks.afterExpectedCommit != nil {
+		hooks.afterExpectedCommit()
 	}
 	// PRD §10 promotes a global proposal by copying it into the global
 	// database, which does not exist yet. Merging it into this repository's
@@ -508,14 +550,32 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 	if err != nil {
 		return AcceptResult{}, err
 	}
+	if hooks.beforeCleanup != nil {
+		hooks.beforeCleanup()
+	}
 
-	// The branch is deleted after the merge has landed, never before: a
-	// deletion that ran first would discard the proposal if the merge then
-	// failed.
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", branch); err != nil {
+	// DOLT_BRANCH -D accepts only a branch name. A read of dolt_branches
+	// followed by that call cannot atomically prove that a foreign session did
+	// not move the branch in between. Expected-commit acceptance is the MCP
+	// path, so preserve its merged branch as hidden cleanup residue rather than
+	// risk deleting content created after the human reviewed it.
+	if options.ExpectedCommit != "" {
+		return result, nil
+	}
+
+	// The CLI contract still attempts cleanup after the merge has landed, never
+	// before: a deletion that ran first would discard the proposal if the merge
+	// then failed.
+	var cleanupErr error
+	if hooks.cleanupError != nil {
+		cleanupErr = hooks.cleanupError()
+	} else {
+		cleanupErr = deleteProposalBranch(ctx, conn, record, "accepted")
+	}
+	if cleanupErr != nil {
 		return result, fmt.Errorf(
 			"localdolt: proposal %s was merged as %s but its branch %q could not be deleted: %w",
-			id, result.Commit, branch, err)
+			id, result.Commit, branch, cleanupErr)
 	}
 	return result, nil
 }
@@ -1354,8 +1414,38 @@ func findProposalBranch(ctx context.Context, q branchQuerier, branch string) (br
 		}
 	}
 	return branchRecord{}, fmt.Errorf(
-		"localdolt: there is no pending proposal %q; a proposal is pending exactly while its branch %q exists (PRD §3.2)",
+		"localdolt: there is no pending proposal %q because its branch %q does not exist (PRD §3.2)",
 		strings.TrimPrefix(branch, ProposalBranchPrefix), branch)
+}
+
+func commitMergedIntoMain(ctx context.Context, q branchQuerier, commit string) (bool, error) {
+	var base string
+	if err := q.QueryRowContext(ctx, "SELECT DOLT_MERGE_BASE(?, ?)", commit, MainBranch).Scan(&base); err != nil {
+		return false, fmt.Errorf("localdolt: determine whether proposal commit %s is already on %q: %w", commit, MainBranch, err)
+	}
+	return base == commit, nil
+}
+
+// deleteProposalBranch performs the established best-effort cleanup for CLI
+// review verbs and abandoned staging. The proposal mutex excludes
+// memdolt-owned mutations, and the comparison catches a foreign change that
+// precedes the read. Dolt exposes no expected-head delete, so a foreign change
+// after the read can still race DOLT_BRANCH -D. Expected-commit acceptance
+// therefore never calls this helper.
+func deleteProposalBranch(ctx context.Context, q branchMutator, observed branchRecord, operation string) error {
+	current, err := findProposalBranch(ctx, q, observed.name)
+	if err != nil {
+		return err
+	}
+	if current.commit != observed.commit {
+		return fmt.Errorf(
+			"localdolt: refusing to delete the %s proposal branch %q: its head changed from %s to %s after it was read; unseen branch content was retained",
+			operation, observed.name, observed.commit, current.commit)
+	}
+	if _, err := q.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", observed.name); err != nil {
+		return err
+	}
+	return nil
 }
 
 // requireOneCommit refuses to promote a proposal branch carrying anything
@@ -1574,9 +1664,9 @@ func mergeBase(ctx context.Context, tx *sql.Tx, left, right string) (string, err
 }
 
 // branchHead reports the commit a branch points at.
-func branchHead(ctx context.Context, tx *sql.Tx, branch string) (string, error) {
+func branchHead(ctx context.Context, q branchQuerier, branch string) (string, error) {
 	var head string
-	err := tx.QueryRowContext(ctx, "SELECT hash FROM dolt_branches WHERE name = ?", branch).Scan(&head)
+	err := q.QueryRowContext(ctx, "SELECT hash FROM dolt_branches WHERE name = ?", branch).Scan(&head)
 	if err != nil {
 		return "", fmt.Errorf("localdolt: read the head of %q: %w", branch, err)
 	}
@@ -1618,4 +1708,9 @@ func sortedReviewedTables() []string { return slices.Sorted(maps.Keys(reviewedLa
 type branchQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type branchMutator interface {
+	branchQuerier
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }

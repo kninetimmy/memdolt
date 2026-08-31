@@ -137,8 +137,8 @@ func runOwner(cfg roleConfig) error {
 
 	routes, err := storeipc.NewHandler(storeipc.Config{
 		Store: st,
-		ReviewAccept: func(ctx context.Context, id string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
-			return reviewgate.Accept(ctx, st, filepath.Join(cfg.BaseDir, ".memdolt", "config.toml"), id, reviewer, force)
+		ReviewAccept: func(ctx context.Context, id, expectedCommit string, reviewer store.Actor, force bool) (localdolt.AcceptResult, error) {
+			return reviewgate.AcceptExpected(ctx, st, filepath.Join(cfg.BaseDir, ".memdolt", "config.toml"), id, expectedCommit, reviewer, force)
 		},
 		Logger: logger,
 	})

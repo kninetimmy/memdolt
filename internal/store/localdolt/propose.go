@@ -130,6 +130,31 @@ type Fact struct {
 	Evidence string
 }
 
+// FactSnapshot is the exact durable row a fact-conflict dialog showed. The
+// nullable fields stay pointers so changing NULL to an empty string is still a
+// changed row. ProposeFactResolution validates this image on the proposal
+// branch it just cut from main before it writes anything.
+type FactSnapshot struct {
+	ID           string     `json:"id"`
+	Key          string     `json:"key"`
+	Value        string     `json:"value"`
+	Source       *string    `json:"source,omitempty"`
+	Kind         *string    `json:"kind,omitempty"`
+	Evidence     *string    `json:"evidence,omitempty"`
+	VerifiedAt   *time.Time `json:"verifiedAt,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	SupersededBy *string    `json:"supersededBy,omitempty"`
+}
+
+// FactResolution is one staging outcome from PRD §11.1's live-key dialog.
+type FactResolution string
+
+const (
+	FactResolutionOverwrite FactResolution = "overwrite"
+	FactResolutionSupersede FactResolution = "supersede"
+	FactResolutionKeepBoth  FactResolution = "keep_both"
+)
+
 func (f Fact) validate() error {
 	if strings.TrimSpace(f.Key) == "" {
 		return errors.New("a fact requires a key")
@@ -201,7 +226,8 @@ type StagedProposal struct {
 
 	// RowID is the ULID of the facts or decisions row the branch proposes.
 	// For a supersede proposal it is the replacement row, which is also the
-	// value written into the superseded row's superseded_by.
+	// value written into the superseded row's superseded_by. For an overwrite
+	// it is the existing row whose reviewed fields change.
 	RowID string
 
 	// Commit is the hash of the branch's single commit.
@@ -218,7 +244,8 @@ type StagedProposal struct {
 // PRD §11.1's fact-key elicitation is for — overwrite, supersede, keep-both
 // under a distinct key, or cancel — so it is reported here rather than
 // resolved: a staged write that quietly became something else would defeat
-// the review gate. ProposeSupersede is the supersede answer.
+// the review gate. ProposeFactResolution is the expected-snapshot seam for
+// those answers; the ordinary ProposeSupersede API remains available too.
 func (s *Store) ProposeFact(ctx context.Context, p Proposal, f Fact) (StagedProposal, error) {
 	if err := f.validate(); err != nil {
 		return StagedProposal{}, fmt.Errorf("localdolt: propose fact: %w", err)
@@ -235,6 +262,67 @@ func (s *Store) ProposeFact(ctx context.Context, p Proposal, f Fact) (StagedProp
 		text:       f.text(),
 		newFactKey: f.Key,
 	})
+}
+
+// ProposeFactResolution stages one reviewed answer to a live-key dialog. The
+// branch is cut from main before expected is compared, so a main change before
+// the response fails without leaving a proposal branch, while a later main
+// change is handled by the normal accept-time merge guards.
+func (s *Store) ProposeFactResolution(
+	ctx context.Context,
+	p Proposal,
+	expected FactSnapshot,
+	replacement Fact,
+	resolution FactResolution,
+) (StagedProposal, error) {
+	if err := expected.validateLive(); err != nil {
+		return StagedProposal{}, fmt.Errorf("localdolt: propose fact resolution: %w", err)
+	}
+	if err := replacement.validate(); err != nil {
+		return StagedProposal{}, fmt.Errorf("localdolt: propose fact resolution: %w", err)
+	}
+	now := time.Now().UTC()
+	w := stagedWrite{proposal: p, now: now, text: replacement.text(), expectedFact: &expected}
+	switch resolution {
+	case FactResolutionOverwrite:
+		if replacement.Key != expected.Key {
+			return StagedProposal{}, errors.New("localdolt: an overwrite must keep the shown fact key")
+		}
+		w.kind = KindFact
+		w.rowID = expected.ID
+		w.message = "propose overwrite fact " + replacement.Key
+		w.statements = []store.Statement{{
+			SQL: "UPDATE facts SET value = ?, source = ?, kind = ?, evidence = ?, verified_at = NULL " +
+				"WHERE id = ? AND `key` = ? AND superseded_by IS NULL",
+			Args: []any{
+				replacement.Value, p.Actor.Name, nullable(replacement.Kind), nullable(replacement.Evidence),
+				expected.ID, expected.Key,
+			},
+		}}
+	case FactResolutionSupersede:
+		if replacement.Key != expected.Key {
+			return StagedProposal{}, errors.New("localdolt: a supersede replacement must keep the shown fact key")
+		}
+		w.kind = KindSupersede
+		w.rowID = newID()
+		w.message = "propose supersede fact " + replacement.Key
+		w.statements = []store.Statement{
+			{SQL: "UPDATE facts SET superseded_by = ? WHERE id = ?", Args: []any{w.rowID, expected.ID}},
+			insertFact(w.rowID, replacement, p.Actor, now),
+		}
+	case FactResolutionKeepBoth:
+		if !validDistinctDottedKey(replacement.Key, expected.Key) {
+			return StagedProposal{}, errors.New("localdolt: keep-both requires a distinct dotted fact key with no empty segment")
+		}
+		w.kind = KindFact
+		w.rowID = newID()
+		w.message = "propose fact " + replacement.Key
+		w.statements = []store.Statement{insertFact(w.rowID, replacement, p.Actor, now)}
+		w.newFactKey = replacement.Key
+	default:
+		return StagedProposal{}, fmt.Errorf("localdolt: unknown fact resolution %q", resolution)
+	}
+	return s.stage(ctx, w)
 }
 
 // ProposeDecision stages a new decision for review (PRD §6.2), on its own
@@ -313,9 +401,9 @@ type stagedWrite struct {
 	// rowID is the ULID of the facts or decisions row being proposed.
 	rowID string
 
-	// now stamps the proposed row and the proposals row, so the two agree
-	// on when the proposal was made. The ids beside them carry their own
-	// mint time, a moment later, from the ULID library's clock.
+	// now stamps the proposed row and the proposals row, so the two agree on
+	// when the proposal was made. An overwrite preserves the existing row's
+	// created_at and uses now only for its proposals row.
 	now time.Time
 
 	// message is the commit's structured one-liner (PRD §3.1). It names the
@@ -337,9 +425,14 @@ type stagedWrite struct {
 	// stage verifies it is live on the branch before anything is written.
 	supersededID string
 
-	// newFactKey is set only by ProposeFact. A plain fact insert must not
-	// collide with a live key; supersede deliberately transfers that key and
-	// therefore does not set it.
+	// expectedFact, when set, is the exact live row a caller showed before it
+	// asked how to resolve a key conflict. stage validates it on the branch it
+	// just cut from main before applying the selected write.
+	expectedFact *FactSnapshot
+
+	// newFactKey is set by ProposeFact and the keep-both resolution. Their
+	// plain fact inserts must not collide with a live key; supersede deliberately
+	// transfers that key and therefore does not set it.
 	newFactKey string
 
 	// afterCheckout synchronizes the cleanup regression after this write's
@@ -361,6 +454,11 @@ type stagedWrite struct {
 // branch left behind would be indistinguishable to review from a pending
 // proposal that has something in it.
 func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error) {
+	// Staging creates and may remove a proposal branch. Keep those mutations
+	// in the same critical section as accept, reject, and expiry.
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
 	db, err := s.handle()
 	if err != nil {
 		return StagedProposal{}, err
@@ -397,22 +495,31 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	if err := requireCleanWorkingSet(ctx, conn, "stage a proposal"); err != nil {
 		return StagedProposal{}, err
 	}
+	mainHead, err := branchHead(ctx, conn, MainBranch)
+	if err != nil {
+		return StagedProposal{}, err
+	}
+	created := branchRecord{name: branch, commit: mainHead}
 
 	// Cut from main whatever branch the session is on: main is durable
 	// truth and a proposal is a diff against it (PRD §3.1).
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH(?, ?)", branch, MainBranch); err != nil {
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH(?, ?)", branch, mainHead); err != nil {
 		return StagedProposal{}, fmt.Errorf("localdolt: create proposal branch %q from %q: %w", branch, MainBranch, err)
 	}
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_CHECKOUT(?)", branch); err != nil {
 		return StagedProposal{}, errors.Join(
 			fmt.Errorf("localdolt: check out proposal branch %q: %w", branch, err),
-			deleteBranch(ctx, conn, branch))
+			deleteProposalBranch(ctx, conn, created, "abandoned"))
 	}
 	if w.afterCheckout != nil {
 		w.afterCheckout()
 	}
 
 	result, stageErr := s.stageOnBranch(ctx, conn, w, statements)
+	cleanupRecord := created
+	if result.Hash != "" {
+		cleanupRecord.commit = result.Hash
+	}
 
 	if restoreErr := checkoutBranch(ctx, conn, origin); restoreErr != nil {
 		// The session is stranded on the proposal branch. Whatever else
@@ -422,10 +529,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 		discardConn(conn)
 		return StagedProposal{}, errors.Join(stageErr,
 			fmt.Errorf("localdolt: the session that staged %q could not return to %q: %w", branch, origin, restoreErr),
-			deleteBranchFromPool(context.WithoutCancel(ctx), db, branch))
+			deleteProposalBranchFromPool(context.WithoutCancel(ctx), db, cleanupRecord, "abandoned"))
 	}
 	if stageErr != nil {
-		return StagedProposal{}, errors.Join(stageErr, deleteBranch(context.WithoutCancel(ctx), conn, branch))
+		return StagedProposal{}, errors.Join(stageErr,
+			deleteProposalBranch(context.WithoutCancel(ctx), conn, cleanupRecord, "abandoned"))
 	}
 
 	return StagedProposal{
@@ -439,6 +547,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 
 // stageOnBranch writes the proposal on the branch conn is checked out to.
 func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite, statements []store.Statement) (store.CommitResult, error) {
+	if w.expectedFact != nil {
+		if err := requireExpectedLiveFact(ctx, conn, *w.expectedFact); err != nil {
+			return store.CommitResult{}, err
+		}
+	}
 	if w.newFactKey != "" {
 		if err := requireUnusedFactKey(ctx, conn, w.newFactKey); err != nil {
 			return store.CommitResult{}, err
@@ -516,6 +629,89 @@ func requireLiveFact(ctx context.Context, conn *sql.Conn, id string) error {
 	return nil
 }
 
+func (f FactSnapshot) validateLive() error {
+	if strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.Key) == "" {
+		return errors.New("the shown live fact requires an id and key")
+	}
+	if f.SupersededBy != nil {
+		return errors.New("the shown fact is not live")
+	}
+	return nil
+}
+
+func requireExpectedLiveFact(ctx context.Context, conn *sql.Conn, expected FactSnapshot) error {
+	actual, err := factSnapshotByID(ctx, conn, expected.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("localdolt: the live fact %q changed after it was shown; no proposal was staged", expected.ID)
+		}
+		return fmt.Errorf("localdolt: read the shown fact %q: %w", expected.ID, err)
+	}
+	if !sameFactSnapshot(actual, expected) || actual.SupersededBy != nil {
+		return fmt.Errorf("localdolt: the live fact %q changed after it was shown; no proposal was staged", expected.ID)
+	}
+	return nil
+}
+
+func factSnapshotByID(ctx context.Context, conn *sql.Conn, id string) (FactSnapshot, error) {
+	var fact FactSnapshot
+	var source, kind, evidence, superseded sql.NullString
+	var verified, created sql.NullTime
+	err := conn.QueryRowContext(ctx,
+		"SELECT id, `key`, value, source, kind, evidence, verified_at, created_at, superseded_by "+
+			"FROM facts WHERE id = ?", id).Scan(
+		&fact.ID, &fact.Key, &fact.Value, &source, &kind, &evidence, &verified, &created, &superseded)
+	if err != nil {
+		return FactSnapshot{}, err
+	}
+	fact.Source = nullStringPointer(source)
+	fact.Kind = nullStringPointer(kind)
+	fact.Evidence = nullStringPointer(evidence)
+	fact.SupersededBy = nullStringPointer(superseded)
+	if verified.Valid {
+		stamp := verified.Time
+		fact.VerifiedAt = &stamp
+	}
+	if created.Valid {
+		fact.CreatedAt = created.Time
+	}
+	return fact, nil
+}
+
+func nullStringPointer(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
+}
+
+func sameFactSnapshot(a, b FactSnapshot) bool {
+	return a.ID == b.ID && a.Key == b.Key && a.Value == b.Value &&
+		equalStringPointers(a.Source, b.Source) && equalStringPointers(a.Kind, b.Kind) &&
+		equalStringPointers(a.Evidence, b.Evidence) && equalStringPointers(a.SupersededBy, b.SupersededBy) &&
+		equalTimePointers(a.VerifiedAt, b.VerifiedAt) && a.CreatedAt.Equal(b.CreatedAt)
+}
+
+func equalStringPointers(a, b *string) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+func equalTimePointers(a, b *time.Time) bool {
+	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
+}
+
+func validDistinctDottedKey(key, old string) bool {
+	if key == old || key != strings.TrimSpace(key) || !strings.Contains(key, ".") {
+		return false
+	}
+	for _, part := range strings.Split(key, ".") {
+		if part == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func checkoutBranch(ctx context.Context, conn *sql.Conn, branch string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("localdolt: check out %q: %w", branch, err)
@@ -526,27 +722,17 @@ func checkoutBranch(ctx context.Context, conn *sql.Conn, branch string) error {
 	return nil
 }
 
-// deleteBranch removes a proposal branch that staging did not fill. -D
-// rather than -d because the branch may hold a commit that main does not,
-// and a rejected proposal is deleted unmerged by design (PRD §3.1).
-func deleteBranch(ctx context.Context, conn *sql.Conn, branch string) error {
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", branch); err != nil {
-		return fmt.Errorf("localdolt: delete the abandoned proposal branch %q: %w", branch, err)
-	}
-	return nil
-}
-
-// deleteBranchFromPool removes an abandoned branch through a fresh session.
+// deleteProposalBranchFromPool removes an abandoned branch through a fresh session.
 // It is used when the staging session cannot return to its origin and is no
 // longer trustworthy; deleting the branch from the session still checked out
 // to it would fail because a branch cannot delete itself.
-func deleteBranchFromPool(ctx context.Context, db *sql.DB, branch string) error {
+func deleteProposalBranchFromPool(ctx context.Context, db *sql.DB, record branchRecord, operation string) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("localdolt: acquire a fresh session to clean up %q: %w", branch, err)
+		return fmt.Errorf("localdolt: acquire a fresh session to clean up %q: %w", record.name, err)
 	}
 	defer func() { _ = conn.Close() }()
-	return deleteBranch(ctx, conn, branch)
+	return deleteProposalBranch(ctx, conn, record, operation)
 }
 
 // discardConn marks a connection unusable so the pool closes it instead of
