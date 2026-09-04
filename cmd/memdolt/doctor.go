@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -22,12 +23,11 @@ import (
 
 // The three verdicts a check can reach.
 //
-// The distinction that matters is between fail and warn, and it is not
-// severity: it is whether memdolt repairs the condition by itself. A stale
-// lock record and an orphaned pidfile are both cleared by the next open
-// (PRD §5.2.3), so reporting them is useful and exiting nonzero for them
-// would train an operator to ignore the exit code. Everything memdolt
-// cannot resolve on its own fails.
+// Before the host-registration check, warn meant only a condition memdolt
+// repairs itself. After it, warn also carries an actionable integration
+// advisory that does not make the repository unsafe to use. Fail remains a
+// condition that prevents safe operation. Stale ownership records retain
+// their existing warning and zero-exit behavior (PRD §5.2.3).
 const (
 	statusOK   = "ok"
 	statusWarn = "warn"
@@ -54,20 +54,21 @@ func newDoctorCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Report store ownership, IPC reachability, schema skew, and empty recalls",
+		Short: "Report store, retrieval, and host-registration health",
 		Long: "Run the store-health checks of PRD §5.2 and §6.4 plus the empty-recall\n" +
 			"observability check of PRD §8.1 against this repository:\n\n" +
 			"  store-lock      who, if anyone, owns the store — held, an orphaned\n" +
 			"                  ownership record, or absent\n" +
 			"  ipc             whether a live owner answers on its loopback endpoint\n" +
 			"  schema-version  whether the store's schema is newer than this binary\n" +
-			"  empty-recall-rate  local empty-above-floor recall count and rate\n\n" +
+			"  empty-recall-rate  local empty-above-floor recall count and rate\n" +
+			"  mcp-registration-opencode  parsed repo or user OpenCode registration\n\n" +
 			"Against a directory with no store, doctor reports that rather than initializing\n" +
 			"one or creating its directory. With no live owner, it opens an existing store\n" +
 			"directly to read its schema; this briefly takes the ownership lock and may\n" +
 			"create .memdolt/LOCK, but makes no durable database change. It exits\n" +
-			"nonzero when a check fails, and zero for a condition memdolt clears by itself\n" +
-			"(a stale lock record, an orphaned pidfile), which it reports as a warning.",
+			"nonzero when a check fails. Stale ownership records and a missing optional\n" +
+			"OpenCode registration are warnings and exit zero.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runDoctor(cmd, dir)
@@ -100,6 +101,7 @@ func runDoctor(cmd *cobra.Command, dir string) error {
 			owner,
 			schemaCheck(ctx, paths, ownerLive),
 			emptyRecallCheck(ctx, paths),
+			openCodeRegistrationCheck(paths.Base()),
 		},
 	}
 
@@ -118,6 +120,176 @@ func runDoctor(cmd *cobra.Command, dir string) error {
 		return fmt.Errorf("doctor: %d of %d checks failed", failed, len(report.Checks))
 	}
 	return nil
+}
+
+func openCodeRegistrationCheck(repoRoot string) doctorCheck {
+	home, _ := os.UserHomeDir()
+	return openCodeRegistrationCheckWithHome(repoRoot, home)
+}
+
+// openCodeRegistrationCheckWithHome recognizes only PRD §11.4's parsed
+// native V2 mcp.servers.memdolt and supported V1 mcp.memdolt paths. The home
+// argument is injected so tests never depend on a developer's real config.
+func openCodeRegistrationCheckWithHome(repoRoot, home string) doctorCheck {
+	const name = "mcp-registration-opencode"
+	candidates := []string{
+		filepath.Join(repoRoot, "opencode.json"),
+		filepath.Join(repoRoot, "opencode.jsonc"),
+	}
+	if home != "" {
+		userDir := filepath.Join(home, ".config", "opencode")
+		candidates = append(candidates,
+			filepath.Join(userDir, "opencode.json"),
+			filepath.Join(userDir, "opencode.jsonc"),
+		)
+	}
+	for _, path := range candidates {
+		if openCodeConfigRegistersMemdolt(path) {
+			return newCheck(name, statusOK, "memdolt MCP server registered in %s", path)
+		}
+	}
+	return newCheck(name, statusWarn,
+		"no parsed OpenCode registration at mcp.servers.memdolt or mcp.memdolt (checked repo and user config)")
+}
+
+func openCodeConfigRegistersMemdolt(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var config map[string]json.RawMessage
+	clean := stripJSONCTrailingCommas(stripJSONCComments(raw))
+	if err := json.Unmarshal(clean, &config); err != nil {
+		return false
+	}
+	// Maps keep every path segment case-sensitive; struct decoding would also
+	// accept an unsupported root such as "MCP" or "Mcp".
+	var mcp map[string]json.RawMessage
+	if err := json.Unmarshal(config["mcp"], &mcp); err != nil || mcp == nil {
+		return false
+	}
+
+	if rawServers, ok := mcp["servers"]; ok {
+		var servers map[string]json.RawMessage
+		if json.Unmarshal(rawServers, &servers) == nil && jsonObject(servers["memdolt"]) {
+			return true
+		}
+	}
+	return jsonObject(mcp["memdolt"])
+}
+
+func jsonObject(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var object map[string]json.RawMessage
+	return json.Unmarshal(raw, &object) == nil && object != nil
+}
+
+// stripJSONCComments removes line and block comments while preserving comment
+// markers and escapes inside JSON strings. An unterminated block comment is
+// retained so the subsequent real JSON parse fails closed.
+func stripJSONCComments(raw []byte) []byte {
+	clean := make([]byte, 0, len(raw))
+	start := 0
+	inString, escaped := false, false
+	for i := 0; i < len(raw); {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case raw[i] == '\\':
+				escaped = true
+			case raw[i] == '"':
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		switch {
+		case raw[i] == '"':
+			inString = true
+			i++
+		case i+1 < len(raw) && raw[i] == '/' && raw[i+1] == '/':
+			clean = append(clean, raw[start:i]...)
+			i += 2
+			for i < len(raw) && raw[i] != '\r' && raw[i] != '\n' {
+				i++
+			}
+			start = i
+		case i+1 < len(raw) && raw[i] == '/' && raw[i+1] == '*':
+			commentStart := i
+			clean = append(clean, raw[start:i]...)
+			i += 2
+			for i+1 < len(raw) && (raw[i] != '*' || raw[i+1] != '/') {
+				i++
+			}
+			if i+1 >= len(raw) {
+				clean = append(clean, raw[commentStart:]...)
+				return clean
+			}
+			clean = append(clean, ' ')
+			i += 2
+			start = i
+		default:
+			i++
+		}
+	}
+	return append(clean, raw[start:]...)
+}
+
+// stripJSONCTrailingCommas removes a comma before ] or } only when the comma
+// follows a token that can end a JSON value. It therefore accepts JSONC's
+// trailing commas without repairing malformed shapes such as "[, ]".
+func stripJSONCTrailingCommas(raw []byte) []byte {
+	clean := make([]byte, 0, len(raw))
+	start := 0
+	inString, escaped := false, false
+	for i, b := range raw {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case b == '\\':
+				escaped = true
+			case b == '"':
+				inString = false
+			}
+			continue
+		}
+		if b == '"' {
+			inString = true
+			continue
+		}
+		if b != ',' || !previousJSONValue(raw[:i]) || !nextJSONCloser(raw[i+1:]) {
+			continue
+		}
+		clean = append(clean, raw[start:i]...)
+		start = i + 1
+	}
+	return append(clean, raw[start:]...)
+}
+
+func previousJSONValue(raw []byte) bool {
+	for i := len(raw) - 1; i >= 0; i-- {
+		if raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\r' || raw[i] == '\n' {
+			continue
+		}
+		b := raw[i]
+		return b == '}' || b == ']' || b == '"' || (b >= '0' && b <= '9') || b == 'e' || b == 'l'
+	}
+	return false
+}
+
+func nextJSONCloser(raw []byte) bool {
+	for _, b := range raw {
+		if b == ' ' || b == '\t' || b == '\r' || b == '\n' {
+			continue
+		}
+		return b == '}' || b == ']'
+	}
+	return false
 }
 
 // emptyRecallCheck reports the machine-local observability counter required by
