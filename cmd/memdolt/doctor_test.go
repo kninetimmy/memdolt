@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -173,10 +174,69 @@ func TestDoctorFailsAndExitsNonzeroOnASchemaNewerThanTheBinary(t *testing.T) {
 func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	out := runMemdolt(t, "doctor", "--dir", scratchDir(t))
 
-	for _, want := range []string{"memdolt doctor:", "store-lock", "ipc", "schema-version", "empty-recall-rate", statusOK} {
+	for _, want := range []string{
+		"memdolt doctor:", "store-lock", "ipc", "schema-version", "empty-recall-rate",
+		"mcp-registration-opencode", statusOK,
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output %q does not mention %q", out, want)
 		}
+	}
+}
+
+func TestDoctorRecognizesOnlyParsedOpenCodeRegistrationPaths(t *testing.T) {
+	t.Run("native repo JSONC", func(t *testing.T) {
+		repo, home := t.TempDir(), t.TempDir()
+		writeTestFile(t, filepath.Join(repo, "opencode.jsonc"), `{
+  // native V2 registration
+  "literal": "keep // and /* markers */",
+  "mcp": {"servers": {/* comment */ "memdolt": {"command": ["memdolt", "serve"],},},},
+}`)
+		check := openCodeRegistrationCheckWithHome(repo, home)
+		if check.Status != statusOK || !strings.Contains(check.Detail, "opencode.jsonc") {
+			t.Fatalf("native JSONC check = %+v, want recognized repo registration", check)
+		}
+	})
+
+	t.Run("supported V1 user JSONC", func(t *testing.T) {
+		repo, home := t.TempDir(), t.TempDir()
+		path := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+		writeTestFile(t, path, `{"mcp":{"memdolt":{"command":["memdolt","serve"],},},}`)
+		check := openCodeRegistrationCheckWithHome(repo, home)
+		if check.Status != statusOK || !strings.Contains(check.Detail, path) {
+			t.Fatalf("V1 user check = %+v, want recognized user registration", check)
+		}
+	})
+
+	t.Run("malformed and similarly named paths", func(t *testing.T) {
+		repo, home := t.TempDir(), t.TempDir()
+		writeTestFile(t, filepath.Join(repo, "opencode.json"),
+			`{"mcp":{"memdolt":{}}} /* unterminated`)
+		writeTestFile(t, filepath.Join(repo, "opencode.jsonc"),
+			`{"mcpServers":{"memdolt":{}},"mcp":{"servers":{"memdolt-other":{}}}}`)
+		check := openCodeRegistrationCheckWithHome(repo, home)
+		if check.Status != statusWarn {
+			t.Fatalf("unsupported configs check = %+v, want warn", check)
+		}
+	})
+
+	t.Run("invalid trailing comma is not repaired", func(t *testing.T) {
+		repo, home := t.TempDir(), t.TempDir()
+		writeTestFile(t, filepath.Join(repo, "opencode.json"),
+			`{"mcp":{"memdolt":{}},"malformed":[,]}`)
+		if check := openCodeRegistrationCheckWithHome(repo, home); check.Status != statusWarn {
+			t.Fatalf("malformed array check = %+v, want warn", check)
+		}
+	})
+}
+
+func writeTestFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create parent for %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
 
@@ -96,7 +97,7 @@ func now() time.Time { return time.Now().UTC().Truncate(time.Second) }
 // by the lane's actor (§3.1).
 //
 // text is every caller-originated string the write persists — a task title
-// and its notes, a note's body and raw actor, a command line, a narrative
+// and its notes, a note's body, raw actor and provenance, a command line, a narrative
 // body and raw actor — for the deny-list to match against (§11.3). Every
 // direct lane has some, so none of them declares store.CommitRequest.NoText;
 // a lane added here that passed none would be refused by the store on its
@@ -340,8 +341,33 @@ func (l *Lanes) queryTasks(ctx context.Context, query string, args ...any) (task
 	return tasks, nil
 }
 
+// NoteProvenance carries optional opaque metadata (§6.1, §11.4). Empty fields
+// are stored as NULL, like other optional text in these lanes. Metadata never
+// supplies the actor or changes the note body. Verification belongs to the
+// host integration; these general note lanes do not call a host API.
+type NoteProvenance struct {
+	SessionID  string `json:"session_id,omitempty"`
+	AgentID    string `json:"agent_id,omitempty"`
+	ProviderID string `json:"provider_id,omitempty"`
+	ModelID    string `json:"model_id,omitempty"`
+	Variant    string `json:"variant,omitempty"`
+}
+
+func (p NoteProvenance) validate() error {
+	for _, field := range []struct{ name, value string }{
+		{"session_id", p.SessionID}, {"agent_id", p.AgentID}, {"provider_id", p.ProviderID},
+		{"model_id", p.ModelID}, {"variant", p.Variant},
+	} {
+		if !utf8.ValidString(field.value) || utf8.RuneCountInString(field.value) > 255 {
+			return fmt.Errorf("note provenance %s must be valid UTF-8 of at most 255 characters", field.name)
+		}
+	}
+	return nil
+}
+
 // Note is one row of the session_notes table (§6.1).
 type Note struct {
+	NoteProvenance
 	ID        string    `json:"id"`
 	Actor     string    `json:"actor"`
 	ActorRaw  string    `json:"actorRaw"`
@@ -355,11 +381,23 @@ type Note struct {
 // the five-minute timer. It must not reuse a general DOLT_COMMIT('-A') path or
 // weaken the clean-working-set guards around proposal staging and review.
 func (l *Lanes) LogNote(ctx context.Context, body string) (Note, string, error) {
+	return l.LogNoteWithProvenance(ctx, body, NoteProvenance{})
+}
+
+// LogNoteWithProvenance retains LogNote's one-note/one-commit behavior with
+// nullable metadata. Before provenance, only note text and raw actor joined
+// the deny-list declaration; now every metadata string joins it too. This
+// scan belongs to this method and CommitNotes, not arbitrary SQL writers.
+func (l *Lanes) LogNoteWithProvenance(ctx context.Context, body string, provenance NoteProvenance) (Note, string, error) {
+	if err := provenance.validate(); err != nil {
+		return Note{}, "", err
+	}
 	note, err := l.PrepareNote(body)
 	if err != nil {
 		return Note{}, "", err
 	}
-	hash, err := l.write(ctx, "note add "+summarize(note.Text), []string{note.Text, note.ActorRaw}, noteStatement(note))
+	note.NoteProvenance = provenance
+	hash, err := l.write(ctx, "note add "+summarize(note.Text), noteText(note), noteStatement(note))
 	if err != nil {
 		return Note{}, "", fmt.Errorf("log session note: %w", err)
 	}
@@ -392,14 +430,17 @@ func (l *Lanes) CommitNotes(ctx context.Context, notes []Note) (string, error) {
 		return "", errors.New("a note batch needs at least one note")
 	}
 	statements := make([]store.Statement, 0, len(notes))
-	text := make([]string, 0, len(notes)*2)
+	text := make([]string, 0, len(notes)*7)
 	for _, note := range notes {
 		if note.Actor != l.actor.Name || note.ActorRaw != l.actor.Raw {
 			return "", fmt.Errorf("note %s belongs to %s (%q), not batch actor %s (%q)",
 				note.ID, note.Actor, note.ActorRaw, l.actor.Name, l.actor.Raw)
 		}
+		if err := note.validate(); err != nil {
+			return "", err
+		}
 		statements = append(statements, noteStatement(note))
-		text = append(text, note.Text, note.ActorRaw)
+		text = append(text, noteText(note)...)
 	}
 	result, err := l.store.Commit(ctx, store.CommitRequest{
 		Statements:   statements,
@@ -416,10 +457,17 @@ func (l *Lanes) CommitNotes(ctx context.Context, notes []Note) (string, error) {
 
 func noteStatement(note Note) store.Statement {
 	return store.Statement{
-		SQL: "INSERT INTO session_notes (id, actor, actor_raw, text, created_at) " +
-			"VALUES (?, ?, ?, ?, ?)",
-		Args: []any{note.ID, note.Actor, note.ActorRaw, note.Text, note.CreatedAt},
+		SQL: "INSERT INTO session_notes (id, actor, actor_raw, text, created_at, " +
+			"session_id, agent_id, provider_id, model_id, variant) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		Args: []any{note.ID, note.Actor, note.ActorRaw, note.Text, note.CreatedAt,
+			nullable(note.SessionID), nullable(note.AgentID), nullable(note.ProviderID),
+			nullable(note.ModelID), nullable(note.Variant)},
 	}
+}
+
+func noteText(note Note) []string {
+	return []string{note.Text, note.ActorRaw, note.SessionID, note.AgentID,
+		note.ProviderID, note.ModelID, note.Variant}
 }
 
 // Notes lists the most recent session notes, newest first. A limit of zero
@@ -432,7 +480,7 @@ func (l *Lanes) Notes(ctx context.Context, limit int) (notes []Note, err error) 
 	}
 
 	rows, err := l.store.Query(ctx,
-		"SELECT id, actor, actor_raw, text, created_at FROM session_notes "+
+		"SELECT id, actor, actor_raw, text, created_at, session_id, agent_id, provider_id, model_id, variant FROM session_notes "+
 			"ORDER BY created_at DESC, id DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, fmt.Errorf("read session notes: %w", err)
@@ -442,10 +490,16 @@ func (l *Lanes) Notes(ctx context.Context, limit int) (notes []Note, err error) 
 	for rows.Next() {
 		var note Note
 		var actor, actorRaw sql.NullString
-		if err := rows.Scan(&note.ID, &actor, &actorRaw, &note.Text, &note.CreatedAt); err != nil {
+		var sessionID, agentID, providerID, modelID, variant sql.NullString
+		if err := rows.Scan(&note.ID, &actor, &actorRaw, &note.Text, &note.CreatedAt,
+			&sessionID, &agentID, &providerID, &modelID, &variant); err != nil {
 			return nil, fmt.Errorf("read session notes: %w", err)
 		}
 		note.Actor, note.ActorRaw = nullText(actor), nullText(actorRaw)
+		note.NoteProvenance = NoteProvenance{
+			SessionID: nullText(sessionID), AgentID: nullText(agentID), ProviderID: nullText(providerID),
+			ModelID: nullText(modelID), Variant: nullText(variant),
+		}
 		notes = append(notes, note)
 	}
 	if err := rows.Err(); err != nil {

@@ -384,6 +384,11 @@ export GOFLAGS=-tags=gms_pure_go
   `.memdolt/LOCK`, but makes no durable database change. It exits nonzero
   when a check fails. A condition memdolt clears by itself (a stale lock
   record, an orphaned pidfile) is a warning and exits zero.
+
+  Before issue #116, those self-clearing conditions were the only warnings.
+  After it, the optional `mcp-registration-opencode` check also warns and exits
+  zero when no supported parsed registration is found; it does not repair host
+  config. The prior ownership, schema, and recall checks retain their behavior.
 - Build or inspect the derived embedding side-store (PRD §8.2): `go run
   ./cmd/memdolt index rebuild` synchronizes `.memdolt/embeddings.sqlite`
   with every committed fact, decision, task, and document chunk, while
@@ -414,6 +419,75 @@ export GOFLAGS=-tags=gms_pure_go
   by the actor (`--actor "Claude Code"` normalizes to `agent:claude-code`; the
   default is `user`), so `dolt_log` answers provenance on its own. `note add`
   and the two `set` commands read their body from stdin when given no argument.
+- Verify OpenCode session metadata: `memdolt opencode session-info <current-session-id>`
+  reads the API without a store; `memdolt opencode wrap-up-note <current-session-id>
+  [text]` verifies first, then writes one note (stdin supplies omitted text).
+  Both support `--json`; the writer also accepts `--dir`. Workflows must take
+  the current ID from host context and never discover or guess another session.
+  The CLI verifies a supplied ID against the API and cannot authenticate where
+  the caller obtained it. Before issue #116, neither command, the committed
+  registrations, nor the provenance migration existed. After it, the complete
+  structural blast radius is:
+
+  - `.mcp.json` and `opencode.json` add coexisting Claude Code and native V2
+    OpenCode registrations for `memdolt serve`. OpenCode adds the plural
+    `commands` map and a `skills` path array for the three core templates.
+    These new artifacts replace no host config and install no binary or wrapper.
+  - `cmd/memdolt/doctor.go` adds parsed repository/user JSON/JSONC detection at
+    `mcp.servers.memdolt` or supported V1 `mcp.memdolt`; unsupported similarly
+    named paths and malformed files do not count. This recognition rule binds
+    `openCodeConfigRegistersMemdolt` and the doctor check that calls it, not
+    arbitrary config readers. It checks for a registration object, not whether
+    the configured process is runnable. Missing registration is an advisory as
+    recorded above. The old lock, owner, schema, and recall checks still hold.
+  - `cmd/memdolt/root.go` adds `opencode` and retains every existing command.
+    New `cmd/memdolt/opencode.go` verifies before `openCommandStore`, reuses its
+    direct/authenticated-owner selection and current-schema gate, and reports
+    store-close errors. New `internal/opencode/session.go` owns ID validation,
+    argument-based invocation, Windows not-found-only fallback, typed response
+    parsing, exact-ID comparison, and nullable field mapping. Those API checks
+    bind `VerifySession` and the two commands that use it, not other CLI or MCP
+    writes. They prove an API match, not host-context origin. The wrap-up actor
+    is always `agent:opencode` with raw `cli`, never derived from API fields.
+  - `internal/store/schema.go` appends migration 4's five nullable note columns
+    without editing migrations 1–3, their tags, or the migration runner.
+    Existing rows retain their text, actor, raw actor, and timestamp with NULL
+    metadata; repeated initialization still adds no migration or commit.
+  - `internal/memory/memory.go` adds `NoteProvenance`, exposes optional metadata
+    on `Note`, and extends `noteStatement` and `Notes` to write/read the five
+    fields using bound SQL and the existing NULL/empty-string convention.
+    `LogNote` delegates to `LogNoteWithProvenance` with empty metadata; its
+    body normalization, actor, and one-note/one-commit behavior still hold.
+    `PrepareNote` still prepares ordinary notes in memory. `CommitNotes` still
+    validates the actor group and requires a clean working set, with the same
+    batch message and author, and now carries optional metadata. Before this
+    change these two commit paths scanned only text and raw actor; after it,
+    all five provenance strings also enter `CommitRequest.Text`, so metadata
+    can refuse an otherwise allowed note. `NoteProvenance.validate` rejects
+    invalid UTF-8 and values over 255 characters without trimming metadata.
+    Width checks and scan declarations bind `LogNoteWithProvenance` (including
+    `LogNote`) and `CommitNotes`, not arbitrary SQL writers or every string
+    column. These generic lanes do not independently verify API identity.
+  - The existing `OwnerStore.Commit`/query transport carries the new columns,
+    NULL arguments, and scan text without a new IPC operation. Authentication,
+    single-submit/no-retry writes, and owner authority still hold. The shared
+    `memory.Note` adds optional provenance fields to CLI JSON and the MCP note
+    output schema; `log_session_note` accepts the same text-only input and its
+    per-actor timer, retry/discard rules and shutdown ordering are unchanged.
+    The sixteen registered tools and elicited review retain their contracts.
+  - Nine new `templates/skills` files provide check-init, recall, and wrap-up
+    for Claude Code, Codex, and OpenCode. They preserve human review of facts
+    and decisions, distinguish queued MCP notes from durable CLI notes, and
+    expose no deferred operation. OpenCode's host-context origin obligation
+    remains separate from the CLI's API-match guarantee, also stated in help
+    and PRD §§6.1/11.4. No previous workflow template is removed or replaced.
+  - `cmd/memdolt/doctor_test.go`, `host_templates_test.go`, `opencode_test.go`,
+    `internal/opencode/session_test.go`, and `localdolt/migrate_test.go` cover
+    the new paths, exact metadata, pre-open refusals, supported config shapes,
+    upgrade preservation/idempotence, direct/owner writes, and single/batched
+    metadata deny-list enforcement. Existing review callbacks and checks are
+    retained. These are deterministic fixture checks, not real-host acceptance;
+    that separate session is issue #117. No dependency or deferred backend is added.
 - Review what agents staged (PRD §7, §11.2): `memdolt review list|show|accept|reject|expire|stale`.
   `show` renders a proposal as the single-commit diff of its branch; `accept` merges
   exactly the one commit that proposal was staged with into `main` under a `--no-ff`
