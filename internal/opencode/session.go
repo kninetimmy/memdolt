@@ -21,18 +21,6 @@ type SessionInfo struct {
 	Variant    string `json:"variant,omitempty"`
 }
 
-type apiResponse struct {
-	Data *struct {
-		ID    string `json:"id"`
-		Agent string `json:"agent"`
-		Model *struct {
-			ProviderID string `json:"providerID"`
-			ID         string `json:"id"`
-			Variant    string `json:"variant"`
-		} `json:"model"`
-	} `json:"data"`
-}
-
 type commandRunner func(context.Context, string, ...string) ([]byte, error)
 
 // ValidateSessionID applies §11.4's allowlist before the id can enter a
@@ -74,26 +62,52 @@ func verifySessionWith(ctx context.Context, id string, windows bool, run command
 		return SessionInfo{}, fmt.Errorf("verify OpenCode session with opencode2: %w", err)
 	}
 
-	var response apiResponse
+	// Look up every protocol member by exact key. Struct decoding matches keys
+	// case-insensitively, allowing "ID" to replace the actual "id". Unknown
+	// fields, including differently cased names, remain compatible and ignored.
+	var response map[string]json.RawMessage
 	if !utf8.Valid(raw) {
 		return SessionInfo{}, errors.New("decode OpenCode Session.Info: response is not valid UTF-8")
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return SessionInfo{}, fmt.Errorf("decode OpenCode Session.Info: %w", err)
 	}
-	if response.Data == nil || response.Data.ID == "" {
+	var data, model map[string]json.RawMessage
+	if rawData := response["data"]; rawData != nil {
+		if err := json.Unmarshal(rawData, &data); err != nil {
+			return SessionInfo{}, fmt.Errorf("decode OpenCode Session.Info data: %w", err)
+		}
+	}
+	if rawModel := data["model"]; rawModel != nil {
+		if err := json.Unmarshal(rawModel, &model); err != nil {
+			return SessionInfo{}, fmt.Errorf("decode OpenCode Session.Info data.model: %w", err)
+		}
+	}
+	var info SessionInfo
+	for _, field := range []struct {
+		name string
+		raw  json.RawMessage
+		dest *string
+	}{
+		{"data.id", data["id"], &info.SessionID},
+		{"data.agent", data["agent"], &info.AgentID},
+		{"data.model.providerID", model["providerID"], &info.ProviderID},
+		{"data.model.id", model["id"], &info.ModelID},
+		{"data.model.variant", model["variant"], &info.Variant},
+	} {
+		if field.raw != nil {
+			if err := json.Unmarshal(field.raw, field.dest); err != nil {
+				return SessionInfo{}, fmt.Errorf("decode OpenCode Session.Info %s: %w", field.name, err)
+			}
+		}
+	}
+	if info.SessionID == "" {
 		return SessionInfo{}, errors.New("OpenCode Session.Info response has no data.id")
 	}
-	if response.Data.ID != id {
-		return SessionInfo{}, fmt.Errorf("OpenCode Session.Info id mismatch: requested %q, got %q", id, response.Data.ID)
+	if info.SessionID != id {
+		return SessionInfo{}, fmt.Errorf("OpenCode Session.Info id mismatch: requested %q, got %q", id, info.SessionID)
 	}
 
-	info := SessionInfo{SessionID: response.Data.ID, AgentID: response.Data.Agent}
-	if response.Data.Model != nil {
-		info.ProviderID = response.Data.Model.ProviderID
-		info.ModelID = response.Data.Model.ID
-		info.Variant = response.Data.Model.Variant
-	}
 	return info, nil
 }
 

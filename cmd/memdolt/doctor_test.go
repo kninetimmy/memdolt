@@ -185,12 +185,29 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 }
 
 func TestDoctorRecognizesOnlyParsedOpenCodeRegistrationPaths(t *testing.T) {
+	for _, raw := range []string{
+		`{"MCP":{"servers":{"memdolt":{}}}}`,
+		`{"Mcp":{"memdolt":{}}}`,
+		`{"mcp":{},"MCP":{"servers":{"memdolt":{}}}}`,
+		`{"mcp":{"Servers":{"memdolt":{}}}}`,
+		`{"mcp":{"servers":{"Memdolt":{}}}}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			repo, home := t.TempDir(), t.TempDir()
+			writeTestFile(t, filepath.Join(repo, "opencode.json"), raw)
+			if check := openCodeRegistrationCheckWithHome(repo, home); check.Status != statusWarn {
+				t.Fatalf("wrong-case registration accepted: %+v", check)
+			}
+		})
+	}
+
 	t.Run("native repo JSONC", func(t *testing.T) {
 		repo, home := t.TempDir(), t.TempDir()
 		writeTestFile(t, filepath.Join(repo, "opencode.jsonc"), `{
   // native V2 registration
   "literal": "keep // and /* markers */",
   "mcp": {"servers": {/* comment */ "memdolt": {"command": ["memdolt", "serve"],},},},
+  "MCP": false, // unknown fields must not replace the supported exact key
 }`)
 		check := openCodeRegistrationCheckWithHome(repo, home)
 		if check.Status != statusOK || !strings.Contains(check.Detail, "opencode.jsonc") {

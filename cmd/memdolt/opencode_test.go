@@ -85,6 +85,10 @@ func TestOpenCodeCLIRefusesBeforeStoreOpen(t *testing.T) {
 		{"malformed JSON", "ses_current", `{"data":`, false},
 		{"missing identity", "ses_current", `{"data":{"agent":"build"}}`, false},
 		{"mismatched identity", "ses_current", `{"data":{"id":"ses_other"}}`, false},
+		{"uppercase sibling overrides mismatched identity", "ses_current", `{"data":{"id":"ses_other","ID":"ses_current"}}`, false},
+		{"uppercase envelope and identity", "ses_current", `{"DATA":{"ID":"ses_current"}}`, false},
+		{"wrong-case data", "ses_current", `{"Data":{"id":"ses_current"}}`, false},
+		{"wrong-case identity", "ses_current", `{"data":{"Id":"ses_current"}}`, false},
 		{"malformed metadata", "ses_current", `{"data":{"id":"ses_current","model":[]}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,7 +113,18 @@ func TestOpenCodeCLIRefusesBeforeStoreOpen(t *testing.T) {
 func TestOpenCodeCLIRecordsVerifiedMetadataDirectlyAndThroughOwner(t *testing.T) {
 	for _, routed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "direct", true: "owner"}[routed], func(t *testing.T) {
-			fakeOpenCodeAPI(t, `{"data":{"id":"ses_current","agent":"user","model":{"providerID":" provider ","id":"model","variant":"max"}}}`, false)
+			fakeOpenCodeAPI(t, `{
+  "data": {
+    "id":"ses_current", "ID":"ses_other",
+    "agent":"user", "Agent":"ignored",
+    "model": {
+      "providerID":" provider ", "ProviderID":"ignored",
+      "id":"model", "ID":"ignored", "variant":"max", "Variant":"ignored"
+    },
+    "Model":false
+  },
+  "DATA":{"id":"ses_other"}, "unknown":42
+}`, false)
 			base := initStore(t)
 			if routed {
 				serveStore(t, base)

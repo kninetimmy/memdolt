@@ -931,6 +931,14 @@ This is the narrow v0.2.2 supplement to the v0.2.0 parity baseline, not a claim 
 
 `commands` is the plural command-object map and `skills` is a path array. Doctor recognizes a registration only after parsing a repo or user `opencode.json`/`opencode.jsonc`: native `mcp.servers.memdolt` and officially supported V1 `mcp.memdolt` count; JSONC comments and trailing commas are accepted before a real JSON parse; malformed files and similarly named unsupported paths do not count.
 
+Before issue #116's cycle-1 parser correction, the doctor implementation used
+Go struct decoding at the root and also accepted `MCP`/`Mcp`, contradicting the
+exact-path rule above. After it, `openCodeConfigRegistersMemdolt` uses exact
+map lookups for every path segment. Unknown keys, including case variants
+alongside a valid registration, remain ignored. JSONC support and the optional
+advisory behavior remain unchanged; this rule binds the doctor reader alone,
+not every JSON decoder.
+
 **Wrap-up provenance.** Before issue #116, this paragraph described the workflow
 without separating host obligations from guarantees the CLI can enforce:
 
@@ -949,6 +957,18 @@ missing identity, or mismatch refuses before `opencode wrap-up-note` opens the
 store or writes its note. `opencode session-info` offers the same verification
 without opening a store. Neither command proves the supplied ID is the caller's
 current session, nor governs writes through other commands or MCP tools.
+
+Before the cycle-1 parser correction, struct decoding treated protocol keys
+case-insensitively, so `data.ID` could replace a mismatched actual `data.id`,
+and uppercase-only `DATA.ID` could satisfy missing lowercase members. After
+it, `VerifySession` looks up every consumed key exactly: `data`, `id`, `agent`,
+`model`, `providerID`, and `variant`. Only the actual `data.id` can satisfy
+the identity check; other casing is unknown input and stays ignored. Typed
+string decoding, nullable optional metadata, and unknown-field compatibility
+remain, with no metadata alias able to overwrite the selected exact field.
+This correction binds `VerifySession` and its two CLI callers, preserving
+refusal before the writer opens the store; it changes no other JSON reader,
+note lane, or actor derivation.
 
 Successful wrap-up notes persist the field mapping above separately from the
 body, retain the existing note-body whitespace normalization, and always use

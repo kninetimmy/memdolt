@@ -25,6 +25,7 @@ func TestVerifySessionValidatesBeforeInvocationAndRequiresExactInfo(t *testing.T
 	tests := []struct {
 		name string
 		raw  string
+		id   string
 	}{
 		{name: "malformed JSON", raw: `{"data":`},
 		{name: "invalid UTF-8", raw: "{\"data\":{\"id\":\"ses_current\",\"agent\":\"\xff\"}}"},
@@ -36,13 +37,21 @@ func TestVerifySessionValidatesBeforeInvocationAndRequiresExactInfo(t *testing.T
 		{name: "numeric id", raw: `{"data":{"id":7}}`},
 		{name: "mismatched id", raw: `{"data":{"id":"ses_other"}}`},
 		{name: "case mismatched id", raw: `{"data":{"id":"ses_Current"}}`},
+		{name: "uppercase sibling overrides mismatched id", id: "ses_other", raw: `{"data":{"id":"ses_current","ID":"ses_other"}}`},
+		{name: "uppercase envelope and identity", raw: `{"DATA":{"ID":"ses_current"}}`},
+		{name: "wrong-case data", raw: `{"Data":{"id":"ses_current"}}`},
+		{name: "wrong-case identity", raw: `{"data":{"Id":"ses_current"}}`},
 		{name: "nonstring agent", raw: `{"data":{"id":"ses_current","agent":3}}`},
 		{name: "nonobject model", raw: `{"data":{"id":"ses_current","model":[]}}`},
 		{name: "nonstring variant", raw: `{"data":{"id":"ses_current","model":{"variant":{}}}}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := verifySessionWith(context.Background(), "ses_current", false,
+			id := tc.id
+			if id == "" {
+				id = "ses_current"
+			}
+			_, err := verifySessionWith(context.Background(), id, false,
 				func(context.Context, string, ...string) ([]byte, error) {
 					return []byte(tc.raw), nil
 				})
@@ -81,6 +90,20 @@ func TestVerifySessionReturnsAvailableProvenanceAndUsesArguments(t *testing.T) {
 	}
 	if !reflect.DeepEqual(info, want) {
 		t.Fatalf("SessionInfo = %+v, want %+v", info, want)
+	}
+}
+
+func TestVerifySessionIgnoresUnknownAndWrongCaseMetadata(t *testing.T) {
+	for _, raw := range []string{
+		`{"data":{"id":"ses_current","Agent":"ignored","Model":{"providerID":"ignored","id":"ignored","variant":"ignored"}}}`,
+		`{"data":{"id":"ses_current","agent":null,"model":{"ProviderID":"ignored","providerId":"ignored","ID":"ignored","Variant":"ignored"}}}`,
+		`{"data":{"id":"ses_current","ID":42,"model":null},"DATA":false,"unknown":{"extra":true}}`,
+	} {
+		info, err := verifySessionWith(context.Background(), "ses_current", false,
+			func(context.Context, string, ...string) ([]byte, error) { return []byte(raw), nil })
+		if err != nil || info != (SessionInfo{SessionID: "ses_current"}) {
+			t.Fatalf("wrong-case or unknown fields affected Session.Info: %+v / %v", info, err)
+		}
 	}
 }
 

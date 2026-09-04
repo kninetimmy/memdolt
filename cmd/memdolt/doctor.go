@@ -157,21 +157,25 @@ func openCodeConfigRegistersMemdolt(path string) bool {
 	if err != nil {
 		return false
 	}
-	var config struct {
-		MCP map[string]json.RawMessage `json:"mcp"`
-	}
+	var config map[string]json.RawMessage
 	clean := stripJSONCTrailingCommas(stripJSONCComments(raw))
-	if err := json.Unmarshal(clean, &config); err != nil || config.MCP == nil {
+	if err := json.Unmarshal(clean, &config); err != nil {
+		return false
+	}
+	// Maps keep every path segment case-sensitive; struct decoding would also
+	// accept an unsupported root such as "MCP" or "Mcp".
+	var mcp map[string]json.RawMessage
+	if err := json.Unmarshal(config["mcp"], &mcp); err != nil || mcp == nil {
 		return false
 	}
 
-	if rawServers, ok := config.MCP["servers"]; ok {
+	if rawServers, ok := mcp["servers"]; ok {
 		var servers map[string]json.RawMessage
 		if json.Unmarshal(rawServers, &servers) == nil && jsonObject(servers["memdolt"]) {
 			return true
 		}
 	}
-	return jsonObject(config.MCP["memdolt"])
+	return jsonObject(mcp["memdolt"])
 }
 
 func jsonObject(raw json.RawMessage) bool {

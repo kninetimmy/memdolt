@@ -440,6 +440,11 @@ export GOFLAGS=-tags=gms_pure_go
     arbitrary config readers. It checks for a registration object, not whether
     the configured process is runnable. Missing registration is an advisory as
     recorded above. The old lock, owner, schema, and recall checks still hold.
+    Before the cycle-1 parser fix, struct decoding also accepted `MCP`/`Mcp`
+    as the root despite the exact-path claim. After it, map lookups require
+    the exact spelling of every path segment; unknown keys, including case
+    variants beside a valid `mcp`, remain ignored. This correction binds this
+    doctor reader alone, not every JSON reader in the repository.
   - `cmd/memdolt/root.go` adds `opencode` and retains every existing command.
     New `cmd/memdolt/opencode.go` verifies before `openCommandStore`, reuses its
     direct/authenticated-owner selection and current-schema gate, and reports
@@ -449,6 +454,15 @@ export GOFLAGS=-tags=gms_pure_go
     bind `VerifySession` and the two commands that use it, not other CLI or MCP
     writes. They prove an API match, not host-context origin. The wrap-up actor
     is always `agent:opencode` with raw `cli`, never derived from API fields.
+    Before the cycle-1 parser fix, struct decoding matched protocol keys
+    case-insensitively: `data.ID` could override a mismatched actual `data.id`,
+    and `DATA.ID` could satisfy missing lowercase members. After it,
+    `VerifySession` uses exact lookups for `data`, `id`, `agent`, `model`,
+    `providerID`, and `variant`, then decodes the selected strings with the
+    existing type/null rules. Unknown fields, including differently cased
+    aliases, stay ignored and cannot replace identity or metadata. The
+    pre-store-open refusal applies to both CLI callers of `VerifySession`;
+    unrelated JSON decoders, actor rules, and note writes remain unchanged.
   - `internal/store/schema.go` appends migration 4's five nullable note columns
     without editing migrations 1–3, their tags, or the migration runner.
     Existing rows retain their text, actor, raw actor, and timestamp with NULL
