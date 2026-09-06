@@ -19,6 +19,7 @@ func newTransferCommand(operation string) *cobra.Command {
 		behavior = "Fetch remote main, then validate its exact committed schema and scan added\n" +
 			"or changed text/provenance before a fast-forward. Equal or already-contained\n" +
 			"history is unchanged. Divergence refuses; no automatic merge or migration.\n" +
+			"Local tags and their metadata are preserved; remote tags are not fetched.\n" +
 			"Fetched objects and tracking refs may remain on refusal. This is no history\n" +
 			"scrub: fetched history may contain text matching the local deny-list.\n" +
 			"File sources are read without initialization; unsupported journaled sources\n" +

@@ -1059,6 +1059,20 @@ metadata refuses with a compatible-client/remote-repair remedy. Divergence
 refuses without auto-merge or conflict resolution. Successful pull preserves
 commit identities and adds no merge, genesis or migration commit.
 
+Before the issue #127 cycle-2 fix, the main fetch in `transferProcedure` used
+`actions.FetchRefSpecs`, whose non-shallow path also called `FetchFollowTags`.
+That could replace existing local tag hashes and metadata or add remote-only
+tags before candidate validation; its `cli.Println` also emitted unsolicited
+newlines on direct CLI or live MCP owner stdout. After the fix, that pull path
+uses `FetchRemoteBranch` for `refs/heads/main` and `SetHeadToCommit` only for the
+selected `refs/remotes/<remote>/main`. Local tags and their metadata remain
+unchanged, remote tags are not followed, and fetch emits no progress output.
+These restrictions bind memdolt's pull path through `transferProcedure` alone;
+native Dolt fetch/tag operations and clone keep their existing behavior.
+Captured push, remote authentication and file-source preservation remain;
+main still moves only after ancestry, schema and changed-text validation, and
+fetched objects/tracking refs may still remain after refusal.
+
 Both refuse dirty main working sets and active merge/conflict states before
 transfer. Before #127, `Store.proposalMu` covered stage, accept, reject and
 expiry but not direct `Commit`. After it, those mutations, direct commits and
@@ -1155,6 +1169,16 @@ cancellation and lost/post-success responses. It establishes no real-hub,
 two-machine network, cross-version, v2.x or full-M4 acceptance. No dependency
 version, migration, MCP sync tool, remote editor, merge/conflict dialog,
 topology backend or hub deployment change is included.
+
+The cycle-2 regression in `cmd/memdolt/transfer_test.go` exercises allowed
+and deny-list-refused pulls in subprocesses, both directly and through a real
+`serve` owner verified by authenticated IPC. It compares the complete local
+tag list, commit hashes, taggers, emails, timestamps and messages against
+conflicting and remote-only tag fixtures. Raw CLI stdout must contain only
+one success JSON line or remain empty on refusal; owner stdout must remain
+empty when no MCP input was sent. It also checks clean owner shutdown and
+reopened main/working-set state. This adds local synthetic evidence only;
+the preceding acceptance limits still hold.
 
 ### 11.3 Config
 

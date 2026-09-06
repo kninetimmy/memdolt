@@ -89,20 +89,22 @@ func transferProcedure(ctx *gmssql.Context) (iter gmssql.RowIter, err error) {
 		}
 		call.changed = err == nil
 	} else {
-		spec, err := ref.ParseRefSpec("refs/heads/main:refs/remotes/" + call.remote.Name + "/main")
+		tmp, err := data.Rsw.TempTableFilesDir()
 		if err != nil {
 			return nil, err
 		}
-		remoteSpec, ok := spec.(ref.RemoteRefSpec)
-		if !ok {
-			return nil, errors.New("main fetch specification is not a remote tracking ref")
-		}
+		var commit *doltdb.Commit
 		pull.WithDiscardingStatsCh(func(stats chan pull.Stats) {
-			// Only a tracking ref may be replaced. Main is promoted separately
-			// after immutable schema, ancestry and changed-text validation.
-			err = actions.FetchRefSpecs(ctx, data, remote, []ref.RemoteRefSpec{remoteSpec}, false, &call.remote, ref.UpdateMode{Force: true}, stats)
+			// FetchRefSpecs also follows/replaces tags and prints to stdout.
+			// Fetch only main's commit/history, without those tag side effects.
+			commit, err = actions.FetchRemoteBranch(ctx, tmp, call.remote, remote, data.Ddb, ref.NewBranchRef(MainBranch), stats)
 		})
 		if err != nil {
+			return nil, err
+		}
+		// Only the selected tracking ref may be replaced. Main is promoted
+		// separately after immutable schema, ancestry and changed-text validation.
+		if err := data.Ddb.SetHeadToCommit(ctx, ref.NewRemoteRef(call.remote.Name, MainBranch), commit); err != nil {
 			return nil, err
 		}
 	}

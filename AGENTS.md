@@ -496,6 +496,8 @@ export GOFLAGS=-tags=gms_pure_go
   contained remote history is unchanged; divergence or incompatible metadata
   refuses. No merge, genesis or migration commit is made. Both refuse dirty
   main and active merge/conflict states. Pending proposals remain local.
+  Local tags and their metadata are preserved; pull never follows remote tags
+  or prints fetch progress, including through the live MCP owner's stdout.
   Fetched objects/tracking refs may remain after refusal; inspect local and
   remote main before retrying. Lost responses mean unknown outcome, without
   resubmission. Confirmed promotion remains reported if a later step fails.
@@ -541,6 +543,18 @@ export GOFLAGS=-tags=gms_pure_go
     retain their own behavior. Pull reuses `openCloneRemote`, preserving file
     sources including absent oldgen; symbolic links inside selected file
     remotes are refused. No recursive cleanup or unrelated deletion is added.
+    Before the issue #127 cycle-2 fix, `transferProcedure` called
+    `actions.FetchRefSpecs`, whose non-shallow fetch also reached
+    `FetchFollowTags`: it could replace local tag hashes and metadata and add
+    remote-only tags before candidate validation, while `cli.Println` wrote
+    unsolicited newlines to direct CLI or live MCP owner stdout. After the fix,
+    the pull branch calls `FetchRemoteBranch` only for `refs/heads/main` and
+    `SetHeadToCommit` only for the selected `refs/remotes/<remote>/main`.
+    No tags are followed/replaced and no fetch progress is printed. These
+    restrictions bind memdolt's pull path through `transferProcedure` alone;
+    native Dolt fetch/tag operations and clone retain their own behavior.
+    Captured push, file-source preservation, ancestry/schema/text validation,
+    separate fast-forward promotion and retained-fetch remedies remain intact.
   - New `localdolt/transfer_schema.go` owns the maintained `transferTables`
     contract: exact application table/column sets, types, nullability and primary
     columns, plus explicit text coverage. The strict 32-character Dolt hash
@@ -583,6 +597,13 @@ export GOFLAGS=-tags=gms_pure_go
     and `cmd/memdolt/transfer_test.go` add local synthetic production round trips,
     history/data/provenance comparisons, refusal/preservation/interleaving,
     authentication/redaction/cancellation and lost/post-success-response checks.
+    The cycle-2 regression in `cmd/memdolt/transfer_test.go` runs successful and
+    denied pulls in subprocesses, directly and through a real `serve` process
+    verified by authenticated IPC. It compares every local tag's name, commit
+    hash, tagger, email, timestamp and message, including a conflicting remote
+    tag and a remote-only tag that must remain absent. It checks raw CLI stdout
+    (one JSON line on success, empty on refusal), empty owner stdout when no
+    MCP input was sent, clean owner shutdown and reopened main/working-set state.
     These change no shipped behavior and establish no real-hub, two-machine,
     cross-version or full-M4 acceptance. This record and PRD §§5.2/11.2/16
     preserve the phasing. No dependency, migration, MCP tool, remote editor,
