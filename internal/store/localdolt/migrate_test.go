@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -210,6 +211,11 @@ func TestMigratedSchemaMatchesThePRDSchema(t *testing.T) {
 			"actor varchar(64)",
 			"actor_raw varchar(255)",
 			"text text",
+			"session_id varchar(255)",
+			"agent_id varchar(255)",
+			"provider_id varchar(255)",
+			"model_id varchar(255)",
+			"variant varchar(255)",
 			"created_at datetime",
 			"FULLTEXT KEY ft_notes (text)",
 		}},
@@ -319,11 +325,86 @@ func TestProposalMetadataNullabilityIsEnforcedOnFreshAndUpgradedStores(t *testin
 	}
 }
 
+func TestSessionNoteProvenanceUpgradesAnOlderStoreWithoutChangingNotes(t *testing.T) {
+	ctx := context.Background()
+	st := storeAtMigration(t, 3)
+	if _, err := st.Commit(ctx, store.CommitRequest{
+		Statements: []store.Statement{{
+			SQL:  "INSERT INTO session_notes (id, actor, actor_raw, text, created_at) VALUES (?, ?, ?, ?, ?)",
+			Args: []any{"01J0000000000000000000000", "agent:codex", "codex", "legacy note", "2026-08-30 10:00:00"},
+		}},
+		Text: []string{"codex", "legacy note"}, Message: "seed a pre-provenance note", Author: stagingActor,
+	}); err != nil {
+		t.Fatalf("seed migration-3 note: %v", err)
+	}
+
+	result, err := st.Migrate(ctx)
+	if err != nil {
+		t.Fatalf("upgrade migration-3 store: %v", err)
+	}
+	if len(result.Applied) != 1 || result.Applied[0].Version != 4 {
+		t.Fatalf("upgrade applied %+v, want migration 4 only", result.Applied)
+	}
+	if got := scanString(t, st, "SELECT text FROM session_notes WHERE id = ?", "01J0000000000000000000000"); got != "legacy note" {
+		t.Fatalf("legacy note text = %q, want unchanged", got)
+	}
+	if got := scanString(t, st, "SELECT actor FROM session_notes WHERE id = ?", "01J0000000000000000000000"); got != "agent:codex" {
+		t.Fatalf("legacy note actor = %q, want unchanged", got)
+	}
+	if got := scanString(t, st, "SELECT actor_raw FROM session_notes WHERE id = ?", "01J0000000000000000000000"); got != "codex" {
+		t.Fatalf("legacy note actor_raw = %q, want unchanged", got)
+	}
+	if got := scanInt(t, st, "SELECT COUNT(*) FROM session_notes WHERE session_id IS NULL AND agent_id IS NULL AND provider_id IS NULL AND model_id IS NULL AND variant IS NULL"); got != 1 {
+		t.Fatalf("legacy note has %d all-NULL provenance rows, want 1", got)
+	}
+
+	actor := memory.Actor{Name: "agent:opencode", Raw: "cli"}
+	written, _, err := memory.New(st, actor).LogNoteWithProvenance(ctx, "verified note", memory.NoteProvenance{
+		SessionID: "ses_current", AgentID: "build", ProviderID: "openai",
+		ModelID: "gpt-5.6", Variant: "xhigh",
+	})
+	if err != nil {
+		t.Fatalf("write a provenance note: %v", err)
+	}
+	listed, err := memory.New(st, actor).Notes(ctx, 2)
+	if err != nil {
+		t.Fatalf("list provenance notes: %v", err)
+	}
+	if len(listed) != 2 || listed[0].ID != written.ID || listed[0].SessionID != "ses_current" ||
+		listed[0].AgentID != "build" || listed[0].ProviderID != "openai" ||
+		listed[0].ModelID != "gpt-5.6" || listed[0].Variant != "xhigh" {
+		t.Fatalf("listed provenance = %+v, want exact verified fields", listed)
+	}
+
+	commits := scanInt(t, st, "SELECT COUNT(*) FROM dolt_log")
+	second, err := st.Migrate(ctx)
+	if err != nil {
+		t.Fatalf("second upgrade: %v", err)
+	}
+	if len(second.Applied) != 0 || scanInt(t, st, "SELECT COUNT(*) FROM dolt_log") != commits {
+		t.Fatalf("second upgrade = %+v and changed history; want idempotent no-op", second)
+	}
+}
+
 func storeAtMigrationTwoThenUpgrade(t *testing.T) *localdolt.Store {
+	t.Helper()
+	st := storeAtMigration(t, 2)
+	result, err := st.Migrate(context.Background())
+	if err != nil {
+		t.Fatalf("upgrade migration-2 store: %v", err)
+	}
+	if len(result.Applied) != store.LatestSchemaVersion()-2 || result.Applied[0].Version != 3 ||
+		result.Applied[len(result.Applied)-1].Version != store.LatestSchemaVersion() {
+		t.Fatalf("upgrade applied %+v, want every migration after 2", result.Applied)
+	}
+	return st
+}
+
+func storeAtMigration(t *testing.T, version int) *localdolt.Store {
 	t.Helper()
 	ctx := context.Background()
 	st := openStore(t, baseDir(t), discardLogger())
-	for _, migration := range store.Migrations()[:2] {
+	for _, migration := range store.Migrations()[:version] {
 		statements := append([]store.Statement{}, migration.Statements...)
 		version := strconv.Itoa(migration.Version)
 		statements = append(statements, store.Statement{
@@ -338,11 +419,6 @@ func storeAtMigrationTwoThenUpgrade(t *testing.T) *localdolt.Store {
 			t.Fatalf("apply migration %d: %v", migration.Version, err)
 		}
 		execQuery(t, st, "CALL DOLT_TAG(?, ?)", store.MigrationTag(migration.Version), commit.Hash)
-	}
-	if result, err := st.Migrate(ctx); err != nil {
-		t.Fatalf("upgrade migration-2 store: %v", err)
-	} else if len(result.Applied) != 1 || result.Applied[0].Version != 3 {
-		t.Fatalf("upgrade applied %+v, want migration 3 only", result.Applied)
 	}
 	return st
 }

@@ -45,6 +45,7 @@ var migrations = []Migration{
 	{Version: 1, Name: "initial schema", Statements: initialSchema},
 	{Version: 2, Name: "proposals metadata", Statements: proposalsSchema},
 	{Version: 3, Name: "require proposal metadata", Statements: requireProposalMetadata},
+	{Version: 4, Name: "session note provenance", Statements: sessionNoteProvenance},
 }
 
 // Migrations returns the schema history the binary ships, oldest first.
@@ -260,4 +261,16 @@ var requireProposalMetadata = []Statement{
   MODIFY rationale TEXT NOT NULL,
   MODIFY actor VARCHAR(64) NOT NULL,
   MODIFY target ENUM('repo','global') NOT NULL`},
+}
+
+// sessionNoteProvenance adds PRD §11.4's verified OpenCode identity without
+// changing migration 1 or requiring ordinary notes to carry host metadata.
+// The columns are nullable because other hosts and notes written before this
+// migration have no OpenCode session to identify.
+var sessionNoteProvenance = []Statement{
+	{SQL: "ALTER TABLE session_notes ADD COLUMN session_id VARCHAR(255) NULL"},
+	{SQL: "ALTER TABLE session_notes ADD COLUMN agent_id VARCHAR(255) NULL"},
+	{SQL: "ALTER TABLE session_notes ADD COLUMN provider_id VARCHAR(255) NULL"},
+	{SQL: "ALTER TABLE session_notes ADD COLUMN model_id VARCHAR(255) NULL"},
+	{SQL: "ALTER TABLE session_notes ADD COLUMN variant VARCHAR(255) NULL"},
 }

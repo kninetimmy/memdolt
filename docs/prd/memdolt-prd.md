@@ -292,6 +292,18 @@ Notes:
 - Git-ingest tables (`commits`/`files`/`commit_files`) are **derived local data** and live in the code-index SQLite, not the versioned repo (each machine's git clone can differ; same §4 principle). This is a placement change from memhub. **[design]**
 - Metrics and transcript-pointer tables also stay out of the versioned repo (machine-local; §12 matrix).
 - `session_notes` carries nullable session, agent, provider, model, and variant provenance. These are opaque metadata attached to the note, not free-form note text or inputs to actor/source derivation; ordinary notes may omit them, while verified OpenCode wrap-up notes use them (§11.4).
+
+  Before issue #116, this schema specified the provenance columns but shipped
+  migrations stopped at version 3 without them. After it, append-only migration
+  4 adds all five nullable columns; existing note text, actor, raw actor, and
+  timestamps remain intact, and repeating `memdolt init` adds no migration or
+  commit. Ordinary notes still store NULL metadata. Both the one-note CLI lane
+  and `Lanes.CommitNotes` preserve supplied metadata and declare all five new
+  strings for deny-list enforcement before committing: metadata can now refuse
+  an otherwise allowed note. This declaration binds `LogNoteWithProvenance`
+  (including `LogNote`) and `CommitNotes`, not arbitrary SQL writers or every
+  string column. The MCP accumulator's per-actor batching, clean-working-set
+  guard, retry, and shutdown rules in §3.1 remain unchanged.
 - `facts.evidence` / `decisions.evidence`: a nullable free-form pointer (file path, `file:line`, commit hash, PR number, or URL) an agent or reviewer can attach when proposing or promoting a row. Its purpose is content-based re-verification — checking whether the pointed-at file/commit/PR still says what the fact or decision claims — extending the same `path`+`content_hash` pattern `documents` already uses for ingested reference docs down to individual facts/decisions. **[design]**
 - `decisions.alternatives_rejected`: nullable TEXT recording what was considered and passed over. `propose_decision` (§11.1) names it directly so the tool schema prompts agents to fill it in, not just the choice made. **[design]**
 - `facts.confidence` is **removed** (memhub carries it). It is asserted once at write time and read by nothing downstream — no query, ranking, or filter consults it. `commands.success_count`/`fail_count` remain the system's only *observed* confidence mechanism (§6.1 `commands` table); an unread, asserted number is vestigial and the review gate (§7) is the trust mechanism this schema actually relies on. **[design]**
@@ -919,7 +931,61 @@ This is the narrow v0.2.2 supplement to the v0.2.0 parity baseline, not a claim 
 
 `commands` is the plural command-object map and `skills` is a path array. Doctor recognizes a registration only after parsing a repo or user `opencode.json`/`opencode.jsonc`: native `mcp.servers.memdolt` and officially supported V1 `mcp.memdolt` count; JSONC comments and trailing commas are accepted before a real JSON parse; malformed files and similarly named unsupported paths do not count.
 
-**Wrap-up provenance.** An OpenCode wrap-up takes its current session id only from host context — never a session list, title, active-session heuristic, or filesystem — then independently verifies it with `opencode2 api get "/api/session/<id>"`. It parses `data` as `Session.Info` and requires the returned `data.id` to exactly equal the host-supplied id. An unavailable id, failed API call, malformed response, missing returned id, or mismatch stops before every durable memory write, render, or sync. On success the session note stores `session_id` plus nullable `data.agent` (`agent_id`) and, when present, `data.model.providerID` (`provider_id`), `data.model.id` (`model_id`), and `data.model.variant` (`variant`); they never enter free-form text or derive actor/source values.
+Before issue #116's cycle-1 parser correction, the doctor implementation used
+Go struct decoding at the root and also accepted `MCP`/`Mcp`, contradicting the
+exact-path rule above. After it, `openCodeConfigRegistersMemdolt` uses exact
+map lookups for every path segment. Unknown keys, including case variants
+alongside a valid registration, remain ignored. JSONC support and the optional
+advisory behavior remain unchanged; this rule binds the doctor reader alone,
+not every JSON decoder.
+
+**Wrap-up provenance.** Before issue #116, this paragraph described the workflow
+without separating host obligations from guarantees the CLI can enforce:
+
+> An OpenCode wrap-up takes its current session id only from host context — never a session list, title, active-session heuristic, or filesystem — then independently verifies it with `opencode2 api get "/api/session/<id>"`. It parses `data` as `Session.Info` and requires the returned `data.id` to exactly equal the host-supplied id. An unavailable id, failed API call, malformed response, missing returned id, or mismatch stops before every durable memory write, render, or sync. On success the session note stores `session_id` plus nullable `data.agent` (`agent_id`) and, when present, `data.model.providerID` (`provider_id`), `data.model.id` (`model_id`), and `data.model.variant` (`variant`); they never enter free-form text or derive actor/source values.
+
+After issue #116, obtaining the current ID only from host context and never
+discovering or guessing another session remains the **workflow obligation**.
+The CLI accepts a caller-supplied ID and **cannot authenticate its origin**.
+`opencode.VerifySession` validates `ses` plus a nonempty ASCII alphanumeric,
+underscore, or hyphen suffix (255 characters total at most), then calls
+`opencode2 api get /api/session/<id>` through argument-based process execution.
+Only an unavailable bare executable permits the Windows `opencode2.cmd`
+fallback; a command that ran and failed is not retried. A parsed object `data`
+with an exact, nonempty `data.id` is required. API failure, malformed metadata,
+missing identity, or mismatch refuses before `opencode wrap-up-note` opens the
+store or writes its note. `opencode session-info` offers the same verification
+without opening a store. Neither command proves the supplied ID is the caller's
+current session, nor governs writes through other commands or MCP tools.
+
+Before the cycle-1 parser correction, struct decoding treated protocol keys
+case-insensitively, so `data.ID` could replace a mismatched actual `data.id`,
+and uppercase-only `DATA.ID` could satisfy missing lowercase members. After
+it, `VerifySession` looks up every consumed key exactly: `data`, `id`, `agent`,
+`model`, `providerID`, and `variant`. Only the actual `data.id` can satisfy
+the identity check; other casing is unknown input and stays ignored. Typed
+string decoding, nullable optional metadata, and unknown-field compatibility
+remain, with no metadata alias able to overwrite the selected exact field.
+This correction binds `VerifySession` and its two CLI callers, preserving
+refusal before the writer opens the store; it changes no other JSON reader,
+note lane, or actor derivation.
+
+Successful wrap-up notes persist the field mapping above separately from the
+body, retain the existing note-body whitespace normalization, and always use
+canonical actor `agent:opencode` with raw `cli`, independently of API metadata.
+The ordinary CLI note lane remains available without OpenCode verification;
+its nullable metadata is absent. `LogNoteWithProvenance` and `CommitNotes`
+validate metadata widths without trimming values and include the new strings
+in their deny-list declarations (§6.1); these general lanes do not verify an
+OpenCode API identity. Authenticated owner routing, note batching, the sixteen
+MCP tools, and elicited human review retain their existing behavior.
+
+The committed core templates for Claude Code, Codex, and OpenCode offer only
+check-init, recall, and wrap-up using implemented M3 operations. OpenCode
+wrap-up verifies the host-context ID before any workflow write and re-verifies
+it when writing the approved summary; a failure stops later steps. Facts and
+decisions remain proposals for human review. No template adds render, sync,
+transcript capture, wrapper installation, or the other deferred backends.
 
 **Transcript archive.** Transcript mode requires a separate explicit approval that warns the archive is unredacted. It reuses the already verified current id and never discovers or guesses another one. Before any process invocation, validate an OpenCode id as `ses` followed by a nonempty ASCII alphanumeric, underscore, or hyphen suffix. Invoke `opencode2 api v2.session.export --param sessionID=<id> --param sanitize=false` through argument-based process APIs (on Windows, fall back to `opencode2.cmd` only when the bare program is unavailable). Before opening the project or writing, require a JSON object `data`, object `data.info`, exact `data.info.id`, and array `data.messages`. Archive the exact complete, unsanitized response bytes as `.json.zst` and retain one replaceable local pointer per session. Archive and pointer data are excluded from recall, embeddings, and every export; `[wrap_up].transcript_retention_days` governs retention, and expiry removes the local archive and its pointer.
 
