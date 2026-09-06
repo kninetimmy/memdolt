@@ -552,6 +552,20 @@ export GOFLAGS=-tags=gms_pure_go
     metadata and meta. Scan/config/read failures refuse upload or promotion.
     Unchanged local history is not rescanned by pull; fetched history can
     contain historical matching text. Existing write/review scanners remain.
+    Before the issue #127 cycle-1 fix, this check omitted generation mode and
+    expression while exempting `facts.live_key` from scanning as derived. A
+    writable replacement or changed generated expression could therefore carry
+    denied text through push and pull. After the fix, `transferLiveKey` parses
+    `SHOW CREATE TABLE` at the exact captured/candidate commit with the pinned
+    SQL parser and requires STORED generation plus the complete canonical
+    `IF(superseded_by IS NULL, key, NULL)` expression before granting that
+    exemption. Read/parse/shape failure refuses transfer without echoing the
+    remote DDL. This added restriction binds `facts.live_key` in `Push`/`Pull`
+    alone, not every generated column, clone inspection, migration or review.
+    Existing column checks and scanners remain; no comprehensive index audit is
+    added. The transfer regression now verifies upload and promotion refusal
+    for writable, changed-STORED-expression and VIRTUAL fixtures, preserving
+    remote files and local main.
   - `localdolt/localdolt.go` adds `Commit` to the existing `proposalMu` boundary.
     Before #127 only stage/accept/reject/expiry shared it; afterward those plus
     direct commits and complete transfers serialize on one owning Store.

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/vitess/go/vt/sqlparser"
+
 	"github.com/kninetimmy/memdolt/internal/denylist"
 	"github.com/kninetimmy/memdolt/internal/store"
 )
@@ -15,7 +17,8 @@ import (
 // every application column and its type; ! means NOT NULL, the first column is
 // the single-column primary key. Unknown tables/columns/types fail closed.
 // Text names every persisted user-authored string/provenance column, including
-// IDs and metadata. Dates/counters and the derived live_key are not prose.
+// IDs and metadata. Dates/counters and live_key's validated derivation are not
+// prose; transferLiveKey verifies its STORED expression before that exemption.
 // This is a column-shape check, not a full index/constraint or history audit.
 var transferTables = []struct{ name, columns, text string }{
 	{"facts", "id:char(26)! key:varchar(255) value:text source:varchar(64) kind:varchar(64) evidence:varchar(1024) verified_at:datetime created_at:datetime superseded_by:char(26) live_key:varchar(255)", "id key value source kind evidence superseded_by"},
@@ -71,7 +74,34 @@ func validateTransferSchema(ctx context.Context, conn *sql.Conn, hash string) er
 			return err
 		}
 	}
-	return nil
+	return transferLiveKey(ctx, conn, database)
+}
+
+// transferLiveKey checks the exact committed definition, not the working table.
+// SHOW COLUMNS does not establish the expression behind live_key's scan
+// exemption. Parse the complete DDL and compare the complete canonical AST
+// rendering, so comments/formatting cannot hide a changed expression or mode.
+func transferLiveKey(ctx context.Context, conn *sql.Conn, database string) error {
+	var name, definition string
+	if err := conn.QueryRowContext(ctx, "SHOW CREATE TABLE "+database+".facts").Scan(&name, &definition); err != nil {
+		return fmt.Errorf("read committed facts.live_key generation: %w", err)
+	}
+	statement, err := sqlparser.Parse(definition)
+	if err != nil {
+		// A remote expression may itself contain denied text; do not echo DDL
+		// through the parser's diagnostic while refusing its unknown shape.
+		return errors.New("cannot parse committed facts schema to validate live_key generation")
+	}
+	ddl, ok := statement.(*sqlparser.DDL)
+	if ok && ddl.TableSpec != nil {
+		for _, column := range ddl.TableSpec.Columns {
+			if column.Name.EqualString("live_key") && bool(column.Type.Stored) &&
+				strings.EqualFold(sqlparser.String(column.Type.GeneratedExpr), "(if(superseded_by is null, `key`, null))") {
+				return nil
+			}
+		}
+	}
+	return errors.New("unsupported committed facts.live_key generation; require STORED IF(superseded_by IS NULL, `key`, NULL)")
 }
 
 func transferColumnShape(ctx context.Context, conn *sql.Conn, database, table, spec string) (err error) {

@@ -1096,6 +1096,21 @@ historical matching text: this is not a history scrub. The original write
 declarations and review scanner remain unchanged; this third scan binds
 `Push`/`Pull` alone, not every native Dolt transfer or future memory lane.
 
+Before the issue #127 cycle-1 fix, that column check did not validate generation
+mode or expression, yet the scanner exempted `facts.live_key` as derived.
+Replacing it with a writable column or a changed generated expression could
+therefore transfer denied text and lose the supported live-key derivation.
+After the fix, `transferLiveKey` reads `SHOW CREATE TABLE` at the exact captured
+or candidate commit, parses the complete DDL with the pinned SQL parser, and
+requires STORED generation and the complete canonical expression
+`IF(superseded_by IS NULL, key, NULL)` before granting its scan exemption.
+Read/parse/shape failure refuses without echoing remote DDL. This restriction
+binds `facts.live_key` in push/pull validation alone; it does not change clone,
+migrations, review or every generated column, and it adds no comprehensive
+index/constraint audit. Existing table/column and scan behavior remains.
+The regression covers upload and promotion refusal for writable, changed
+STORED-expression and VIRTUAL columns, with remote files and local main intact.
+
 File pull reuses clone's source-preserving opener, including sources without
 oldgen; journaled or otherwise unsupported sources refuse with inspection and
 prepared-remote remedies. File transfers resolve the selected remote and

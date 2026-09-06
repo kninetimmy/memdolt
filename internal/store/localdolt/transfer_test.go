@@ -247,6 +247,62 @@ func TestTransferRejectsIncomingSchemaAndDenyList(t *testing.T) {
 	}
 }
 
+func TestTransferRejectsAlteredLiveKeyGeneration(t *testing.T) {
+	ctx := context.Background()
+	for _, fixture := range []struct{ name, definition, insert string }{
+		{"writable", "VARCHAR(255)", "INSERT INTO facts(id, `key`, value, source, live_key) VALUES ('fixture', 'safe.key', 'safe value', 'user', 'REVIEW-DENIED-FIXTURE')"},
+		{"changed stored expression", "VARCHAR(255) GENERATED ALWAYS AS ('REVIEW-DENIED-FIXTURE') STORED", "INSERT INTO facts(id, `key`, value, source) VALUES ('fixture', 'safe.key', 'safe value', 'user')"},
+		{"virtual", "VARCHAR(255) GENERATED ALWAYS AS (IF(superseded_by IS NULL, `key`, NULL)) VIRTUAL", "INSERT INTO facts(id, `key`, value, source) VALUES ('fixture', 'safe.key', 'safe value', 'user')"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			a, remote := transferFixture(t)
+			if _, err := a.Push(ctx, TransferOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			b := transferClone(t, a)
+			initial := transferMain(t, b)
+			// These are native-schema fixtures, deliberately bypassing the shipped
+			// migration contract and the write lane's text declaration.
+			candidate, err := a.Commit(ctx, store.CommitRequest{Author: a.cfg.Actor, Message: "synthetic live_key schema mutation", NoText: true, Statements: []store.Statement{
+				{SQL: "ALTER TABLE facts MODIFY COLUMN live_key " + fixture.definition},
+				{SQL: fixture.insert},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, st := range []*Store{a, b} {
+				if err := os.WriteFile(st.paths.ConfigFile(), []byte("[deny_list]\npatterns=['REVIEW-DENIED-FIXTURE']\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := cloneFileTree(t, remote)
+			pushed, err := a.Push(ctx, TransferOptions{})
+			if err == nil || pushed.Changed || !strings.Contains(err.Error(), "live_key") {
+				t.Errorf("unsafe upload = %+v, %v", pushed, err)
+			}
+			if !reflect.DeepEqual(before, cloneFileTree(t, remote)) {
+				t.Error("refused upload changed remote")
+			}
+			// Native upload provides the incompatible candidate to the independent
+			// pull guard even when production correctly refused the upload above.
+			if _, err := a.db.Exec("CALL DOLT_PUSH('origin', 'main')"); err != nil {
+				t.Fatal(err)
+			}
+			before = cloneFileTree(t, remote)
+			pulled, err := b.Pull(ctx, TransferOptions{})
+			if err == nil || pulled.Changed || pulled.RemoteCommit != candidate.Hash || !strings.Contains(err.Error(), "live_key") {
+				t.Errorf("unsafe promotion = %+v, %v", pulled, err)
+			}
+			if transferMain(t, b) != initial || countInternal(t, b, "SELECT COUNT(*) FROM facts") != 0 {
+				t.Error("unsafe candidate reached local main")
+			}
+			if !reflect.DeepEqual(before, cloneFileTree(t, remote)) {
+				t.Error("refused pull changed source")
+			}
+		})
+	}
+}
+
 func TestTransferScanConfigurationAndUnchangedText(t *testing.T) {
 	ctx := context.Background()
 	a, remote := transferFixture(t)
