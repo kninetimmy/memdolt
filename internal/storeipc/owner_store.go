@@ -163,6 +163,26 @@ func (s *OwnerStore) CheckWriteText(ctx context.Context, text []string) error {
 	return s.operation(ctx, opCheckWriteText, checkWriteTextArgs{Text: text}, &struct{}{})
 }
 
+func (s *OwnerStore) Push(ctx context.Context, opts localdolt.TransferOptions) (localdolt.TransferResult, error) {
+	return s.transfer(ctx, opPush, opts)
+}
+
+func (s *OwnerStore) Pull(ctx context.Context, opts localdolt.TransferOptions) (localdolt.TransferResult, error) {
+	return s.transfer(ctx, opPull, opts)
+}
+
+func (s *OwnerStore) transfer(ctx context.Context, operation string, opts localdolt.TransferOptions) (localdolt.TransferResult, error) {
+	var wire transferResult
+	if err := s.operation(ctx, operation, opts, &wire); err != nil {
+		return localdolt.TransferResult{Operation: operation, Remote: opts.Remote, Status: "unknown"},
+			fmt.Errorf("%s owner response lost or unavailable; outcome unknown; inspect local and remote main before retrying; fetched objects may remain: %w", operation, err)
+	}
+	if wire.Error != "" {
+		return wire.Result, errors.New(wire.Error)
+	}
+	return wire.Result, nil
+}
+
 // RecordCommand keeps the lane's incrementing upsert and read-back inside one
 // owner request. Splitting them into Commit and Query requests would leave a
 // window where another client could replace the row before this call reads it.

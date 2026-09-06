@@ -208,6 +208,12 @@ func (s *Store) openEngine(ctx context.Context, dataDir string) error {
 // A request that changes nothing fails: Dolt reports "nothing to commit"
 // rather than creating an empty commit.
 func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.CommitResult, error) {
+	// Before transfers, direct commits could interleave with proposal mutations.
+	// Share their boundary so a pull cannot replace a successful concurrent write
+	// and a review commit cannot sweep that write into another actor's commit.
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
 	db, err := s.handle()
 	if err != nil {
 		return store.CommitResult{}, err

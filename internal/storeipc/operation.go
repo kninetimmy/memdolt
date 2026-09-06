@@ -35,6 +35,8 @@ const (
 	opRejectProposal   = "reject_proposal"
 	opExpireProposals  = "expire_proposals"
 	opReviewAccept     = "review_accept"
+	opPush             = "push"
+	opPull             = "pull"
 )
 
 // Backend is the initialized data-store surface the live owner exposes. The
@@ -58,6 +60,8 @@ type Backend interface {
 	ProposalDiff(context.Context, string) (localdolt.ProposalDiff, error)
 	RejectProposal(context.Context, string) (localdolt.PendingProposal, error)
 	ExpireProposals(context.Context, time.Time) ([]localdolt.PendingProposal, error)
+	Push(context.Context, localdolt.TransferOptions) (localdolt.TransferResult, error)
+	Pull(context.Context, localdolt.TransferOptions) (localdolt.TransferResult, error)
 }
 
 var _ Backend = (*localdolt.Store)(nil)
@@ -143,6 +147,13 @@ type reviewAcceptResult struct {
 	CleanupError string                 `json:"cleanupError,omitempty"`
 }
 
+// Transfer errors can follow confirmed promotion or leave a remote outcome
+// unknown. Preserve both the result and error without resubmitting the operation.
+type transferResult struct {
+	Result localdolt.TransferResult `json:"result"`
+	Error  string                   `json:"error,omitempty"`
+}
+
 // ReviewAcceptFunc is the application review gate an owner exposes. The
 // production functions are internal/review.Accept and AcceptExpected; keeping
 // it explicit prevents the transport from falling back to a raw storage merge
@@ -164,6 +175,24 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var result any
 	var err error
 	switch req.Operation {
+	case opPush, opPull:
+		args, decodeErr := operationArgs[localdolt.TransferOptions](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		var transferred localdolt.TransferResult
+		var transferErr error
+		if req.Operation == opPush {
+			transferred, transferErr = h.store.Push(ctx, args)
+		} else {
+			transferred, transferErr = h.store.Pull(ctx, args)
+		}
+		wire := transferResult{Result: transferred}
+		if transferErr != nil {
+			wire.Error = transferErr.Error()
+		}
+		result = wire
 	case opSchemaVersion:
 		result, err = h.store.SchemaVersion(ctx)
 	case opEmbeddingSources:

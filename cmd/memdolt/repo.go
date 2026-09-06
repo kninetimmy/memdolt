@@ -51,7 +51,8 @@ func newRepoStatusCommand() *cobra.Command {
 			"Reads through the authenticated local owner when one is running.\n\n" +
 			"This report is local-only: it makes no hub or remote request and says\n" +
 			"nothing about remote configuration, reachability, or synchronization. Remote\n" +
-			"status/diff, pull/push, conflict dialogs, and hub setup remain deferred.\n" +
+			"status/diff, conflict dialogs, and hub setup remain deferred. Use the separate\n" +
+			"push/pull commands for main-only push and validated fast-forward pull.\n" +
 			"It changes no memory or proposal state and never initializes a missing store.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

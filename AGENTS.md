@@ -253,8 +253,9 @@ export GOFLAGS=-tags=gms_pure_go
     mutate the same branch after validation. After it, `stage`,
     `AcceptProposal`, `RejectProposal`, and `ExpireProposals` share the mutex, so
     one of those operations finishes before another can act on the branch.
-    `PendingProposals` and `ProposalDiff` remain reads, direct-lane commits still
-    move `main` independently, and a foreign Dolt session does not share the Go
+    `PendingProposals` and `ProposalDiff` remain reads. At issue #106, direct-lane
+    commits still moved `main` independently; issue #127 adds them and transfers
+    to this mutex as recorded below. A foreign Dolt session does not share the Go
     mutex. Before the cycle-3 fix, expected-commit acceptance shared the same
     eager cleanup as CLI accept, reject, expire, and failed staging: it read the
     branch head, compared it with the observed commit, then called
@@ -478,6 +479,100 @@ export GOFLAGS=-tags=gms_pure_go
     statements and the new bootstrap scope. No configuration editor,
     application push/pull, remote status/diff, conflict dialog, hub setup,
     topology backend, or full M4 acceptance claim is added.
+- Transfer main: `memdolt push [remote]` and `memdolt pull [remote]` accept
+  `--dir`, `--user`, and `--json`, defaulting to configured `origin`.
+  **Before issue #127, issue #125 shipped only clone bootstrap and application
+  push/pull remained deferred. After #127, main-only push and validated
+  fast-forward pull ship; automatic merge and conflict resolution remain
+  deferred.** No remote editor, URL/branch/refspec operand, force, prune or
+  all-branches option is added. Stop the owner to configure a remote with
+  `dolt remote add <name> <absolute-url>` in `.memdolt/dolt/memory`, or clone
+  into a fresh repository. Missing stores are never created or migrated.
+
+  Push captures committed main and publishes only that immutable hash to
+  remote main, creating it or advancing by fast-forward. Pull fetches main
+  into a tracking ref and checks ancestry, the exact committed schema/column
+  shapes and changed text before `DOLT_MERGE('--ff-only', hash)`. Equal or
+  contained remote history is unchanged; divergence or incompatible metadata
+  refuses. No merge, genesis or migration commit is made. Both refuse dirty
+  main and active merge/conflict states. Pending proposals remain local.
+  Fetched objects/tracking refs may remain after refusal; inspect local and
+  remote main before retrying. Lost responses mean unknown outcome, without
+  resubmission. Confirmed promotion remains reported if a later step fails.
+  Success identifies operation, remote, captured local hash, remote hash,
+  resulting local hash, changed/current status; close/output failures remain
+  visible. Derived indexes, rendered files and adjacent config stay local;
+  use existing index status/rebuild after imported text changes.
+
+  Configured URLs use clone's explicit HTTP/HTTPS remotesapi and absolute
+  file-URL restrictions, including credential/query/fragment/port refusal.
+  The one native Windows `file://C:/...` stored spelling is restored to
+  `file:///C:/...` and native decoded file-path spaces are re-escaped before
+  validation. Remote names cannot select flags, refs
+  or destinations. Only a validated stored SQL username is accepted in remote
+  parameters; explicit `--user` overrides it, and neither means anonymous.
+  Passwords come only from `DOLT_REMOTE_PASSWORD` in the executing process.
+  Restart a running owner with the desired environment; caller passwords are
+  never sent through IPC. No personal Dolt credential is loaded for transfer,
+  and password/plaintext/URL-encoded/Basic forms are redacted from diagnostics.
+
+  The complete structural blast radius for #127 is:
+
+  - `cmd/memdolt/root.go` adds the two commands. New `transfer.go` owns their
+    flags/help, existing-store check, existing direct/owner selection, complete
+    typed operation and close-before-success rendering. Existing command
+    behavior remains; `repo.go` changes only its formerly deferred push/pull
+    help statement. Its offline status behavior and output remain unchanged.
+  - `localdolt/transfer.go` adds `Push`, `Pull`, their options/results, remote
+    preflight, clean-state check and immutable promotion protocol. These
+    restrictions bind these transfers alone, not arbitrary native Dolt calls.
+    `RequireExistingTransferStore` prevents their CLI callers from invoking
+    `Open` on a missing store; ordinary `Open` still creates, `Migrate` remains
+    explicit and clone keeps its existing exclusive bootstrap lifecycle.
+  - New `localdolt/transfer_engine.go` registers one private external SQL
+    procedure, `memdolt_transfer`, at process initialization. Only an
+    unexported context capability from `runEngineTransfer` can invoke it;
+    ordinary SQL and IPC Commit requests fail closed. It obtains the existing
+    owner's session DbData and reuses pinned push/fetch actions, closing fresh
+    remote handles. It does not open another local engine. Native SQL push/fetch
+    could inherit personal credentials and their stored username could override
+    `--user`; the new transfer path constructs a fresh remote with the selected
+    username and clone's credential-free dial provider. Native Dolt procedures
+    retain their own behavior. Pull reuses `openCloneRemote`, preserving file
+    sources including absent oldgen; symbolic links inside selected file
+    remotes are refused. No recursive cleanup or unrelated deletion is added.
+  - New `localdolt/transfer_schema.go` owns the maintained `transferTables`
+    contract: exact application table/column sets, types, nullability and primary
+    columns, plus explicit text coverage. The strict 32-character Dolt hash
+    check precedes revision-identifier construction; SQL values stay bound.
+    This is not a comprehensive index/constraint audit. Push scans persisted
+    snapshot text; pull scans only added/changed column values versus captured
+    local main. Coverage includes facts, decisions, tasks, notes and all five
+    provenance fields, commands, both narratives, documents/chunks, proposal
+    metadata and meta. Scan/config/read failures refuse upload or promotion.
+    Unchanged local history is not rescanned by pull; fetched history can
+    contain historical matching text. Existing write/review scanners remain.
+  - `localdolt/localdolt.go` adds `Commit` to the existing `proposalMu` boundary.
+    Before #127 only stage/accept/reject/expiry shared it; afterward those plus
+    direct commits and complete transfers serialize on one owning Store.
+    Their validation, attribution, batching, commit and review semantics still
+    hold. Reads and migrations are not added to that mutex, and it does not
+    coordinate foreign Dolt sessions. Transfer network latency therefore delays
+    memdolt mutations; the existing ownership lock still excludes other
+    cooperating memdolt processes.
+  - `storeipc/operation.go` and `owner_store.go` add explicit typed push/pull
+    operations and preserve populated result-plus-error responses. Token
+    authentication, verified-owner routing, cancellation, no transfer timeout,
+    bound arguments and single submission remain. The allow-list and private
+    capability restrictions bind their named seams, not every SQL procedure.
+  - `localdolt/transfer_test.go`, `transfer_auth_test.go`, `storeipc/transfer_test.go`
+    and `cmd/memdolt/transfer_test.go` add local synthetic production round trips,
+    history/data/provenance comparisons, refusal/preservation/interleaving,
+    authentication/redaction/cancellation and lost/post-success-response checks.
+    These change no shipped behavior and establish no real-hub, two-machine,
+    cross-version or full-M4 acceptance. This record and PRD §§5.2/11.2/16
+    preserve the phasing. No dependency, migration, MCP tool, remote editor,
+    conflict dialog, topology backend or hub deployment changes.
 - Inspect local repository state: `go run ./cmd/memdolt repo status` supports
   `--dir` and `--json`. Before issue #123 there was no `repo` command; after it,
   this local-only status reports the resolved store path, main commit, schema,
@@ -492,7 +587,8 @@ export GOFLAGS=-tags=gms_pure_go
   No remote is contacted or assessed. After #123, remote status/diff,
   transfers, conflict dialogs, hub setup, and the remaining M4 acceptance
   obligations stayed pending. Issue #125 adds only the clone transfer above;
-  the other obligations remain pending (PRD §§11.2 and 16).
+  issue #127 adds the bounded push/pull above; the other obligations remain
+  pending (PRD §§11.2 and 16).
 - Check a repository: `go run ./cmd/memdolt doctor` reports the store
   lock's ownership state (held, an orphaned record, absent), whether a live
   owner answers on its IPC endpoint, and whether the store's schema is
@@ -651,10 +747,11 @@ export GOFLAGS=-tags=gms_pure_go
   Before issue #106, `AcceptProposal` calls on one repository-owning Store were
   serialized so the second accept probed the first one's durable result; that
   lock bound acceptance alone. After issue #106, `proposalMu` retains that
-  ordering and also covers memdolt proposal staging, reject, and expiry. It does
-  not cover reads, direct-lane commits, every Store, or foreign Dolt sessions;
-  the issue #106 blast-radius record above states the external-mutation and
-  deletion behavior.
+  ordering and also covers memdolt proposal staging, reject, and expiry. It did
+  not cover direct-lane commits at that delivery. After issue #127, direct
+  commits and transfers also share it; reads, migrations and foreign Dolt
+  sessions remain outside it. The issue #106 blast-radius record above states
+  the external-mutation and deletion behavior.
 
   A branch does not gain the supersede bypass from its metadata label alone:
   accept verifies the exact staged shape (one old live fact linked, one live
