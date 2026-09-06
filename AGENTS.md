@@ -407,6 +407,22 @@ export GOFLAGS=-tags=gms_pure_go
   suppressed in both output modes; JSON stdout is one success object or no
   success object on failure.
 
+  Before the issue #125 cycle-1 fix, the containment claim above missed the
+  source opener: `GetRemoteDBWithoutCaching` reached Dolt's
+  `FileFactory.CreateDbNoCache`, which created a missing `oldgen/` in a file
+  source even when the empty source was then refused. After the fix,
+  `openCloneRemote` bypasses that writable factory for file URLs, resolves the
+  source path, opens existing NBS files with `NewLocalStore`, and combines an
+  existing `oldgen` and ghost reader only when `oldgen` is present. It never
+  initializes a source directory. `CloneRemote` uses only reads on these
+  source handles and close releases their readers. This restriction binds
+  `openCloneRemote` and the clone flow that calls it; `NewLocalStore` itself
+  is still write-capable, and other Dolt factory callers retain their behavior.
+  HTTP/HTTPS still uses the existing authenticated remote opener. Source
+  preservation tests compare names, bytes, modes and modification times after
+  success and refusal, including a valid source without `oldgen`; ordinary
+  reads may update access times through the OS.
+
   **Before issue #125, memdolt had no clone command and transfers remained
   unshipped after issue #123. After it, only clone bootstrap ships.** The
   complete structural blast radius is:
@@ -432,6 +448,10 @@ export GOFLAGS=-tags=gms_pure_go
     bootstrap checks bind `Clone` alone; `Store.Open` still creates a missing
     database, `Migrate` remains explicit and idempotent, and the direct lanes,
     review gate, offline repo status and sixteen MCP tools remain unchanged.
+    Its source path now passes through `openCloneRemote` and the shared
+    `cloneFilePath` decoder as described above. File sources avoid the reached
+    factory's initialization; network authentication, origin registration,
+    transfer, inspection, destination cleanup policy and output still hold.
   - New `internal/store/localdolt/clone_fs.go` contains environment writes and
     disables environment deletion/moves, including failed initialization's
     recursive cleanup and the old-temp-file sweep. This policy binds the

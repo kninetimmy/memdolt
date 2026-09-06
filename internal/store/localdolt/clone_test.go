@@ -2,6 +2,7 @@ package localdolt
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -46,6 +47,12 @@ func TestClonePreservesMainHistoryAndRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := pushCloneFixture(t, source, MainBranch)
+	remoteURL, err := url.Parse(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remotePath := cloneFilePath(remoteURL)
+	beforeSource := cloneFileTree(t, remotePath)
 	wantHistory := cloneRows(t, source.db, "SELECT commit_hash, committer, email, date, message FROM dolt_log ORDER BY commit_hash")
 	wantNotes := cloneRows(t, source.db, "SELECT * FROM session_notes AS OF 'main' ORDER BY id")
 	wantTasks := cloneRows(t, source.db, "SELECT * FROM tasks AS OF 'main' ORDER BY id")
@@ -73,6 +80,9 @@ func TestClonePreservesMainHistoryAndRows(t *testing.T) {
 	}
 	if result.MainCommit != wantMain || result.SchemaVersion != store.LatestSchemaVersion() {
 		t.Fatalf("clone result = %+v, want main %s", result, wantMain)
+	}
+	if got := cloneFileTree(t, remotePath); !reflect.DeepEqual(got, beforeSource) {
+		t.Fatal("successful clone changed its file source")
 	}
 	cloned, err := New(cfg)
 	if err != nil {
@@ -104,6 +114,105 @@ func TestClonePreservesMainHistoryAndRows(t *testing.T) {
 			t.Fatalf("changed %s: %q, %v", name, data, err)
 		}
 	}
+}
+
+func TestCloneFileSourceRefusalsDoNotInitializeSource(t *testing.T) {
+	for _, name := range []string{"empty", "unrelated file", "invalid manifest"} {
+		t.Run(name, func(t *testing.T) {
+			source := cloneScratch(t)
+			if name != "empty" {
+				file := "keep.txt"
+				if name == "invalid manifest" {
+					file = "manifest"
+				}
+				if err := os.WriteFile(filepath.Join(source, file), []byte("preserve this existing file"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := cloneFileTree(t, source)
+			path := filepath.ToSlash(source)
+			if !strings.HasPrefix(path, "/") {
+				path = "/" + path
+			}
+			remote := (&url.URL{Scheme: "file", Path: path}).String()
+			cfg := Config{BaseDir: cloneScratch(t), Actor: store.Actor{Name: "user", Email: "user@example.invalid"}}
+			if _, err := Clone(context.Background(), cfg, remote, ""); err == nil {
+				t.Fatal("invalid file source was reported usable")
+			}
+			if got := cloneFileTree(t, source); !reflect.DeepEqual(got, before) {
+				t.Fatal("refused clone changed its file source")
+			}
+		})
+	}
+}
+
+func TestCloneFileSourceWithoutOldgenRemainsUnchanged(t *testing.T) {
+	st := openInternalTestStore(t)
+	if _, err := st.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	remote := pushCloneFixture(t, st, MainBranch)
+	u, err := url.Parse(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := cloneFilePath(u)
+	oldgen := filepath.Join(source, "oldgen")
+	entries, err := os.ReadDir(oldgen)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("expected an empty fixture oldgen: %v, %v", entries, err)
+	}
+	if err := os.Remove(oldgen); err != nil {
+		t.Fatal(err)
+	}
+	before := cloneFileTree(t, source)
+	cfg := st.cfg
+	cfg.BaseDir = cloneScratch(t)
+	if result, err := Clone(context.Background(), cfg, remote, ""); err != nil || result.SchemaVersion != store.LatestSchemaVersion() {
+		t.Fatalf("clone without source oldgen = %+v, %v", result, err)
+	}
+	if got := cloneFileTree(t, source); !reflect.DeepEqual(got, before) {
+		t.Fatal("successful clone created oldgen or otherwise changed its source")
+	}
+}
+
+// Reads can update access times at the OS level; names, bytes, modes and
+// modification times are the source-preservation contract checked here.
+type cloneFileSnapshot struct {
+	mode  os.FileMode
+	mtime time.Time
+	hash  [32]byte
+}
+
+func cloneFileTree(t *testing.T, root string) map[string]cloneFileSnapshot {
+	t.Helper()
+	result := make(map[string]cloneFileSnapshot)
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		item := cloneFileSnapshot{mode: info.Mode(), mtime: info.ModTime()}
+		if !entry.IsDir() {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			item.hash = sha256.Sum256(data)
+		}
+		result[rel] = item
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
 
 func pushCloneFixture(t *testing.T, st *Store, branch string) string {

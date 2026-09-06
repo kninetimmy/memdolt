@@ -22,6 +22,8 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/types"
 	gmssql "github.com/dolthub/go-mysql-server/sql"
 
@@ -163,14 +165,12 @@ func validateCloneRemote(raw, user string) error {
 			return errors.New("invalid clone remote port; omit the colon or supply a port")
 		}
 	case "file":
-		path := filepath.FromSlash(u.Path)
-		if len(path) > 2 && path[0] == filepath.Separator && path[2] == ':' {
-			path = path[1:] // file:///C:/... on Windows
-		}
+		path := cloneFilePath(u)
 		if !strings.HasPrefix(raw, "file:///") || u.Host != "" || !filepath.IsAbs(path) || user != "" {
 			return errors.New("file clone requires an absolute file:/// path on this OS and no --user")
 		}
-		// FileFactory unescapes again on POSIX; reject double-decoding ambiguity.
+		// Keep origin compatible with Dolt: its FileFactory unescapes again on
+		// POSIX even though our source reader now uses the decoded path directly.
 		if strings.Contains(u.Path, "%") {
 			return errors.New("file clone URL contains an ambiguous encoded percent sign")
 		}
@@ -178,6 +178,67 @@ func validateCloneRemote(raw, user string) error {
 		return errors.New("unsupported clone URL scheme; use explicit http://, https://, or file:///")
 	}
 	return nil
+}
+
+func cloneFilePath(u *url.URL) string {
+	path := filepath.FromSlash(u.Path)
+	if filepath.Separator == '\\' && len(path) > 2 && path[0] == '\\' && path[2] == ':' {
+		path = path[1:] // file:///C:/... on Windows
+	}
+	return path
+}
+
+// openCloneRemote only reads a file source. FileFactory.CreateDbNoCache creates
+// missing oldgen directories even when opening an empty, invalid remote; that
+// factory remains suitable for writable stores, but not this clone source.
+// NewLocalStore opens existing non-journaled NBS files without initializing them.
+// Only its read operations are used by CloneRemote; it is not a read-only Store.
+func openCloneRemote(ctx context.Context, remote env.Remote) (db *doltdb.DoltDB, err error) {
+	u, err := url.Parse(remote.Url)
+	if err != nil {
+		return nil, errors.New("invalid clone remote URL")
+	}
+	if u.Scheme != "file" {
+		return remote.GetRemoteDBWithoutCaching(ctx, types.Format_Default, env.NewGRPCDialProvider())
+	}
+	path, err := filepath.EvalSymlinks(cloneFilePath(u))
+	if err != nil {
+		return nil, fmt.Errorf("resolve existing file clone source: %w", err)
+	}
+	quota := nbs.NewUnlimitedMemQuotaProvider()
+	newGen, err := nbs.NewLocalStore(ctx, types.Format_Default.VersionString(), path, 0, quota, false)
+	if err != nil {
+		return nil, err
+	}
+	var oldGen *nbs.NomsBlockStore
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, newGen.Close())
+			if oldGen != nil {
+				err = errors.Join(err, oldGen.Close())
+			}
+		}
+	}()
+	var source chunks.ChunkStore = newGen
+	oldPath := filepath.Join(path, "oldgen")
+	_, statErr := os.Stat(oldPath)
+	if statErr == nil {
+		oldGen, err = nbs.NewLocalStore(ctx, newGen.Version(), oldPath, 0, quota, false)
+		if err != nil {
+			return nil, err
+		}
+		if oldGen.Version() != "" && oldGen.Version() != newGen.Version() {
+			return nil, errors.New("file clone source has incompatible NBS generation formats; use a consistent remote")
+		}
+		ghosts, err := nbs.NewGhostBlockStore(path)
+		if err != nil {
+			return nil, err
+		}
+		source = nbs.NewGenerationalCS(oldGen, newGen, ghosts)
+	} else if !os.IsNotExist(statErr) {
+		return nil, fmt.Errorf("inspect file clone source oldgen: %w", statErr)
+	}
+	return doltdb.DoltDBFromCS(source, DatabaseName)
 }
 
 func cloneTransfer(ctx context.Context, dataDir, remoteURL, user string) (result CloneResult, err error) {
@@ -204,7 +265,7 @@ func cloneTransfer(ctx context.Context, dataDir, remoteURL, user string) (result
 		params[dbfactory.GRPCUsernameAuthParam] = user
 	}
 	r := env.NewRemote("origin", remoteURL, params)
-	src, err := r.GetRemoteDBWithoutCaching(ctx, types.Format_Default, env.NewGRPCDialProvider())
+	src, err := openCloneRemote(ctx, r)
 	if err != nil {
 		return result, fmt.Errorf("access clone remote; check URL, connectivity and --user/DOLT_REMOTE_PASSWORD: %w", err)
 	}

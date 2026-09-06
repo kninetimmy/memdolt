@@ -971,6 +971,23 @@ memdolt submits one clone operation; Dolt may retry transport reads/downloads
 internally. Source history, main hash, authorship, row contents and nullable
 note provenance remain the remote's, without conversion.
 
+Before the issue #125 cycle-1 fix, the containment statement overlooked a
+source-side write: file URLs passed through `GetRemoteDBWithoutCaching` into
+the pinned `FileFactory.CreateDbNoCache`, which created missing `oldgen/`
+directories even for an empty source subsequently refused by clone. After
+the fix, `openCloneRemote` resolves file URLs with the shared `cloneFilePath`
+decoder, opens existing NBS files directly, combines old-generation and ghost
+readers only when `oldgen` exists, and wraps them with `DoltDBFromCS`. The
+clone flow performs reads on those source handles and closes them without
+initialization. This binds `openCloneRemote`/clone, not the write-capable
+`NewLocalStore` type or other factory callers. HTTP/HTTPS authentication and
+the destination transfer/inspection lifecycle remain unchanged. Regression
+tests compare source names, bytes, modes and modification times after
+success/refusal, including an empty source and a valid source without
+`oldgen`; OS-managed access-time updates from ordinary reads are not writes
+performed by memdolt. The CLI regression verifies nonzero refusal, empty
+JSON stdout and an unchanged empty file source.
+
 The structural changes are the root command's additive registration; new
 `cmd/memdolt/clone.go` for flags/help/rendering; new
 `localdolt/clone.go` for validation, ownership, transfer and inspection; new

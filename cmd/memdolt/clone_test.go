@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,5 +132,25 @@ func TestCloneRefusesManagedSymlinksAndNonemptyDirectories(t *testing.T) {
 				t.Fatalf("clone touched symlink target: %v, %v", entries, err)
 			}
 		})
+	}
+}
+
+func TestCloneRejectsEmptyFileSourceWithoutInitializingIt(t *testing.T) {
+	source := scratchDir(t)
+	path := filepath.ToSlash(source)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	remote := (&url.URL{Scheme: "file", Path: path}).String()
+	root := newRootCommand()
+	root.SetArgs([]string{"clone", remote, "--dir", scratchDir(t), "--json"})
+	var output bytes.Buffer
+	root.SetOut(&output)
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "no Dolt data") || output.Len() != 0 {
+		t.Fatalf("empty file source: err=%v, stdout=%q", err, output.String())
+	}
+	entries, err := os.ReadDir(source)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("refused clone wrote to its empty file source: %v, %v", entries, err)
 	}
 }
