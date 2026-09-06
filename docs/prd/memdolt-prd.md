@@ -1125,10 +1125,24 @@ memdolt/
 | **M0 — Spike (go/no-go)** | Embedded-driver soak: MCP-server-owns-store + CLI-routes-through-IPC under concurrent load, incl. unclean-kill/stale-LOCK recovery. ONNX-in-Go: embeddings + rerank scores match memhub within tolerance on a probe corpus (tokenizer ids byte-identical). Retrieval rig: golden set on Dolt FULLTEXT + brute-force cosine. Hub rig: sql-server + remotesapi on the Pi or Linux box, clone/pull/push/merge round trip over Tailscale from two machines. Resolve every **[verify]**: ARM64 release asset, gc flag semantics, shallow clones, Linux-AMD64 onnxruntime bundling, tokenizer lib, current vector-index status. | Recall@K ≥ memhub baseline (or the BM25 contingency proves it); zero data-loss events in the concurrency soak; push/pull round trip clean. **Fail → project stops; write up findings.** **Decided 2026-08-02: GO** — all three conditions met, each in a narrower scope than its wording suggests, and two of the scope column's six `[verify]` items (gc flag semantics, shallow clones) did not complete. Condition-by-condition evidence, the limits the GO carries, and the obligations it leaves open: `docs/spikes/m0-gate.md` |
 | **M1 — Core** | init, schema+migrations, CRUD all lanes, proposal branches, review CLI (accept/reject/expire/stale, contradiction probe), commit conventions, doctor basics, deny-list. | Lifecycle test suite green; a full propose→review→merge cycle audited via `dolt_log`. |
 | **M2 — Retrieval** | Embedding side-store, vector-only recall candidate gather + warnings, rerank, eval harness, staleness machinery, `search`; FULLTEXT remains available to the text-search surface. | Golden gate green in CI (hermetic fixture). |
-| **M3 — MCP** | Full tool surface, 2026-07-28 behaviors, elicitation review loop + fact-key conflict flow, server instructions, `.mcp.json`, native OpenCode V2 registration/doctor/identity, verified OpenCode wrap-up provenance, skills for 3 agent CLIs. | End-to-end session from real Claude Code: recall, propose, elicited review, task ops. |
+| **M3 — MCP** | Full tool surface, 2026-07-28 behaviors, elicitation review loop + fact-key conflict flow, server instructions, `.mcp.json`, native OpenCode V2 registration/doctor/identity, verified OpenCode wrap-up provenance, skills for 3 agent CLIs. | Previous gate, replaced 2026-09-06 as recorded below: End-to-end session from real Claude Code: recall, propose, elicited review, task ops. |
 | **M4 — Hub & repo ops** | remotes config, pull/push/repo-status + conflict elicitation, hub init/systemd docs, auth setup, version-skew guards, topology config; `Store` remote impl (topology B) if time allows. | Two-machine round-trip acceptance test (r2 §13.6 analogue): fixture data, write from both machines, merge, verify counts/hashes; re-open with plain local memdolt — no conversion (D13 gate). |
 | **M5 — Parity long tail** | docs ingestion, code index + locate + eval, render, global store, import-from-memhub including session-note provenance, audit md, ingest-git. | Parity matrix (§12) fully dispositioned; locate golden gate green. |
 | **M6 — Ops polish** | backups + doctor --hub, gc/retention, upgrade machinery with safe wrapper resync, token accounting (gated), validated unredacted OpenCode transcripts, README/status discipline. | Quarterly-drill-style restore test documented and executed once. |
+
+**M3 exit-gate replacement (2026-09-06, issue #119).** The previous gate above
+required a real Claude Code session. The user canceled their Claude subscription
+and explicitly waived live Claude acceptance. The approved replacement is
+passing deterministic compatibility checks for registration, stdio, recall,
+proposal isolation, review, task operations, and actor attribution, plus a real
+OpenCode wrap-up with a host-provided current session ID independently matched
+to the API and one explicitly approved synthetic note whose persisted text,
+nullable provenance, and canonical/raw actor are verified. The evidence and
+reproduction commands are in [the M3 acceptance report](../spikes/m3-acceptance.md).
+Claude compatibility is expected from official host documentation and these
+checks; actual Claude recall, proposals, task operations, and human elicitation
+remain unverified. This replaces M3's acceptance evidence only; the phased tool
+surface in §11.1 is unchanged, and M4–M6 remain deferred.
 
 ---
 
