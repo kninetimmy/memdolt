@@ -220,6 +220,13 @@ idempotence are unchanged. This stop-owner restriction binds `init` alone, not
 every lifecycle or store-independent command: `doctor` continues to inspect a
 live owner, and `version` remains store-independent.
 
+Before issue #125, that exception described `init` alone. After it, `clone`
+also requires the same exclusive ownership lock and refuses a live owner
+before remote contact. It does not route a bootstrap through IPC. The new
+restriction binds `localdolt.Clone`; `init` keeps its earlier stop-owner
+refusal and migration behavior, ordinary commands retain owner routing, and
+`doctor` and `version` retain their prior behavior.
+
 This is more machinery than memhub needed (SQLite WAL handles multi-process natively). It is the honest price of Dolt embedded, paid once, in one module.
 
 ### 5.3 On-disk layout
@@ -919,9 +926,103 @@ stores retain the migration/upgrade guards and visible probe, authentication,
 read, output, and close failures. A direct read may briefly create or update the
 local ownership lock, as other direct opens do (§5.2); no durable memory or
 working-set contents change. Local observations do not establish whether a
-remote is configured, reachable, current, synchronized, or absent. Remote
-status/diff (including `repo status --diff`), transfers, conflict dialogs, and
-hub setup remain unshipped; the full M4 scope and exit gate in §16 still apply.
+remote is configured, reachable, current, synchronized, or absent. After #123,
+remote status/diff (including `repo status --diff`), transfers, conflict dialogs,
+and hub setup remained unshipped. Issue #125 adds the clone transfer below;
+the other operations and the full M4 scope and exit gate in §16 still apply.
+
+**M4 clone bootstrap (issue #125):** before this issue there was no `clone`
+command. After it, `memdolt clone <remote-url> [--dir <repository>]
+[--user <sql-user>] [--json]` acquires an existing committed `main` using the
+pinned embedded driver's clone engine. The local database is the established
+`<repository>/.memdolt/dolt/memory`, with `origin` and main tracking registered
+through Dolt. Success reports `store`, `mainCommit` and `schemaVersion`; JSON
+stdout contains one object, or no success object on failure. Dolt progress is
+suppressed in both modes. Inspection and close finish before success is printed.
+
+Only explicit absolute `http://`/`https://` remotesapi URLs with a database
+path and absolute `file:///` URLs are supported (`file:///C:/path` on Windows).
+URL userinfo, queries, fragments, unsupported schemes, malformed ports and
+invalid users fail before transfer. File paths may encode spaces, but encoded
+percent signs are refused because of the pinned parser's double-decoding
+ambiguity. `--user` accepts 1–32 ASCII letters, digits, dots, underscores or
+hyphens and reaches Dolt's Basic authentication path; only the process
+environment `DOLT_REMOTE_PASSWORD` supplies the password. The password never
+enters a URL, argument or persisted configuration. Diagnostics redact its
+plaintext, URL-encoded and Basic forms. Without `--user`, authentication is
+anonymous; clone loads no personal Dolt credentials. File remotes reject
+`--user`. The private-network posture in §13.1 still applies.
+Destination paths containing `?` or `%` are refused because they cannot
+round-trip reliably through the pinned embedded path parsers.
+
+Clone refuses a held store lock, an existing database or nonempty data
+directory before remote contact, and reserves the destination database
+exclusively. Managed-path symlinks are refused. Existing repository files,
+adjacent configuration and derived indexes survive. Transfer artifacts and an
+empty internal Dolt bootstrap configuration in `dolt/.clone-home/` are kept
+inside the destination. Failure retains artifacts with an explicit location
+and remedy; inspect them and choose a fresh `--dir` to retry. Missing `main`,
+missing/invalid memdolt metadata, absent core tables or task/note/proposal columns,
+transfer/authentication/cancellation and close failures cannot report success.
+An older initialized schema is retained for explicit `memdolt init` with the
+same `--dir`; a newer schema requires a newer binary (§6.4). No genesis or
+migration commit is added by clone, and no fallback initializes memory.
+memdolt submits one clone operation; Dolt may retry transport reads/downloads
+internally. Source history, main hash, authorship, row contents and nullable
+note provenance remain the remote's, without conversion.
+
+Before the issue #125 cycle-1 fix, the containment statement overlooked a
+source-side write: file URLs passed through `GetRemoteDBWithoutCaching` into
+the pinned `FileFactory.CreateDbNoCache`, which created missing `oldgen/`
+directories even for an empty source subsequently refused by clone. After
+the fix, `openCloneRemote` resolves file URLs with the shared `cloneFilePath`
+decoder, opens existing NBS files directly, combines old-generation and ghost
+readers only when `oldgen` exists, and wraps them with `DoltDBFromCS`. The
+clone flow performs reads on those source handles and closes them without
+initialization. This binds `openCloneRemote`/clone, not the write-capable
+`NewLocalStore` type or other factory callers. HTTP/HTTPS authentication and
+the destination transfer/inspection lifecycle remain unchanged. Regression
+tests compare source names, bytes, modes and modification times after
+success/refusal, including an empty source and a valid source without
+`oldgen`; OS-managed access-time updates from ordinary reads are not writes
+performed by memdolt. The CLI regression verifies nonzero refusal, empty
+JSON stdout and an unchanged empty file source.
+
+The structural changes are the root command's additive registration; new
+`cmd/memdolt/clone.go` for flags/help/rendering; new
+`localdolt/clone.go` for validation, ownership, transfer and inspection; new
+`localdolt/clone_fs.go` for contained environment writes without deletion or
+moves; two additive clone test files; and `go.mod` bookkeeping making the
+already-selected Dolt, go-mysql-server and test gRPC modules direct imports.
+The dependency graph and versions are unchanged. `Clone` uses the same `CloneRemote` engine
+as `DOLT_CLONE` while avoiding that SQL wrapper's unconditional recursive
+failure cleanup. Its supplied filesystem also refuses initialization cleanup
+and the environment's old-temp-file sweep; NBS still manages its own transfer
+files. These restrictions bind this clone environment, not all Dolt/store
+operations. The existing ownership boundary covers cooperating memdolt
+processes, not foreign Dolt sessions. Clone calls alone serialize access to
+Dolt's global progress writers. The DSN builder validates destination
+compatibility. `inspectClone` reads the already-open committed root;
+`cloneSchemaVersion` reads its metadata with the pinned table iterator and
+SQL string unwrapping, and reuses the existing pure version guard. It never
+opens another engine, which would reinstate native environment cleanup.
+The existing DSN builder/schema reader/guard, `Open`'s missing-database
+creation, explicit `Migrate`, offline status,
+memory/review operations and sixteen-tool MCP discovery retain their contracts.
+The bootstrap table/column check is not a comprehensive schema/constraint audit.
+`AGENTS.md` records the same before/after and per-symbol boundaries.
+
+Deterministic tests use actual embedded push into a fresh filesystem remote,
+clone, close and reopen, comparing main/history/authorship, task and note rows
+including nullable provenance, and exercise the CLI's JSON/human/reopen paths.
+They cover refusals, old-schema recovery, close-error propagation, foreign-file
+retention during initialization/remote failure and across committed-root
+inspection/close (including an old temp file and its timestamp), and local
+synthetic gRPC authentication and cancellation. They do not establish real-hub credentials,
+hub/client version compatibility across releases, or the two-machine network
+gate. No configuration editor, application push/pull, remote status/diff,
+conflict dialog, hub installation, topology backend or full M4 completion is
+part of this slice.
 
 ### 11.3 Config
 
@@ -1176,6 +1277,14 @@ version-skew guards, topology configuration, and the optional remote `Store`
 implementation remain pending. This offline inspection slice does not satisfy
 or replace the two-machine round-trip/no-conversion acceptance gate above.
 M5 and M6 remain deferred.
+
+**M4 clone subset (issue #125):** the earlier offline-status subset left all
+transfers pending. Clone bootstrap now ships as described in §11.2; its
+filesystem round trip and local synthetic authentication checks add evidence
+without replacing the two-machine round-trip/no-conversion gate. Application
+push/pull, remote status/diff, configuration editing, conflict elicitation,
+hub setup, measured hub/client version compatibility, topology configuration
+and the optional remote `Store` implementation remain pending.
 
 ---
 

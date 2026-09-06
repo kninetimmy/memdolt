@@ -373,6 +373,111 @@ export GOFLAGS=-tags=gms_pure_go
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
   §6.2, §6.4). It is idempotent: a second run adds nothing to the Dolt
   history.
+- Clone an existing store: `memdolt clone <remote-url> --dir <repository>
+  [--user <sql-user>] [--json]` acquires committed `main`, its history and
+  provenance into `.memdolt/dolt/memory`, registers `origin`, and reports
+  `store`, `mainCommit`, and `schemaVersion` only after validation and close.
+  Use an explicit absolute HTTP/HTTPS remotesapi URL including its database
+  path, or an absolute `file:///` URL (`file:///C:/path` on Windows). Spaces
+  in file URLs must be percent-encoded; encoded percent signs are refused
+  because the pinned parser can decode them twice. URL userinfo, queries,
+  fragments, unsupported schemes and invalid ports/users are refused before
+  transfer, without echoing rejected credentials. `--user` accepts 1–32 ASCII
+  letters, digits, dots, underscores and hyphens; only the process environment
+  `DOLT_REMOTE_PASSWORD` supplies its password. Omit `--user` for anonymous
+  access; file remotes do not accept it. No personal Dolt credential file is
+  loaded for clone authentication. Remotesapi belongs on the private network
+  described in PRD §13.1.
+  Destination paths containing `?` or `%` are refused because the pinned
+  embedded path parsers cannot round-trip them reliably.
+
+  Stop any owner first. Clone takes the established ownership lock and refuses
+  an existing database or nonempty data directory before remote contact.
+  Managed-path symlinks are refused; adjacent configuration, rendered files,
+  and derived side stores are preserved. All clone artifacts stay in the
+  destination, including a small empty Dolt bootstrap configuration under
+  `dolt/.clone-home/`. Clone performs no automatic artifact deletion. A failed
+  transfer, invalid remote, missing `main`, validation failure or close failure
+  returns nonzero with a remedy and retained destination. Inspect retained
+  artifacts and choose a fresh `--dir` to retry. An older initialized schema
+  is retained for explicit `memdolt init --dir <repository>`; a newer schema
+  requires a newer memdolt binary. Clone never creates a genesis commit,
+  migrates memory, rewrites remote history or retries the clone operation.
+  Dolt may retry individual remote reads/downloads internally. Progress is
+  suppressed in both output modes; JSON stdout is one success object or no
+  success object on failure.
+
+  Before the issue #125 cycle-1 fix, the containment claim above missed the
+  source opener: `GetRemoteDBWithoutCaching` reached Dolt's
+  `FileFactory.CreateDbNoCache`, which created a missing `oldgen/` in a file
+  source even when the empty source was then refused. After the fix,
+  `openCloneRemote` bypasses that writable factory for file URLs, resolves the
+  source path, opens existing NBS files with `NewLocalStore`, and combines an
+  existing `oldgen` and ghost reader only when `oldgen` is present. It never
+  initializes a source directory. `CloneRemote` uses only reads on these
+  source handles and close releases their readers. This restriction binds
+  `openCloneRemote` and the clone flow that calls it; `NewLocalStore` itself
+  is still write-capable, and other Dolt factory callers retain their behavior.
+  HTTP/HTTPS still uses the existing authenticated remote opener. Source
+  preservation tests compare names, bytes, modes and modification times after
+  success and refusal, including a valid source without `oldgen`; ordinary
+  reads may update access times through the OS.
+
+  **Before issue #125, memdolt had no clone command and transfers remained
+  unshipped after issue #123. After it, only clone bootstrap ships.** The
+  complete structural blast radius is:
+
+  - `cmd/memdolt/root.go` registers `newCloneCommand`; every previous command
+    remains. New `cmd/memdolt/clone.go` owns flags, help, empty-user refusal and
+    success rendering through the unchanged `emit`. This output ordering
+    binds clone alone; existing commands' output and close behavior remain.
+  - New `internal/store/localdolt/clone.go` owns `Clone`, input validation,
+    exclusive destination reservation, transfer, redacted diagnostics and
+    post-transfer inspection. `cloneTransfer` reuses the pinned driver's
+    underlying `CloneRemote` engine. Its SQL `DOLT_CLONE` wrapper would
+    recursively delete the destination after a failure; memdolt never calls
+    that wrapper. The environment is prepared without a genesis commit and
+    closed with singleton caching disabled. The existing DSN builder checks
+    destination compatibility. `inspectClone` reads the already-open committed
+    root, `cloneSchemaVersion` uses Dolt's table iterator and SQL string
+    unwrapping, and the existing version guard is reused. It requires core
+    tables plus task, note/provenance and proposal columns; it is not a
+    comprehensive schema/constraint audit. It never opens another engine,
+    which would reinstate the native environment's temp-file sweep. Those
+    stricter
+    bootstrap checks bind `Clone` alone; `Store.Open` still creates a missing
+    database, `Migrate` remains explicit and idempotent, and the direct lanes,
+    review gate, offline repo status and sixteen MCP tools remain unchanged.
+    Its source path now passes through `openCloneRemote` and the shared
+    `cloneFilePath` decoder as described above. File sources avoid the reached
+    factory's initialization; network authentication, origin registration,
+    transfer, inspection, destination cleanup policy and output still hold.
+  - New `internal/store/localdolt/clone_fs.go` contains environment writes and
+    disables environment deletion/moves, including failed initialization's
+    recursive cleanup and the old-temp-file sweep. This policy binds the
+    filesystem supplied to this clone environment, not every Dolt filesystem
+    or store. The NBS engine still manages its own transfer files. Ownership
+    excludes cooperating memdolt processes; it does not coordinate foreign
+    Dolt sessions. `cloneMu` serializes clone calls because Dolt's progress
+    writers are global; it does not serialize every Store operation.
+  - `go.mod` promotes the already-selected Dolt and go-mysql-server modules
+    and the synthetic authentication tests' gRPC module to direct requirements.
+    No dependency version, graph, or `go.sum` changes. The new `clone_test.go`
+    files in `cmd/memdolt` and `internal/store/localdolt` add embedded
+    push/clone/reopen, exact main/history/authorship/row/null-provenance,
+    refusal, cleanup, schema, close-error and CLI-output checks. Synthetic
+    loopback gRPC proves `--user` plus environment password reaches Basic
+    authentication, visible authentication refusal/redaction, cancellation,
+    and retention of a concurrently introduced foreign file. A separate
+    injected initialization failure proves environment cleanup retains its
+    foreign file; committed-root inspection and close also preserve an old
+    foreign temp file and its timestamp. These are filesystem-transfer and
+    local synthetic transport
+    checks, not real-hub authentication or two-machine network acceptance.
+  - This record and PRD §§5.2, 11.2 and 16 preserve the old transfer/lifecycle
+    statements and the new bootstrap scope. No configuration editor,
+    application push/pull, remote status/diff, conflict dialog, hub setup,
+    topology backend, or full M4 acceptance claim is added.
 - Inspect local repository state: `go run ./cmd/memdolt repo status` supports
   `--dir` and `--json`. Before issue #123 there was no `repo` command; after it,
   this local-only status reports the resolved store path, main commit, schema,
@@ -384,9 +489,10 @@ export GOFLAGS=-tags=gms_pure_go
   Direct opens may update ownership-lock bookkeeping but change no durable
   memory, proposal head, or working set. Only `cmd/memdolt/repo.go` owns this
   status behavior; existing commands and MCP discovery retain their contracts.
-  No remote is contacted or assessed. Remote status/diff, transfers, conflict
-  dialogs, hub setup, and the remaining M4 acceptance obligations stay pending
-  (PRD §§11.2 and 16).
+  No remote is contacted or assessed. After #123, remote status/diff,
+  transfers, conflict dialogs, hub setup, and the remaining M4 acceptance
+  obligations stayed pending. Issue #125 adds only the clone transfer above;
+  the other obligations remain pending (PRD §§11.2 and 16).
 - Check a repository: `go run ./cmd/memdolt doctor` reports the store
   lock's ownership state (held, an orphaned record, absent), whether a live
   owner answers on its IPC endpoint, and whether the store's schema is
