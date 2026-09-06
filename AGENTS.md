@@ -373,6 +373,20 @@ export GOFLAGS=-tags=gms_pure_go
   schema migration the store is missing, one Dolt commit each (PRD §6.1,
   §6.2, §6.4). It is idempotent: a second run adds nothing to the Dolt
   history.
+- Inspect local repository state: `go run ./cmd/memdolt repo status` supports
+  `--dir` and `--json`. Before issue #123 there was no `repo` command; after it,
+  this local-only status reports the resolved store path, main commit, schema,
+  main working-set table changes with staged/status values, and repo/global
+  pending-target counts. It reuses authenticated owner routing and the existing
+  pending-list reachability filter, so unchanged merged proposal residue is
+  excluded. It refuses an absent database before opening, retains schema
+  migration/upgrade refusals, and reports probe, read, output, and close errors.
+  Direct opens may update ownership-lock bookkeeping but change no durable
+  memory, proposal head, or working set. Only `cmd/memdolt/repo.go` owns this
+  status behavior; existing commands and MCP discovery retain their contracts.
+  No remote is contacted or assessed. Remote status/diff, transfers, conflict
+  dialogs, hub setup, and the remaining M4 acceptance obligations stay pending
+  (PRD §§11.2 and 16).
 - Check a repository: `go run ./cmd/memdolt doctor` reports the store
   lock's ownership state (held, an orphaned record, absent), whether a live
   owner answers on its IPC endpoint, and whether the store's schema is
