@@ -898,6 +898,31 @@ The server instructions text is itself a versioned, first-class artifact: checke
 
 Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
 
+**First M4 subset (issue #123):** before this issue, no `repo` command was
+registered. After it, `memdolt repo status [--dir <repository>] [--json]`
+reports the resolved local Dolt store path, `main` commit hash, schema version,
+clean/dirty main working set with each changed table's staged flag and Dolt
+status, and pending proposal counts by repo/global target. These are the
+global-target proposals in this repository, not a read of the global store.
+The JSON report is one object with `localOnly: true`, `store`, `mainCommit`,
+`schemaVersion`, `clean`, `changes` (an empty array when clean), and
+`pendingProposals` (`repo` and `global`). Human output labels the same report
+local-only and states that remote state was not checked.
+
+Status uses the existing local-store/authenticated-owner route and reads main's
+working set explicitly, without checking out a proposal branch. Pending counts
+reuse the review list's reachability rule: unchanged merged branch residue is
+excluded, while unmerged proposals remain pending. The command performs no
+staging, commit, reset, review mutation, migration, or hub/remote request. It
+refuses a missing database before opening it and names `memdolt init`; existing
+stores retain the migration/upgrade guards and visible probe, authentication,
+read, output, and close failures. A direct read may briefly create or update the
+local ownership lock, as other direct opens do (§5.2); no durable memory or
+working-set contents change. Local observations do not establish whether a
+remote is configured, reachable, current, synchronized, or absent. Remote
+status/diff (including `repo status --diff`), transfers, conflict dialogs, and
+hub setup remain unshipped; the full M4 scope and exit gate in §16 still apply.
+
 ### 11.3 Config
 
 `.memdolt/config.toml` mirrors memhub's structure where semantics survive: `[deny_list]`, `[render]`, `[retrieval]` + `[retrieval.scoring]` (identical knobs/defaults), `[code_index]`, `[doc] allowed_dirs`, `[global]`, `[audit]`, `[wrap_up]`. Replaced: `[sync]` → `[repo] remote_url, topology = "clone" | "live" | "local", auto_pull_on_session_start (bool)`. Machine config `~/.memdolt/config.toml` holds hub defaults + known-projects registry (upgrade enumeration — never a filesystem scan; memhub parity).
@@ -1142,7 +1167,15 @@ reproduction commands are in [the M3 acceptance report](../spikes/m3-acceptance.
 Claude compatibility is expected from official host documentation and these
 checks; actual Claude recall, proposals, task operations, and human elicitation
 remain unverified. This replaces M3's acceptance evidence only; the phased tool
-surface in §11.1 is unchanged, and M4–M6 remain deferred.
+surface in §11.1 is unchanged. At that gate replacement, M4–M6 remained deferred.
+
+**M4 first subset (issue #123):** local-only `repo status` now ships as described
+in §11.2. Remotes configuration, remote status/diff, pull/push, conflict
+elicitation, hub init/systemd documentation, authentication setup, hub/client
+version-skew guards, topology configuration, and the optional remote `Store`
+implementation remain pending. This offline inspection slice does not satisfy
+or replace the two-machine round-trip/no-conversion acceptance gate above.
+M5 and M6 remain deferred.
 
 ---
 

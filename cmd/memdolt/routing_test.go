@@ -28,6 +28,7 @@ func TestEveryStoreDependentCLIUsesTheLiveOwner(t *testing.T) {
 	// this routing test never needs to provision an inference model.
 	runMemdolt(t, "index", "rebuild", "--dir", base, "--json")
 	runMemdolt(t, "index", "status", "--dir", base, "--json")
+	runMemdolt(t, "repo", "status", "--dir", base, "--json")
 
 	first := decodeJSON[taskInfo](t, runMemdolt(t,
 		"task", "add", "routed task", "--notes", "through owner", "--actor", "routing-agent", "--dir", base, "--json"))
