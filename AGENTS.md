@@ -484,10 +484,13 @@ export GOFLAGS=-tags=gms_pure_go
   **Before issue #127, issue #125 shipped only clone bootstrap and application
   push/pull remained deferred. After #127, main-only push and validated
   fast-forward pull ship; automatic merge and conflict resolution remain
-  deferred.** No remote editor, URL/branch/refspec operand, force, prune or
-  all-branches option is added. Stop the owner to configure a remote with
-  `dolt remote add <name> <absolute-url>` in `.memdolt/dolt/memory`, or clone
-  into a fresh repository. Missing stores are never created or migrated.
+  deferred.** At #127 no remote editor, URL/branch/refspec operand, force,
+  prune or all-branches option was added. Before #129 the setup remedy was:
+  stop the owner to configure a remote with `dolt remote add <name>
+  <absolute-url>` in `.memdolt/dolt/memory`, or clone into a fresh repository.
+  After #129, use the owner-aware `memdolt repo remote add` and `list` commands
+  below. The transfer operand/force/prune restrictions still hold. Missing
+  stores are never created or migrated.
 
   Push captures committed main and publishes only that immutable hash to
   remote main, creating it or advancing by fast-forward. Pull fetches main
@@ -584,9 +587,10 @@ export GOFLAGS=-tags=gms_pure_go
     Before #127 only stage/accept/reject/expiry shared it; afterward those plus
     direct commits and complete transfers serialize on one owning Store.
     Their validation, attribution, batching, commit and review semantics still
-    hold. Reads and migrations are not added to that mutex, and it does not
-    coordinate foreign Dolt sessions. Transfer network latency therefore delays
-    memdolt mutations; the existing ownership lock still excludes other
+    hold. At #127 reads and migrations were not added to that mutex; #129 adds
+    remote configuration reads/writes alone. Other reads and migrations remain
+    outside, and it does not coordinate foreign Dolt sessions. Transfer
+    network latency therefore delays memdolt mutations; the existing ownership lock still excludes other
     cooperating memdolt processes.
   - `storeipc/operation.go` and `owner_store.go` add explicit typed push/pull
     operations and preserve populated result-plus-error responses. Token
@@ -608,6 +612,95 @@ export GOFLAGS=-tags=gms_pure_go
     cross-version or full-M4 acceptance. This record and PRD §§5.2/11.2/16
     preserve the phasing. No dependency, migration, MCP tool, remote editor,
     conflict dialog, topology backend or hub deployment changes.
+- Configure repository remotes: `memdolt repo remote list` and
+  `memdolt repo remote add <name> <absolute-url> [--user <sql-user>]` support
+  `--dir` and `--json`. **Before #129, remote setup required native Dolt with
+  the owner stopped as recorded above; after it, these two commands use the
+  existing direct/authenticated-owner boundary.** List returns name-sorted
+  entries (JSON `{"remotes":[]}` or `no remotes configured` when empty). Add
+  reports the persisted name, URL and optional user only after confirmation
+  and successful close. Close/output failures stay visible; confirmed
+  persistence remains in later-failure diagnostics.
+
+  Names, URLs and usernames obey the transfer contract. URLs are explicit
+  HTTP/HTTPS remotesapi URLs including a database path or absolute file URLs;
+  credentials, query/fragment, unsupported schemes/ports, ambiguous file-path
+  encoding, option-like names and invalid users are refused without quoting
+  rejected values. File remotes reject usernames. Configuration contacts no
+  remote, requires no password or existing filesystem target, and never creates
+  or migrates a store. Transfers alone use the executing process environment's
+  `DOLT_REMOTE_PASSWORD`; owner clients never send a caller password over IPC.
+  A named file target must exist by transfer time, as before #129.
+
+  Only native Dolt remote configuration changes. Existing remote fields,
+  committed main/history, working/staged memory, proposals, tags, derived
+  indexes, rendered files and adjacent user config remain intact. Dirty memory
+  is allowed. Occupied names and unsafe legacy URL/parameter data refuse;
+  reads canonicalize only the established native file URL spellings in their
+  returned report, without rewriting entries. No remove, replace, force,
+  arbitrary parameter/refspec, remote status/diff, merge/conflict dialog,
+  topology configuration or hub operation is added.
+
+  The complete structural blast radius for #129 is:
+
+  - `cmd/memdolt/repo.go` adds `remote` registration and broadens the parent
+    help; `repo status` keeps its local-only behavior. New `remote.go` owns
+    the two commands, operand/user preflight, existing-store check, one typed
+    operation, close-before-output ordering and empty/sorted rendering.
+    `runRepoRemote` alone owns that finalization ordering, not every CLI read.
+    `transfer.go` changes only the obsolete native-Dolt-only setup help.
+  - `localdolt/clone.go` extracts pure `validateRemoteURL` from
+    `validateCloneRemote`; clone's user/password checks and URL acceptance
+    remain. The pure helper also serves configuration and transfers, but does
+    not replace their credential gates or validate arbitrary project URLs.
+    `localdolt/transfer.go` reuses `sanitizedRemote` for stored URL/parameter
+    validation and names the new setup remedy. Its selected username override,
+    executing-process password requirement, main capture/fetch/promotion,
+    schema/deny-list checks and source/tag preservation remain unchanged.
+  - New `localdolt/remote.go` defines the password-free `Remote` shape,
+    `ValidateRemote`, stored-data sanitizers, `ListRemotes`/`AddRemote` and
+    private `memdolt_remotes` procedure. `RequireExistingTransferStore` now
+    protects these CLI commands as well as push/pull; ordinary `Open` still
+    creates missing stores. Both configuration methods share `proposalMu`
+    with transfers/direct commits/proposal mutations and check committed
+    main with `validateTransferSchema`, without requiring clean memory.
+    Other reads/migrations and foreign Dolt sessions remain outside that
+    mutex. The private procedure uses only the owning session's native
+    filesystem/cache; ordinary SQL and owner Commit lack its unexported
+    context capability. This restriction binds `memdolt_remotes`, not all
+    SQL procedures; `memdolt_transfer` retains its separate capability.
+  - `remoteProcedure` verifies path containment, loads native `RepoState`,
+    refuses an occupied name or conflicting backup URL, saves the added
+    `env.NewRemote` with Dolt's default fetch specification and only the optional
+    SQL-user parameter, and reads back the exact stored entry. It uses native
+    temporary-file/sync/rename saving, with native platform crash guarantees.
+    Native `SessionStateAdapter.AddRemote` publishes its cache before saving;
+    it retains that behavior. Memdolt's configuration seam instead publishes
+    the cache only after confirmed persistence, including populated-result
+    reporting when a later save-finalization error occurs. A successful list
+    refreshes the in-memory remote view from validated native entries, so an
+    earlier lost response/read-back can be inspected before transfer. These
+    ordering/preservation rules bind this configuration seam, not native Dolt
+    writers or foreign processes. It never removes memory/proposal refs or
+    unrelated files.
+  - `storeipc/operation.go` extends `Backend` and the explicit allow-list with
+    typed list/add operations and result-plus-error preservation for add.
+    `owner_store.go` validates add operands before encoding (including URL
+    credentials), submits once, and directs unknown outcomes to
+    `memdolt repo remote list` before retry. Token authentication, verified-owner
+    routing, no competing open after probe/auth failure, cancellation and
+    existing operation behavior remain. No password field or new timeout is
+    introduced. The operation additions do not add MCP tools.
+  - New `cmd/memdolt/remote_test.go`, `localdolt/remote_test.go` and
+    `storeipc/remote_test.go` exercise production commands directly and through
+    authenticated IPC, named file push/pull, synthetic stored-user transport,
+    sorted/empty output, invalid/duplicate/missing/unsafe/schema refusals,
+    memory/proposal/tag/artifact preservation, lock serialization, native
+    save failures, finalization and lost/confirmed-error responses.
+    `cmd/memdolt/transfer_test.go` updates only its setup-remedy assertion.
+    These tests change no shipped behavior and use no personal credentials.
+    This record and PRD §§5.2/11.2/11.3/16 describe the same phasing. No
+    dependency, migration, topology backend or full-M4 acceptance is added.
 - Inspect local repository state: `go run ./cmd/memdolt repo status` supports
   `--dir` and `--json`. Before issue #123 there was no `repo` command; after it,
   this local-only status reports the resolved store path, main commit, schema,

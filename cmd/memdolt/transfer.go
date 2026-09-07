@@ -40,8 +40,8 @@ func newTransferCommand(operation string) *cobra.Command {
 			"omit both for anonymous access. Only the executing process environment\n" +
 			"supplies DOLT_REMOTE_PASSWORD. Restart a running owner with that environment\n" +
 			"to change its credentials; caller passwords are never forwarded over IPC.\n\n" +
-			"No remote editor ships: stop the owner and configure Dolt's remote in\n" +
-			"<repository>/.memdolt/dolt/memory using `dolt remote add <name> <absolute-url>`,\n" +
+			"Configure a remote with `memdolt repo remote add <name> <absolute-url>\n" +
+			"--dir <repository> [--user <sql-user>]`; inspect `memdolt repo remote list`,\n" +
 			"or clone into a fresh --dir. Transfers are submitted once. A lost response\n" +
 			"can leave an unknown outcome: inspect local and remote main before retrying.",
 		Args: cobra.MaximumNArgs(1),

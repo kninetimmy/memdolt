@@ -37,6 +37,8 @@ const (
 	opReviewAccept     = "review_accept"
 	opPush             = "push"
 	opPull             = "pull"
+	opListRemotes      = "list_remotes"
+	opAddRemote        = "add_remote"
 )
 
 // Backend is the initialized data-store surface the live owner exposes. The
@@ -62,6 +64,8 @@ type Backend interface {
 	ExpireProposals(context.Context, time.Time) ([]localdolt.PendingProposal, error)
 	Push(context.Context, localdolt.TransferOptions) (localdolt.TransferResult, error)
 	Pull(context.Context, localdolt.TransferOptions) (localdolt.TransferResult, error)
+	ListRemotes(context.Context) ([]localdolt.Remote, error)
+	AddRemote(context.Context, localdolt.Remote) (localdolt.Remote, error)
 }
 
 var _ Backend = (*localdolt.Store)(nil)
@@ -154,6 +158,11 @@ type transferResult struct {
 	Error  string                   `json:"error,omitempty"`
 }
 
+type addRemoteResult struct {
+	Result localdolt.Remote `json:"result"`
+	Error  string           `json:"error,omitempty"`
+}
+
 // ReviewAcceptFunc is the application review gate an owner exposes. The
 // production functions are internal/review.Accept and AcceptExpected; keeping
 // it explicit prevents the transport from falling back to a raw storage merge
@@ -175,6 +184,20 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var result any
 	var err error
 	switch req.Operation {
+	case opListRemotes:
+		result, err = h.store.ListRemotes(ctx)
+	case opAddRemote:
+		args, decodeErr := operationArgs[localdolt.Remote](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		added, addErr := h.store.AddRemote(ctx, args)
+		wire := addRemoteResult{Result: added}
+		if addErr != nil {
+			wire.Error = addErr.Error()
+		}
+		result = wire
 	case opPush, opPull:
 		args, decodeErr := operationArgs[localdolt.TransferOptions](req.Args)
 		if decodeErr != nil {

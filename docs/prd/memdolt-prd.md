@@ -237,6 +237,16 @@ The unknown-outcome remedy is inspection of local and remote main before a
 retry. Confirmed promotion plus a later error survives the application/IPC
 boundary. Clone and init retain the exclusive bootstrap behavior above.
 
+Before issue #129, remote configuration still required native Dolt with the
+owner stopped. After it, `repo remote list` and `repo remote add` use that same
+direct/authenticated-owner choice. Each configuration action is one typed
+operation; no password crosses IPC and no remote is contacted. Add never
+replays a lost response: inspect `memdolt repo remote list` before retrying.
+Both configuration methods join the Store's transfer/mutation mutex; dirty
+memory is preserved without commit/discard. Other reads, migrations and
+foreign Dolt processes remain outside that mutex. Existing bootstrap,
+transfer, attribution and review behavior remains.
+
 This is more machinery than memhub needed (SQLite WAL handles multi-process natively). It is the honest price of Dolt embedded, paid once, in one module.
 
 ### 5.3 On-disk layout
@@ -1041,11 +1051,14 @@ part of this slice.
 clone subsets above left application push/pull deferred. After it,
 `memdolt push [remote]` and `memdolt pull [remote]` ship with `--dir`, `--user`
 and `--json`, defaulting to configured `origin`. They require an existing,
-initialized current-schema store and never create or migrate one. Missing
-remotes report “no remote” and a concrete remedy: stop the owner, configure
+initialized current-schema store and never create or migrate one. Before
+#129, missing remotes reported “no remote” and this remedy: stop the owner,
+configure
 `dolt remote add <name> <absolute-url>` in `.memdolt/dolt/memory`, or clone
-into a fresh `--dir`. No remote editor, arbitrary URL/branch/refspec operand,
-force, prune or all-branches option ships.
+into a fresh `--dir`. At #127 no remote editor, arbitrary URL/branch/refspec
+operand, force, prune or all-branches option shipped. After #129, the remedy
+names `memdolt repo remote add` below; the transfer operand/force/prune
+restrictions still hold.
 
 Push scans and publishes only the captured committed main hash, creating
 remote main or advancing it by fast-forward. It never publishes unmerged
@@ -1078,8 +1091,10 @@ transfer. Before #127, `Store.proposalMu` covered stage, accept, reject and
 expiry but not direct `Commit`. After it, those mutations, direct commits and
 entire transfers share the mutex on one owning Store, preventing pull from
 replacing successful writes and review from sweeping another actor's write.
-Network latency therefore delays memdolt mutations. Reads and migrations are
-outside this mutex, as are foreign Dolt processes; no external-process lock
+Network latency therefore delays memdolt mutations. At #127 reads and
+migrations were outside this mutex; #129 adds remote configuration reads and
+writes alone. Other reads and migrations remain outside, as do foreign Dolt
+processes; no external-process lock
 claim is made. Pending proposal refs/contents and the existing review,
 contradiction, attribution and note-batching rules remain intact.
 
@@ -1180,9 +1195,93 @@ empty when no MCP input was sent. It also checks clean owner shutdown and
 reopened main/working-set state. This adds local synthetic evidence only;
 the preceding acceptance limits still hold.
 
+**M4 remote configuration subset (issue #129):** before this slice, the #127
+setup remedy above required native Dolt with the owner stopped. After it,
+`memdolt repo remote list` and `memdolt repo remote add <name> <absolute-url>
+[--user <sql-user>]` ship with `--dir` and `--json`, using the initialized
+store directly or through its verified authenticated owner. Missing or
+unsupported stores refuse without initialization/migration. List returns
+name-sorted `{name,url,user?}` entries in a `remotes` array, including
+`{"remotes":[]}` (human: `no remotes configured`). Add returns that one stored
+entry only after persistence confirmation and successful close; output/close
+errors stay visible, and confirmed persistence survives later errors.
+
+The existing transfer name/URL/user contract applies: names are 1–64 ASCII
+letters/digits/dots/underscores/hyphens starting with a letter or digit;
+usernames are 1–32 of those characters without a leading hyphen. URLs are
+explicit HTTP/HTTPS remotesapi URLs with a database path or absolute file
+URLs. Credentials, queries/fragments, unsupported schemes/ports, ambiguous
+file-path encoding and unexpected operands refuse without quoting rejected
+values. File remotes reject usernames. Configuration contacts no remote,
+needs no password and does not require an existing file target. Transfers
+still require a prepared file target and use only their executing process's
+`DOLT_REMOTE_PASSWORD`. No caller password is an operand, IPC field or stored
+configuration value. An owner must still be restarted with its own password
+environment when transfer credentials change.
+
+Add persists the validated URL and optional SQL username in native Dolt
+remote state, with Dolt's ordinary default fetch specification. An occupied
+name refuses; no remove/replace/force/arbitrary parameter/refspec interface
+ships. Existing native remote fields remain semantically intact. Committed
+main/history, working/staged memory, proposals, tags, derived indexes,
+rendered files and adjacent user configuration remain untouched. Dirty memory
+is allowed. Unsafe legacy stored URL/parameter values refuse before output
+or configuration writes. Reads normalize only the established native Windows
+file URL spelling and decoded file spaces for presentation/validation, without
+rewriting any entry. No caller password is required for safe stored-user reads.
+
+Both operations hold the same Store mutex as transfers, direct commits and
+proposal mutations through native load/save/read-back. This excludes memdolt
+interleavings, not foreign Dolt sessions. The private procedure verifies the
+native configuration path, uses the owning session's filesystem without
+opening another engine, and invokes native RepoState saving (temporary file,
+sync and rename, with platform-specific crash guarantees). Native
+`SessionStateAdapter.AddRemote` updates its live cache before saving; that
+native method retains its behavior. Memdolt's `remoteProcedure` instead
+publishes the new cache entry only after reading back the exact persisted
+entry. A save-finalization failure after persistence returns both the
+confirmed entry and a visible error. A successful list refreshes the owner's
+in-memory view from validated native entries, allowing inspection after a
+lost response or read-back failure before transfer. These restrictions bind
+this configuration seam, not native Dolt writers, every read, or migrations.
+Probe/auth failures never fall back to another engine. Add is one typed
+owner operation, never replayed; unknown outcomes name
+`memdolt repo remote list` before retrying.
+
+The complete structure touched is `cmd/memdolt/repo.go`'s additive remote
+registration/help (local-only status unchanged); new CLI `remote.go` for
+validation/routing/finalization/reporting; `cmd/memdolt/transfer.go` and its
+test's replacement setup remedy (transfer behavior unchanged);
+`localdolt/clone.go`'s extraction of pure `validateRemoteURL` (clone's existing
+user/password gate retained); `localdolt/transfer.go`'s reuse of stored-data
+sanitization and new remedy (user override/password/transfer rules retained);
+new `localdolt/remote.go` for the typed data, shared validators,
+`ListRemotes`/`AddRemote`, native configuration and its private capability;
+`storeipc/operation.go`'s Backend/allow-list/result additions and
+`owner_store.go`'s validation/one-submit/error transport (existing
+authentication, cancellation and operations retained); the three new remote
+test files in CLI/localdolt/storeipc; and this PRD/AGENTS record.
+`RequireExistingTransferStore` now also protects configuration CLI callers;
+ordinary `Open` still creates and `Migrate` remains explicit.
+`validateTransferSchema` checks their committed main without requiring clean
+memory. Only `runRepoRemote` owns these commands' close-before-output ordering.
+Only callers with its unexported context capability can reach
+`memdolt_remotes`; ordinary SQL/IPC Commit cannot. `memdolt_transfer` retains
+its separate capability. No general SQL-procedure restriction is implied.
+The tests cover direct/authenticated-owner commands, named filesystem
+push/pull, synthetic stored-user authentication, save/interleaving/transport
+failures, unsafe/schema/missing/invalid/duplicate refusals and preservation.
+They establish no real-hub or two-machine acceptance. No dependency, durable
+schema, MCP tool, remote status/diff, automatic merge/conflict elicitation,
+topology setting, hub operation or full M4 completion is added.
+
 ### 11.3 Config
 
 `.memdolt/config.toml` mirrors memhub's structure where semantics survive: `[deny_list]`, `[render]`, `[retrieval]` + `[retrieval.scoring]` (identical knobs/defaults), `[code_index]`, `[doc] allowed_dirs`, `[global]`, `[audit]`, `[wrap_up]`. Replaced: `[sync]` → `[repo] remote_url, topology = "clone" | "live" | "local", auto_pull_on_session_start (bool)`. Machine config `~/.memdolt/config.toml` holds hub defaults + known-projects registry (upgrade enumeration — never a filesystem scan; memhub parity).
+
+That project-topology configuration remains the planned surface. Issue #129
+stores remote entries only in Dolt's native configuration; it does not add
+or rewrite TOML `remote_url`, topology, auto-pull or machine hub settings.
 
 ### 11.4 OpenCode 2 compatibility supplement (memhub v0.2.2)
 
@@ -1450,6 +1549,15 @@ do not replace the two-machine round-trip/no-conversion gate or establish
 hub/client version compatibility. Remote editing/status/diff, divergence
 merge/conflict elicitation, hub setup, topology configuration and the optional
 remote Store remain pending. M5 and M6 are unchanged.
+
+**M4 remote configuration subset (issue #129):** before this slice, #127
+left remote editing pending. After it, additive `repo remote add` and local
+`repo remote list` ship with the boundaries described in §§11.2–11.3. Local
+synthetic direct/owner configuration and named-transfer checks add evidence;
+the two-machine round-trip/no-conversion gate remains unchanged. Remote
+status/diff, divergence merge/conflict elicitation, hub setup/authentication
+operations and measured version compatibility, topology configuration and
+the optional remote Store remain pending. M5 and M6 are unchanged.
 
 ---
 
