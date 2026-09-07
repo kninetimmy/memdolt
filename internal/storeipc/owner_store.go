@@ -206,6 +206,25 @@ func (s *OwnerStore) Render(ctx context.Context) (render.Result, error) {
 	return result, nil
 }
 
+func (s *OwnerStore) ExportMemory(ctx context.Context, opts localdolt.ExportMemoryOptions) (localdolt.InteropResult, error) {
+	return s.memoryInterop(ctx, opExportMemory, opts)
+}
+
+func (s *OwnerStore) ImportMemory(ctx context.Context, opts localdolt.ImportMemoryOptions) (localdolt.InteropResult, error) {
+	return s.memoryInterop(ctx, opImportMemory, opts)
+}
+
+func (s *OwnerStore) memoryInterop(ctx context.Context, operation string, opts any) (localdolt.InteropResult, error) {
+	var result localdolt.InteropResult
+	if err := s.operation(ctx, operation, opts, &result); err != nil {
+		return localdolt.InteropResult{Operation: operation, Status: "unknown"}, fmt.Errorf("interop owner response lost or unavailable; outcome unknown; inspect the bundle, committed main and `memdolt review list` before any retry; never replay automatically: %w", err)
+	}
+	if result.Error != "" {
+		return result, errors.New(result.Error)
+	}
+	return result, nil
+}
+
 func (s *OwnerStore) ListRemotes(ctx context.Context) ([]localdolt.Remote, error) {
 	var result []localdolt.Remote
 	err := s.operation(ctx, opListRemotes, nil, &result)

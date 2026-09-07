@@ -398,6 +398,12 @@ type stagedWrite struct {
 	kind     ProposalKind
 	proposal Proposal
 
+	// Interop reconstructs prevalidated identities and preserves source metadata,
+	// while the actual staging commit is authored by the current importer.
+	// Ordinary proposals leave both fields unset and retain their existing behavior.
+	id           string
+	commitAuthor *store.Actor
+
 	// rowID is the ULID of the facts or decisions row being proposed.
 	rowID string
 
@@ -458,6 +464,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	// in the same critical section as accept, reject, and expiry.
 	s.proposalMu.Lock()
 	defer s.proposalMu.Unlock()
+	return s.stageLocked(ctx, w)
+}
+
+// stageLocked also serves a complete import already holding proposalMu.
+func (s *Store) stageLocked(ctx context.Context, w stagedWrite) (StagedProposal, error) {
 
 	db, err := s.handle()
 	if err != nil {
@@ -472,7 +483,12 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	// scans them too.
 	w.text = append(slices.Clone(w.text), w.proposal.Rationale, w.proposal.Actor.Name)
 
-	id := newID()
+	id := w.id
+	if id == "" {
+		id = newID()
+	} else if !validInteropID(id) {
+		return StagedProposal{}, errors.New("localdolt: invalid imported proposal ULID")
+	}
 	branch := ProposalBranch(id)
 	statements := append(slices.Clone(w.statements), store.Statement{
 		SQL: "INSERT INTO proposals (id, kind, rationale, actor, created_at, target) VALUES (?, ?, ?, ?, ?, ?)",
@@ -562,11 +578,15 @@ func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite
 			return store.CommitResult{}, err
 		}
 	}
+	author := w.proposal.Actor
+	if w.commitAuthor != nil {
+		author = *w.commitAuthor
+	}
 	return s.commitConn(ctx, conn, store.CommitRequest{
 		Statements: statements,
 		Text:       w.text,
 		Message:    w.message,
-		Author:     w.proposal.Actor,
+		Author:     author,
 	})
 }
 
