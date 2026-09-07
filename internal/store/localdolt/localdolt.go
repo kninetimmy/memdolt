@@ -199,8 +199,10 @@ func (s *Store) openEngine(ctx context.Context, dataDir string) error {
 
 // Commit applies req's statements and records them as a single Dolt
 // commit, attributed to req.Author (PRD §3.1). The statements and the
-// commit share one connection and one transaction, so a failure part-way
-// through leaves nothing behind.
+// commit share one connection and one transaction. Before issue #139 this
+// claimed every failure left nothing behind. Earlier failures still invoke
+// rollback, but DOLT_COMMIT itself persists before database/sql finalization;
+// a later finalization error now retains the returned hash as evidence.
 //
 // req.Text is matched against the repository's deny-list first; see
 // checkDenyList.
@@ -249,6 +251,10 @@ func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.Comm
 // and the proposal rationale and actor in propose.go, because those are
 // what the same rows were scanned as when they were staged.
 func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.CommitRequest) (store.CommitResult, error) {
+	return s.commitConnFinalize(ctx, conn, req, (*sql.Tx).Commit)
+}
+
+func (s *Store) commitConnFinalize(ctx context.Context, conn *sql.Conn, req store.CommitRequest, finalize func(*sql.Tx) error) (store.CommitResult, error) {
 	if err := req.Validate(); err != nil {
 		return store.CommitResult{}, fmt.Errorf("localdolt: invalid commit request: %w", err)
 	}
@@ -274,8 +280,8 @@ func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.Commit
 		return store.CommitResult{}, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return store.CommitResult{}, fmt.Errorf("localdolt: commit transaction: %w", err)
+	if err := finalize(tx); err != nil {
+		return result, fmt.Errorf("localdolt: Dolt commit %s confirmed but transaction finalization failed; inspect before retrying: %w", result.Hash, err)
 	}
 	return result, nil
 }

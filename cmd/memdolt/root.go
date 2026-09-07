@@ -41,6 +41,8 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newIndexCommand())
 	root.AddCommand(newInitCommand())
 	root.AddCommand(newLocateCommand())
+	root.AddCommand(newHumanMemoryCommand("fact"))
+	root.AddCommand(newHumanMemoryCommand("decision"))
 	root.AddCommand(newOpenCodeCommand())
 	root.AddCommand(newTransferCommand("push"))
 	root.AddCommand(newTransferCommand("pull"))
