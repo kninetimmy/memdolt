@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
@@ -54,6 +56,14 @@ func TestDocumentMCPPathsSchemasAndModernLegacyAttribution(t *testing.T) {
 			}
 			if author := testText(t, st, "SELECT committer FROM dolt_log WHERE commit_hash = ?", added.Commit); author != "agent:opencode" {
 				t.Fatalf("document commit author = %s", author)
+			}
+			rendered := callAs[render.Result](t, client, "render", map[string]any{})
+			if rendered.Status != "written" || rendered.SourceCommit != added.Commit {
+				t.Fatalf("render did not capture the ingested document commit: %+v", rendered)
+			}
+			shown, err := st.DocShow(context.Background(), added.Document.ID)
+			if err != nil || !reflect.DeepEqual(shown.Document, added.Document) || !reflect.DeepEqual(shown.Chunks, added.Chunks) {
+				t.Fatalf("MCP render changed document metadata/chunks: %+v, %v", shown, err)
 			}
 			again := callAs[localdolt.DocResult](t, client, "doc_add", map[string]any{"file": "inside.md", "title": "ignored unchanged title"})
 			if again.Status != "unchanged" || again.Document.ID != added.Document.ID || again.Document.Title != "Inside" {

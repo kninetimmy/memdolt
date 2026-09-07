@@ -16,6 +16,7 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/ipc"
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -75,6 +76,51 @@ func TestDocumentCLIDirectAndOwnerLifecycle(t *testing.T) {
 			}
 			if got := runMemdolt(t, "doc", "ls", "--dir", base); got != "no documents\n" {
 				t.Fatalf("list after remove = %s", got)
+			}
+		})
+	}
+}
+
+func TestDocumentRenderIntegrationDirectAndOwner(t *testing.T) {
+	for _, routed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("owner=%t", routed), func(t *testing.T) {
+			base := initStore(t)
+			writeTestFile(t, pathsFor(t, base).ConfigFile(), "project_name='Document render integration'\n[render]\noutput_dir='memory-view'\n[retrieval]\ninclude_docs_in_default=false\n")
+			if routed {
+				serveStore(t, base)
+			}
+			file := filepath.Join(base, "reference.md")
+			const referenceBody = "unique reference body stays in document chunks"
+			writeTestFile(t, file, "# Reference\n\n"+referenceBody+"\n")
+			added := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "add", file, "--actor", "integration-agent", "--dir", base, "--json"))
+			if !added.EnabledDefaultRecall || added.Document.Source != "user" {
+				t.Fatalf("first document = %+v", added)
+			}
+			shown := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "show", added.Document.ID, "--dir", base, "--json"))
+			for generation := range 2 {
+				rendered := decodeJSON[render.Result](t, runMemdolt(t, "render", "--dir", base, "--json"))
+				if rendered.Status != "written" || rendered.SourceCommit != added.Commit || rendered.OutputDir != filepath.Join(base, "memory-view") || len(rendered.WrittenFiles) != 2 || len(rendered.BackupFiles) != generation*2 {
+					t.Fatalf("render generation %d = %+v", generation, rendered)
+				}
+				project, err := os.ReadFile(filepath.Join(rendered.OutputDir, "PROJECT.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				ledger, err := os.ReadFile(filepath.Join(rendered.OutputDir, "PROJECT_LEDGER.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Contains(project, []byte("# Document render integration")) || !bytes.Contains(ledger, []byte("doc add "+added.Document.ID)) || !bytes.Contains(ledger, []byte("agent:integration-agent")) || bytes.Contains(ledger, []byte(referenceBody)) {
+					t.Fatal("render lost configured naming or document commit provenance, or changed its category set")
+				}
+				after := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "show", added.Document.ID, "--dir", base, "--json"))
+				if !reflect.DeepEqual(shown, after) {
+					t.Fatalf("render changed document metadata/chunks: before=%+v after=%+v", shown, after)
+				}
+				again := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "add", file, "--dir", base, "--json"))
+				if again.Status != "unchanged" || again.Commit != "" || !reflect.DeepEqual(again.Document, added.Document) {
+					t.Fatalf("render changed hash no-op behavior: %+v", again)
+				}
 			}
 		})
 	}

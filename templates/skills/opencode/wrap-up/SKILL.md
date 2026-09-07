@@ -46,7 +46,14 @@ would succeed.
 5. Stage facts and decisions with `propose_fact`, `propose_decision`, or
    `propose_supersede`. Never promote them. Tell the user that a human reviews
    staged claims with `memdolt review`.
+6. Call `render` (CLI equivalent: `memdolt render --json`) to refresh the local
+   generated files from committed main. Report the source commit, written
+   outputs, and recoverable backups. Rendering does not flush pending MCP
+   notes or promote claims; the verified CLI summary in step 3 is already committed.
 
-Stop on the first failure. M3 has no wrap-up render, sync, transcript, metrics,
-visualization, document, global, locate, or repository-operation step; do not
-discover or emulate those deferred surfaces.
+Stop on the first failure; on a partial render or unknown reply, inspect the
+reported outputs/backups before retrying. Before issue #133, M3 had no wrap-up
+render, sync, transcript, metrics, visualization, document, global, locate,
+or repository-operation step. After it, step 6 adds only render; the other
+operations remain outside this template. The identity pre-flight still stops
+every later write and render on verification failure.

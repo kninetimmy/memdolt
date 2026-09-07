@@ -43,6 +43,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newTransferCommand("push"))
 	root.AddCommand(newTransferCommand("pull"))
 	root.AddCommand(newRecallCommand())
+	root.AddCommand(newRenderCommand())
 	root.AddCommand(newRepoCommand())
 	root.AddCommand(newSearchCommand())
 	root.AddCommand(newServeCommand())

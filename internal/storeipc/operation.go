@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -43,6 +44,7 @@ const (
 	opDocList          = "doc_list"
 	opDocShow          = "doc_show"
 	opDocRemove        = "doc_remove"
+	opRender           = "render"
 )
 
 // Backend is the initialized data-store surface the live owner exposes. The
@@ -74,6 +76,7 @@ type Backend interface {
 	DocList(context.Context) ([]localdolt.Document, error)
 	DocShow(context.Context, string) (localdolt.DocResult, error)
 	DocRemove(context.Context, string, memory.Actor) (localdolt.DocResult, error)
+	Render(context.Context) (render.Result, error)
 }
 
 var _ Backend = (*localdolt.Store)(nil)
@@ -236,6 +239,15 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			wire.Error = changeErr.Error()
 		}
 		result = wire
+	case opRender:
+		// A complete render executes once in the owner. Its typed result also
+		// preserves backups and partial replacements when preparation/finalization
+		// fails; no destination or query is accepted from the IPC client.
+		rendered, renderErr := h.store.Render(ctx)
+		if renderErr != nil {
+			rendered.Error = renderErr.Error()
+		}
+		result = rendered
 	case opListRemotes:
 		result, err = h.store.ListRemotes(ctx)
 	case opAddRemote:

@@ -60,7 +60,8 @@ type noteGroup struct {
 }
 
 // RegisterTools originally added only the implemented M3 surface. Document
-// ingestion adds doc_add; other deferred names remain absent, never stubs.
+// ingestion and rendering add doc_add and render; other deferred names remain
+// absent, never stubs.
 func RegisterTools(server *mcp.Server, baseDir string, st Backend) *Toolset {
 	return registerTools(server, baseDir, st, noteBatchInterval)
 }
@@ -88,6 +89,7 @@ func registerTools(server *mcp.Server, baseDir string, st Backend, interval time
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_supersede", Description: "Stage a fact supersession and replacement on a single-commit proposal branch without moving main."}, tools.proposeSupersede)
 	mcp.AddTool(server, &mcp.Tool{Name: "review_pending", Description: "Offer repository proposals for human elicitation review; global proposals remain CLI-only."}, tools.reviewPending)
 	mcp.AddTool(server, &mcp.Tool{Name: "doc_add", Description: "Ingest a confined repository Markdown document in one attributed commit; the first document enables default recall. Unchanged bytes are a no-op."}, tools.docAdd)
+	mcp.AddTool(server, &mcp.Tool{Name: "render", Description: "Render committed main to configured local PROJECT.md and PROJECT_LEDGER.md; report backups and partial failures. Pending notes and proposals are excluded."}, tools.render)
 	return tools
 }
 
