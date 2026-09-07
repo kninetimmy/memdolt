@@ -179,6 +179,15 @@ the IPC route. The typed operation allow-list is narrower: it binds that route
 alone, so adding another method to a store does not expose it without naming it
 on both handler and client.
 
+Before issue #133, retaining rendering in the CLI above meant formatting
+command results, and generated-memory render was deferred. After it, result
+formatting still belongs to each surface, while `Store.Render` performs the
+complete snapshot/file operation in the owning process. CLI and MCP call that
+same method once; authenticated IPC carries the operation and confirmed
+result-plus-error, with no caller-selected destination. Unknown replies require
+inspection before retry. Its committed-read and file boundaries are detailed
+in §11.2; the existing query and owner contracts above remain unchanged.
+
 Review acceptance crosses that typed route as the complete application gate,
 not as a raw storage merge. The first version of this routing pass called the
 old `localdolt.AcceptProposal` signature directly, carried no `--force` intent,
@@ -733,6 +742,18 @@ The later-backed names `locate`, `doc_add`, `render`, `repo_status`,
 first M3 implementation alone, not removal of those tools from the destination
 contract or permission to substitute a stub before its backend lands.
 
+**Render phasing (issue #133).** Before this delivery the later-backed list
+above still included `render`; after it, the existing sixteen tools (M3's
+initial fifteen plus elicited review) remain and the real typed `render` tool is added. It
+accepts an empty input and reads only the owner's configured output directory.
+It preserves structured written-file/backup evidence on tool errors and never
+replays file replacement after a lost response. Modern/legacy attribution,
+static `tools/list` cache hints and every prior handler remain unchanged.
+This registration rule binds `RegisterTools`, not arbitrary SDK servers.
+Render includes only committed notes; it does not flush the accumulator or
+change its five-minute/orderly-shutdown behavior. No other deferred tool is
+introduced by this render delivery, and it does not complete M5.
+
 **Elicited-review handoff (2026-08-30, issue #106).** Before this delivery,
 the approved M3 implementation above advertised exactly those fifteen tools,
 `propose_fact` returned the live-key collision without opening the §11.1
@@ -1275,9 +1296,95 @@ They establish no real-hub or two-machine acceptance. No dependency, durable
 schema, MCP tool, remote status/diff, automatic merge/conflict elicitation,
 topology setting, hub operation or full M4 completion is added.
 
+**Committed memory rendering (issue #133).** Before this delivery, the §12
+render workflow and its CLI/MCP names were deferred. After it, `memdolt render
+[--dir <repository>] [--json]` generates `PROJECT.md` and `PROJECT_LEDGER.md`;
+the real `render` MCP tool invokes the same owning-store method. Both files
+carry `<!-- memdolt:rendered -->`, source schema version, exact main commit and
+generation time. Reports identify confirmed written files, recoverable backups
+and any error, including partial completion or store-close/output failure.
+Missing/unsupported stores and malformed configuration fail visibly; render
+never initializes, migrates or creates a Dolt commit.
+
+`internal/render.capture` reads one committed `main` hash, validates its exact
+32-character Dolt grammar, and uses it for every category and `DOLT_LOG` walk.
+The pinned driver panics preparing `AS OF ?`, so only the validated revision
+becomes a literal clause; ordinary SQL values remain bound, and table/column/
+ordering syntax comes solely from a fixed list. No caller supplies a revision
+or query. The snapshot contains the newest state and architecture with actor
+and raw provenance, the last ten notes with optional session metadata, all
+decisions (including summary, alternatives and evidence), tasks ordered open/
+blocked/done then newest update, and facts ordered by key with verified/stale
+and superseded annotations. Superseded rows remain visible; references use
+actual ULIDs. Multiline bodies and evidence remain intact in blocks instead
+of flattening them into ledger table cells. Activity is the newest fifty real
+reachable commits in thirty days with hash, author, email, date and message;
+it contains no invented writes_log entries. Empty categories are explicit.
+Transcript archives and gated token-accounting data are absent.
+
+`localdolt.Store.Render` shares `proposalMu` with participating direct writes,
+proposal mutations and transfers for the complete operation. Previously render
+did not participate because it did not exist; every prior mutation keeps its
+existing behavior. Other reads/migrations and foreign Dolt sessions remain
+outside the mutex. The immutable revision keeps capture coherent even across
+a nonparticipating change to main; a source/scan/row-close failure refuses
+before output preparation. Pending proposals and uncommitted rows are excluded,
+and the current working set, refs and history remain unchanged. This boundary
+binds `Store.Render`, not every store read or generated-text helper.
+
+`internal/render.writeFiles` uses directory handles, refuses symlink/reparse
+traversal and unmarked same-name user files, and prepares both complete sibling
+temporary files and all original backups before replacing either output.
+Backups stay in `.memdolt/backups/rendered` under exclusive unique names; complete
+backups are retained even after a preparation failure. Files are synced and
+closed before replacement by `os.Root.Rename`. Windows reaches native
+`NtSetInformationFile` replacement with its compatibility fallback; other
+supported platforms use their native rename. The pair is not transactionally
+atomic. No stronger per-platform crash guarantee or directory-entry durability
+is claimed. If the second replacement or finalization fails, the result retains
+the exact successful prefix and backups. Cleanup only removes this invocation's
+verified temporary artifacts; unrelated files are preserved. An exclusive
+`.memdolt-render.lock` in the output directory refuses overlapping cooperating
+renders, including owners from different repositories using that directory.
+It has no automatic stale/PID recovery: after a crash, stop all renders and
+inspect outputs/backups before manually removing residue. Foreign file writers
+are not coordinated; identity/content rechecks catch prior changes but cannot
+provide a compare-and-swap in the final interval before native replacement.
+These restrictions bind this file writer alone, not every filesystem writer.
+
+New `render/render.go`, `files.go`, `path_windows.go` and `path_other.go` own
+that capture/format/config/file boundary; new `localdolt/render.go` supplies
+the owner method. `storeipc/operation.go` adds its explicit typed allow-list
+entry and `owner_store.go` submits once, preserves result/error and names the
+inspect-before-retry remedy. New `cmd/memdolt/render.go` owns flags, preflight,
+close and human/JSON output; `root.go` retains all children and adds render.
+Existing `RequireExistingTransferStore` also protects render before ordinary
+`Open` can create anything. New `mcpserver/render.go` handles the empty typed
+input and preserves structured error results; `tools.go` registers it and
+`instructions.md` records its committed-only scope. Prior CLI/MCP/owner behavior
+is retained. The five new render test files, shared `render/testdata/memory.sql`,
+and updated discovery/template tests exercise the named synthetic boundaries,
+not full M5 or real-host acceptance. AGENTS.md records the complete file inventory.
+
 ### 11.3 Config
 
 `.memdolt/config.toml` mirrors memhub's structure where semantics survive: `[deny_list]`, `[render]`, `[retrieval]` + `[retrieval.scoring]` (identical knobs/defaults), `[code_index]`, `[doc] allowed_dirs`, `[global]`, `[audit]`, `[wrap_up]`. Replaced: `[sync]` → `[repo] remote_url, topology = "clone" | "live" | "local", auto_pull_on_session_start (bool)`. Machine config `~/.memdolt/config.toml` holds hub defaults + known-projects registry (upgrade enumeration — never a filesystem scan; memhub parity).
+
+Before issue #133, `[render]` had no implementation. After it,
+`render.output_dir` defaults to `.memdolt/rendered`. Relative paths must stay
+within the canonical repository root; an explicit absolute local path in this
+machine-local configuration can route elsewhere. Network/device namespaces,
+symlink/reparse traversal, `.git`/`.memhub`/`.orchestrator` metadata and
+`.memdolt` destinations outside its `rendered` subtree are refused, protecting
+the store, config, backup and index paths. Backups always remain in the owning
+repository's `.memdolt/backups/rendered`. Default outputs/backups are already
+ignored by the existing `.memdolt/` rule; the operator supplies ignore rules
+for custom destinations. The optional root `project_name` defaults to the
+repository basename; `[retrieval].fact_stale_after_days` uses the existing
+positive-int64 ninety-day default without a duration-overflow conversion.
+The independent render reader rejects invalid TOML, unknown render keys and
+invalid consumed values; it does not load models or change the independent
+deny-list/retrieval readers. MCP accepts no destination override.
 
 That project-topology configuration remains the planned surface. Issue #129
 stores remote entries only in Dolt's native configuration; it does not add
@@ -1365,8 +1472,16 @@ The committed core templates for Claude Code, Codex, and OpenCode offer only
 check-init, recall, and wrap-up using implemented M3 operations. OpenCode
 wrap-up verifies the host-context ID before any workflow write and re-verifies
 it when writing the approved summary; a failure stops later steps. Facts and
-decisions remain proposals for human review. No template adds render, sync,
-transcript capture, wrapper installation, or the other deferred backends.
+decisions remain proposals for human review. Before issue #133, no template
+added render, sync, transcript capture, wrapper installation, or the other
+deferred backends. After it, the three wrap-up templates add only render after
+approved writes and report its committed source and file effects. Claude/Codex
+notes remain queued until their existing deadline/shutdown flush, so that
+summary is absent from a render made before the flush; render never forces it.
+OpenCode's verified CLI summary is already committed. Their review, approval
+and identity pre-flight gates remain unchanged; a partial/unknown render stops
+the workflow for inspection before retry. Other deferred operations remain
+outside these templates, and transcript/token-accounting gates are unchanged.
 
 **Transcript archive.** Transcript mode requires a separate explicit approval that warns the archive is unredacted. It reuses the already verified current id and never discovers or guesses another one. Before any process invocation, validate an OpenCode id as `ses` followed by a nonempty ASCII alphanumeric, underscore, or hyphen suffix. Invoke `opencode2 api v2.session.export --param sessionID=<id> --param sanitize=false` through argument-based process APIs (on Windows, fall back to `opencode2.cmd` only when the bare program is unavailable). Before opening the project or writing, require a JSON object `data`, object `data.info`, exact `data.info.id`, and array `data.messages`. Archive the exact complete, unsanitized response bytes as `.json.zst` and retain one replaceable local pointer per session. Archive and pointer data are excluded from recall, embeddings, and every export; `[wrap_up].transcript_retention_days` governs retention, and expiry removes the local archive and its pointer.
 
@@ -1391,7 +1506,7 @@ Every ordinary row uses v0.2.0 as its baseline. Rows explicitly labeled v0.2.2 a
 | doc ingestion (heading chunker, hash no-op, auto-flip include_docs) | port (§6.1, §8) |
 | global store + promotion | port, genuinely-global via hub (§10) |
 | sync enable/status/snapshot/check/commit/adopt + five verdicts + manifest/digest | **replaced** by push/pull/merge (§3.2); `check --diff` becomes `repo status --diff` over `dolt_diff` |
-| render PROJECT.md / PROJECT_LEDGER.md (atomic two-phase write) | port; ledger's "Recent activity" sourced from `dolt_log` |
+| render PROJECT.md / PROJECT_LEDGER.md (previously called "atomic two-phase write") | shipped in #133; prepare both files/backups, then native per-file replacement; the pair is not atomic; ledger activity uses real Dolt commit metadata (§11.2) |
 | doctor (19 checks) | port + memdolt-specific checks (LOCK/pidfile/IPC §5.2, remote reachability, schema skew, model presence, empty-recall rate §8.1) |
 | audit md (CLAUDE.md/AGENTS.md linter) | port (pure text tool) |
 | export/import JSON v1 | import kept (migration §15); export kept for interop; neither is the sync path |
@@ -1560,6 +1675,14 @@ operations and measured version compatibility, topology configuration and
 the optional remote Store remain pending. M5 and M6 are unchanged.
 
 ---
+
+**M5 render subset (issue #133):** the earlier records left all M5 deferred.
+After this delivery, committed-memory rendering through CLI and MCP ships
+within §§11.1–11.3's read/file/owner boundaries, with the three core workflow
+templates updated. Synthetic direct, authenticated-owner and modern/legacy
+MCP checks cover its content and preservation contract. This does not complete
+the parity matrix or the locate golden gate; other M5 capabilities and the
+gated M6 token/transcript workflows retain their prior phasing.
 
 ## 17. Risk register
 

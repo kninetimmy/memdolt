@@ -12,6 +12,7 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -161,6 +162,17 @@ func (s *OwnerStore) LastChanged(ctx context.Context, sourceType, sourceID strin
 
 func (s *OwnerStore) CheckWriteText(ctx context.Context, text []string) error {
 	return s.operation(ctx, opCheckWriteText, checkWriteTextArgs{Text: text}, &struct{}{})
+}
+
+func (s *OwnerStore) Render(ctx context.Context) (render.Result, error) {
+	var result render.Result
+	if err := s.operation(ctx, opRender, nil, &result); err != nil {
+		return render.Result{Status: "unknown"}, fmt.Errorf("render owner response lost or unavailable; outcome unknown; inspect configured outputs and .memdolt/backups/rendered before retrying: %w", err)
+	}
+	if result.Error != "" {
+		return result, errors.New(result.Error)
+	}
+	return result, nil
 }
 
 func (s *OwnerStore) ListRemotes(ctx context.Context) ([]localdolt.Remote, error) {
