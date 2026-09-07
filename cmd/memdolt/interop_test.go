@@ -15,6 +15,17 @@ import (
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
+// Temporary roots can themselves be OS aliases (macOS /var). Fixtures use
+// their canonical directory; production bundle paths still refuse links.
+func interopTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestInteropCLIThroughDirectAndAuthenticatedOwner(t *testing.T) {
 	for _, owner := range []bool{false, true} {
 		t.Run(fmt.Sprintf("owner=%t", owner), func(t *testing.T) {
@@ -27,7 +38,7 @@ func TestInteropCLIThroughDirectAndAuthenticatedOwner(t *testing.T) {
 			seedRender(t, source)
 			// Existing document content and local artifacts must survive a fresh
 			// memory import, including a real owner credential in the routed case.
-			docFile := filepath.Join(t.TempDir(), "reference.md")
+			docFile := filepath.Join(interopTempDir(t), "reference.md")
 			writeTestFile(t, docFile, "# Retained\n\nExisting target reference document.\n")
 			doc := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "add", docFile, "--dir", target, "--json"))
 			configPath := filepath.Join(target, ".memdolt", "config.toml")
@@ -48,7 +59,7 @@ func TestInteropCLIThroughDirectAndAuthenticatedOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := interopQueryStrings(t, target, "SELECT commit_hash FROM dolt_log ORDER BY commit_hash")
-			file := filepath.Join(t.TempDir(), "interop.json")
+			file := filepath.Join(interopTempDir(t), "interop.json")
 			exported := decodeJSON[localdolt.InteropResult](t, runMemdolt(t, "export", file, "--dir", source, "--json"))
 			if !exported.Written || exported.SourceCommit == "" {
 				t.Fatalf("CLI export=%+v", exported)
@@ -142,7 +153,7 @@ func TestInteropCLILegacyAndFailuresEmitOneResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := filepath.Join(t.TempDir(), "legacy.json")
+	fixture := filepath.Join(interopTempDir(t), "legacy.json")
 	if err := os.WriteFile(fixture, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +167,7 @@ func TestInteropCLILegacyAndFailuresEmitOneResult(t *testing.T) {
 		{"import", "--dir", initStore(t), "--json"},
 		{"export", filepath.Join(base, ".memdolt", "server.pid"), "--dir", base, "--json"},
 		{"export", "--dir", base, "--json"},
-		{"import", fixture, "--dir", t.TempDir(), "--json"},
+		{"import", fixture, "--dir", interopTempDir(t), "--json"},
 	} {
 		var out bytes.Buffer
 		cmd := newRootCommand()

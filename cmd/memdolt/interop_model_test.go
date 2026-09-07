@@ -21,7 +21,7 @@ func TestInteropRebuildAndProductionHybridRecall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(t.TempDir(), "legacy.json")
+	file := filepath.Join(interopTempDir(t), "legacy.json")
 	if err := os.WriteFile(file, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}

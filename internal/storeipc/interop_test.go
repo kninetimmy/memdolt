@@ -17,6 +17,17 @@ import (
 	"github.com/kninetimmy/memdolt/internal/storeipc"
 )
 
+// Temporary roots can themselves be OS aliases (macOS /var). Fixtures use
+// their canonical directory; production bundle paths still refuse links.
+func interopTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestInteropOwnerLostRepliesNeverReplay(t *testing.T) {
 	for _, operation := range []string{"import", "export"} {
 		t.Run(operation, func(t *testing.T) {
@@ -49,7 +60,7 @@ func TestInteropOwnerLostRepliesNeverReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			file = filepath.Join(t.TempDir(), "memory.json")
+			file = filepath.Join(interopTempDir(t), "memory.json")
 			if err := os.WriteFile(file, raw, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -57,7 +68,7 @@ func TestInteropOwnerLostRepliesNeverReplay(t *testing.T) {
 			if operation == "import" {
 				result, err = routed.ImportMemory(ctx, localdolt.ImportMemoryOptions{File: file, FromMemhub: true})
 			} else {
-				file = filepath.Join(t.TempDir(), "export.json")
+				file = filepath.Join(interopTempDir(t), "export.json")
 				result, err = routed.ExportMemory(ctx, localdolt.ExportMemoryOptions{File: file})
 			}
 			if err == nil || result.Status != "unknown" || !strings.Contains(err.Error(), "outcome unknown") || calls.Load() != 1 {
@@ -96,7 +107,7 @@ func TestInteropOwnerPreservesConfirmedProgressWithError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(t.TempDir(), "memory.json")
+	file := filepath.Join(interopTempDir(t), "memory.json")
 	if err := os.WriteFile(file, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +134,7 @@ func TestInteropTypedOwnerRejectsLossyPathBeforeSubmission(t *testing.T) {
 			inner.ServeHTTP(w, r)
 		})
 	})
-	bad := filepath.Join(t.TempDir(), "invalid-"+string([]byte{0xff})+".json")
+	bad := filepath.Join(interopTempDir(t), "invalid-"+string([]byte{0xff})+".json")
 	if _, err := routed.ImportMemory(context.Background(), localdolt.ImportMemoryOptions{File: bad}); err == nil {
 		t.Fatal("serialized a lossy import path")
 	}
@@ -148,7 +159,7 @@ func TestInteropRawOwnerUnicodeCannotSelectAnotherBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := interopTempDir(t)
 	for _, name := range []string{"�.json", "😀�.json"} {
 		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
 			t.Fatal(err)

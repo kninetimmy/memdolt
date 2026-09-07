@@ -17,6 +17,17 @@ import (
 	"github.com/kninetimmy/memdolt/internal/store"
 )
 
+// Temporary roots can themselves be OS aliases (macOS /var). Fixtures use
+// their canonical directory; production bundle paths still refuse links.
+func interopTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func legacyInteropFixture(t *testing.T) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "memhub-v1.json"))
@@ -28,7 +39,7 @@ func legacyInteropFixture(t *testing.T) []byte {
 
 func interopTestFile(t *testing.T, data []byte) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "memory.json")
+	path := filepath.Join(interopTempDir(t), "memory.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +143,7 @@ func TestInteropLegacyAndNativeRoundTrip(t *testing.T) {
 		t.Fatal("reopen changed destination")
 	}
 	first := interopCaptured(t, reopened)
-	export := filepath.Join(t.TempDir(), "native.json")
+	export := filepath.Join(interopTempDir(t), "native.json")
 	if result, err := reopened.ExportMemory(ctx, ExportMemoryOptions{File: export}); err != nil || !result.Written {
 		t.Fatalf("export=%+v, %v", result, err)
 	}
@@ -420,7 +431,7 @@ func TestInteropProtectsOpenedCredentialsAndOutputSources(t *testing.T) {
 	if err := os.WriteFile(s.paths.PidFile(), credential, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	alias := filepath.Join(t.TempDir(), "innocent.json")
+	alias := filepath.Join(interopTempDir(t), "innocent.json")
 	if err := os.Link(s.paths.PidFile(), alias); err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +464,7 @@ func TestInteropExportPinsMainAndProposalHeadsBeforeReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(t.TempDir(), "pinned.json")
+	file := filepath.Join(interopTempDir(t), "pinned.json")
 	result, err := s.exportMemory(ctx, ExportMemoryOptions{File: file}, interopHooks{afterCapture: func() {
 		// Bypass the participating mutex through raw sessions, like foreign Dolt.
 		conn, err := s.db.Conn(ctx)
@@ -495,7 +506,7 @@ func TestInteropNativeSupersedeAndAcceptedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(t.TempDir(), "supersede.json")
+	file := filepath.Join(interopTempDir(t), "supersede.json")
 	if _, err := s.ExportMemory(ctx, ExportMemoryOptions{File: file}); err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +524,7 @@ func TestInteropNativeSupersedeAndAcceptedMetadata(t *testing.T) {
 	if internalCount(t, target, "SELECT COUNT(*) FROM facts") != 2 || internalCount(t, target, "SELECT COUNT(*) FROM proposals") != 1 {
 		t.Fatal("ordinary supersede review lost payload or metadata")
 	}
-	accepted := filepath.Join(t.TempDir(), "accepted.json")
+	accepted := filepath.Join(interopTempDir(t), "accepted.json")
 	if _, err := target.ExportMemory(ctx, ExportMemoryOptions{File: accepted}); err != nil {
 		t.Fatal(err)
 	}

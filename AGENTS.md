@@ -89,6 +89,10 @@ The user's own migration remains optional and unperformed. Full blast radius:
   Interop's typed owner methods check paths before JSON marshaling; the
   existing operationArgs Unicode guard also precedes raw argument decoding.
   Other typed owner methods retain their existing validation boundaries.
+  After integrating #138, checkDocumentOwnerFile retains its signature and
+  delegates to layout.CheckOwnerSource; interop inherits that opened-file
+  check unchanged. Locator/tokenizer behavior and all twenty-two MCP tools
+  remain as delivered by #138; import/export adds no MCP registrations.
 - New `cmd/memdolt/interop.go` and additive root.go registrations provide
   help, existing-store/direct/owner routing and one human/JSON result on
   reached-operation failures too. Previous commands remain. Main hash/created
@@ -101,7 +105,10 @@ The user's own migration remains optional and unperformed. Full blast radius:
   file failures, pinned export, lost replies and late partial progress. The
   golden-tagged model check rebuilds a synthetic import and uses real CLI
   hybrid recall. Existing golden data/assertions remain. Tests change no
-  production behavior. New docs/migration.md and PRD §§12/15/16 preserve the
+  runtime path policy: their temporary roots are canonicalized, as existing
+  renderer fixtures do, so macOS's /var alias is not mistaken for a permitted
+  bundle path. Explicit link/refusal tests still exercise the production guard.
+  New docs/migration.md and PRD §§12/15/16 preserve the
   matching before/after and optional converge-first/low-stakes/one-week-soak/
   old-state-retention runbook. No dependency, durable migration, global backend,
   full M5 or physical hub acceptance is implied.

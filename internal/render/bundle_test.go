@@ -8,10 +8,21 @@ import (
 	"testing"
 )
 
+// Temporary roots can themselves be OS aliases (macOS /var). Fixtures use
+// their canonical directory; production bundle paths still refuse links.
+func bundleTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestBundlePublicationPreservesExistingOutputOnFailures(t *testing.T) {
 	for _, phase := range []string{"prepare", "replace", "finalize", "changed"} {
 		t.Run(phase, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "bundle.json")
+			path := filepath.Join(bundleTempDir(t), "bundle.json")
 			if err := os.WriteFile(path, []byte("original complete bundle"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -51,7 +62,7 @@ func TestBundlePublicationPreservesExistingOutputOnFailures(t *testing.T) {
 }
 
 func TestBundlePathsProtectPlumbingAndLinks(t *testing.T) {
-	base := t.TempDir()
+	base := bundleTempDir(t)
 	for _, name := range []string{".memdolt/server.pid", ".memdolt/config.toml", ".memdolt/embeddings.sqlite", ".memdolt/dolt/memory", ".memhub/project.sqlite", ".git/config", ".orchestrator/run.json"} {
 		if err := BundlePath(filepath.Join(base, filepath.FromSlash(name))); err == nil {
 			t.Fatalf("accepted protected path %s", name)
@@ -60,7 +71,7 @@ func TestBundlePathsProtectPlumbingAndLinks(t *testing.T) {
 	if err := BundlePath("relative.json"); err == nil {
 		t.Fatal("accepted unresolved relative path")
 	}
-	actual, link := t.TempDir(), filepath.Join(base, "link")
+	actual, link := bundleTempDir(t), filepath.Join(base, "link")
 	if err := os.Symlink(actual, link); err != nil {
 		t.Skipf("symlink creation is unavailable: %v", err)
 	}
