@@ -46,6 +46,10 @@ would succeed.
 5. Stage facts and decisions with `propose_fact`, `propose_decision`, or
    `propose_supersede`. Never promote them. Tell the user that a human reviews
    staged claims with `memdolt review`.
+   Before issue #139 human fact/decision CLI commands were deferred; after it
+   they exist for trusted terminal use. This agent workflow still uses the
+   reviewed lane; never substitute direct add/verify/summary/supersede commands
+   or `--actor user` for a proposal and human review.
 6. Call `render` (CLI equivalent: `memdolt render --json`) to refresh the local
    generated files from committed main. Report the source commit, written
    outputs, and recoverable backups. Rendering does not flush pending MCP

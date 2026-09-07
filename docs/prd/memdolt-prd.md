@@ -83,6 +83,14 @@ Each project's memory is a Dolt database. The commit graph is the write-ahead lo
 - Commit metadata is load-bearing: author = normalized actor (`agent:claude-code`, `agent:codex`, `user`), message = structured one-liner (`propose fact msrv=1.24`, `note batch (3)`, `review accept #42`). `dolt_log` + `dolt_blame` then answer provenance queries with zero app code. **[V]** (system tables exist as documented.)
 - Agents never `ALTER TABLE`. Schema changes ship only in migrations run by the binary on `main` (§6.4). This keeps Dolt schema-conflict machinery **[V]** out of the daily path entirely.
 
+Before issue #139, those direct lanes and reviewed proposals were the shipped
+writers; ordinary trusted human fact/decision commands remained deferred. After
+it, the repository CLI in §11.2 also lets humans assert, verify, edit summaries
+and link supersessions directly, one guarded human commit per actual change.
+The reviewed agent lane and its human promotion gate remain unchanged. These
+human commands are absent from MCP; a source label or SQL username cannot
+convert an agent into a trusted human.
+
 ### 3.2 What the commit graph replaces from memhub
 
 | memhub mechanism | memdolt equivalent |
@@ -1058,6 +1066,120 @@ responses remain structured; transport uncertainty never causes replay.
 
 Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
 
+**Trusted human repository facts/decisions (issue #139).** Before this slice,
+§12's CRUD port and M5 deferral still included the ordinary human commands.
+After it, these commands ship with `--dir` and `--json` on an initialized
+current repository store:
+
+- `fact add <key> <value> [--source <source>] [--kind <kind>] [--evidence <text>]`
+- `fact list [--prefix <literal-dotted-prefix>] [--limit <n>]`
+- `fact verify <id-or-key>` and `fact supersede <old> --by <new>`
+- `decision add <title> --rationale <text> [--summary <text>] [--source <source>]
+  [--alternatives <text>] [--evidence <text>]`
+- `decision list [--status all|active|superseded|draft] [--limit <n>]`
+- `decision set-summary <id> <summary>` and `decision supersede <old> --by <new>`
+
+The existing CLI actor default is `user`; these writers also accept `--actor`
+only when it normalizes to that human class. This is a trusted CLI policy,
+not authentication that a local process is a person. The owning-store seam
+validates both the normalized and raw actor; MCP identities remain agent-class,
+including raw `user`. Source is separate metadata, defaulting to `user`, with
+the tagged vocabulary `user`, `git`, `observed`, `agent:<id>` and
+`user+agent:<id>` (lowercase ASCII letters/digits/dots/underscores/hyphens).
+Source values retain their text, including accepted surrounding whitespace;
+the actual stored value must fit VARCHAR(64). No source, actor flag or remote
+SQL user enables a direct human MCP operation. Agents continue to stage claims
+and humans review through the unchanged contradiction/elicitation guards.
+
+Fact add requires a dotted key with no empty segment or surrounding whitespace.
+It inserts a fresh ULID if no live row exists, even when superseded rows use
+that key. Otherwise it updates only the live row, retaining id and created_at,
+and replaces value/source/kind/evidence while stamping verified_at. Omitted
+kind and evidence clear to NULL. Blank kind or decision summary normalizes to
+NULL; every nonblank summary/tag preserves its whitespace, matching memhub
+v0.2.0. Confidence stays removed. Old values remain recoverable through Dolt
+history; commit messages contain operation plus id, not duplicate old prose.
+Fact verify changes only verified_at, and may explicitly select a superseded
+row. Verify/supersede resolve one exact unambiguous fact id or key over all
+rows; a key shared by live/history rows requires an explicit id. Add's live-key
+lookup is deliberately different. Database-collation spelling collisions
+refuse instead of choosing another key.
+
+Supersession links existing same-kind rows, retaining both; decisions also
+set the old status to `superseded`. It validates the replacement chain before
+writing, refusing self-links, cycles, missing rows and dangling/cyclic target
+chains. A valid explicit relink can repair an old link; it never clears a link,
+deletes a row or resurrects one. Decision add writes active status and the real
+source/summary/alternatives_rejected/evidence fields; set-summary changes only
+summary. Identical summaries and links report `unchanged` with no commit. So
+does an otherwise identical fact assertion or verification whose stored
+timestamp already equals this second: the existing DATETIME has whole-second
+precision, and no future timestamp or empty audit commit is fabricated.
+
+Fact list preserves superseded rows, literal dotted-prefix escaping and
+recall's configured stale horizon. CLI decision list defaults to all statuses,
+as the tagged CLI dispatcher did; `--status active` filters it. The shared
+reader lets MCP retain its existing active default and ten-row default limit.
+CLI limits default to zero (all matching rows). Every list reads committed
+main, excluding proposals and dirty data. The existing nullable display shapes
+remain; SQL NULL fields are preserved in storage. Value/summary edits change
+the existing semantic-text hash, so old vectors are ineligible as current
+vectors; production recall uses its visible stale-index fallback, and
+`index status/rebuild` reports/repairs the derived data. Render uses the current
+committed text and retains superseded rows and real commit history.
+
+Each of the six human Store mutations executes once in the owning process
+under `proposalMu`, sharing existing direct/proposal/transfer/document/render/
+status ordering. It validates current committed schema including the precise
+STORED live_key expression, refuses dirty main and active merge state, binds
+all user SQL values, scans newly persisted text/source/raw and canonical actor/
+links, rechecks captured main and uses `CommitRequest.RequireClean`. Invalid
+UTF-8, field widths, configuration, scan and SQL failures refuse visibly.
+Foreign Dolt sessions do not share the mutex; no coordination of their final
+read/commit interval is claimed. Owner discovery/authentication failures never
+fall back. A lost response is not replayed: inspect lists before retrying.
+Confirmed identity/hash evidence remains in human/JSON results on later
+connection, transaction, owner or output errors.
+
+Before #139, `commitConn` discarded its result on outer transaction failure
+and its comment claimed all failures rolled back. The pinned DOLT_COMMIT
+procedure persists before database/sql finalization. After this fix, that
+helper retains the real hash with a finalization error naming it; earlier
+failures still invoke rollback. The new human seam preserves the structured result.
+Older lane/document/raw owner wrappers still discard structured results on
+error, and note-batch retry bookkeeping remains follow-up work. Staging keeps
+its prior late-error expected-head refusal and inspectable proposal residue;
+it does not gain automatic deletion from the newly available hash.
+
+The structure touched is additive root registration and new CLI
+`human_memory.go`; new localdolt `human_memory.go` types and six methods;
+`documents.go`'s `documentConn` renamed/generalized to `initializedMainConn`
+without changing its document lifecycle; `localdolt.go`'s `commitConnFinalize`
+result preservation; `propose.go`'s retained cleanup policy and fact-only
+supersede comment; new `memory/records.go` with the extracted list types/queries
+and staleness comparison, `retrieval/recall.go` delegating to that same comparison
+without changing scores, and `mcpserver/tools.go` delegation;
+`storeipc/operation.go`'s Backend/explicit
+allow-list and new `storeipc/human_memory.go` typed operations; four new test
+files for CLI/localdolt/storeipc/MCP; server instructions and three wrap-up
+templates; and the AGENTS/PRD records. The human restrictions bind those six
+methods through `humanMemoryWrite`, not all Store writes or all source fields.
+Existing children, nineteen MCP tools, schemas, proposal/review guards,
+attribution, notes, retrieval scoring, document behavior and other owner
+operations retain their contracts. AGENTS.md gives the complete per-file
+before/after inventory. No dependency, migration, global flag/promotion,
+top-level history/status/stats command or full M5 completion is added;
+`repo status` is already shipped and remains a separate surface.
+
+After integrating #137, those nineteen tools remain alongside the two real
+transfer tools, for twenty-one registrations; the human-only mutation boundary
+and shared list defaults remain intact. The integrated CLI regression creates
+same-row and same-live-key fact conflicts through human `fact add`, resolves
+all pull choices directly and through a live owner, then reopens retained
+fact/decision fields and exercises verification, summary edits and supersession.
+The #139 generic confirmed-commit result and failed-stage residue policies
+remain unchanged beside pull's own promotion/finalization handling.
+
 **First M4 subset (issue #123):** before this issue, no `repo` command was
 registered. After it, `memdolt repo status [--dir <repository>] [--json]`
 reports the resolved local Dolt store path, `main` commit hash, schema version,
@@ -1938,6 +2060,12 @@ Every ordinary row uses v0.2.0 as its baseline. Rows explicitly labeled v0.2.2 a
 | OpenCode complete unredacted transcript export (v0.2.2 supplement) | port the separately approved, validated, local-only `.json.zst` archive; never recall, embed, or export it (§11.4) |
 | OpenCode hibernated discovery and wrapper resync (v0.2.2 supplement) | keep hibernated surfaces undiscovered; report-only actionable orphans, never overwrite or delete user files (§11.4) |
 
+Before #139 the CRUD row's `port (§6)` still left ordinary human fact/decision
+commands deferred. After it, the repository human subset in §11.2 ships,
+alongside the unchanged reviewed agent lane. It does not complete every CRUD
+or parity item: global memory/promotion, top-level history/status/stats and
+the remaining matrix still need their explicit delivery/disposition.
+
 ---
 
 ## 13. Hub deployment & operations
@@ -2124,6 +2252,14 @@ templates updated. Synthetic direct, authenticated-owner and modern/legacy
 MCP checks cover its content and preservation contract. This does not complete
 the parity matrix or the locate golden gate; other M5 capabilities and the
 gated M6 token/transcript workflows retain their prior phasing.
+
+**M5 human memory subset (issue #139):** before this slice, the remaining
+CRUD/parity work included the ordinary trusted human fact/decision commands.
+After it, the repository operations and direct/owner/read/history checks in
+§11.2 ship. The retrieval golden gate remains required. This does not complete
+the parity matrix, global memory/promotion, top-level history/status/stats,
+locate acceptance or the other M5/M6 capabilities. Earlier subset deferrals
+remain the historical record, not a claim that those follow-ups shipped here.
 
 ## 17. Risk register
 

@@ -126,3 +126,92 @@ func TestPullCLIIndependentMergeAndStdinResolutionParsing(t *testing.T) {
 		t.Fatalf("stdin malformed hashes = %v", err)
 	}
 }
+
+func TestPullCLIIntegratesHumanFactAndDecisionWrites(t *testing.T) {
+	for _, routed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("owner=%t", routed), func(t *testing.T) {
+			a := initStore(t)
+			remote := configureCLITransferRemote(t, a)
+			shared := decodeJSON[localdolt.HumanMemoryResult](t, runMemdolt(t, "fact", "add", "shared.key", "base value", "--dir", a, "--json"))
+			runMemdolt(t, "push", "--dir", a)
+			b := scratchDir(t)
+			runMemdolt(t, "clone", remote, "--dir", b)
+			stop := func() {}
+			if routed {
+				stop = serveTransferProcess(t, b)
+			}
+			var facts, decisions []localdolt.HumanMemoryResult
+			for i, base := range []string{a, b} {
+				side := []string{"remote", "local"}[i]
+				updated := decodeJSON[localdolt.HumanMemoryResult](t, runMemdolt(t, "fact", "add", "shared.key", side+" value", "--source", "observed", "--kind", "convention", "--evidence", side+".md", "--dir", base, "--json"))
+				if updated.ID != shared.ID {
+					t.Fatal("human upsert changed the shared fact identity")
+				}
+				facts = append(facts, decodeJSON[localdolt.HumanMemoryResult](t, runMemdolt(t, "fact", "add", "collision.key", side+" fact", "--dir", base, "--json")))
+				decisions = append(decisions, decodeJSON[localdolt.HumanMemoryResult](t, runMemdolt(t, "decision", "add", side+" decision", "--rationale", side+" rationale", "--summary", side+" summary", "--evidence", side+".md", "--dir", base, "--json")))
+			}
+			runMemdolt(t, "push", "--dir", a)
+			before := runMemdolt(t, "repo", "status", "--local", "--dir", b, "--json")
+			stdout, err := runMemdoltResult(t, "pull", "--dir", b, "--json")
+			if err == nil {
+				t.Fatal("human fact conflicts merged without operator choices")
+			}
+			shown := decodeJSON[localdolt.TransferResult](t, stdout)
+			if shown.Status != "conflicted" || len(shown.Conflicts) != 2 || runMemdolt(t, "repo", "status", "--local", "--dir", b, "--json") != before {
+				t.Fatalf("human conflict preview changed main or lost conflicts: %+v", shown)
+			}
+			resolution := localdolt.PullResolution{LocalCommit: shown.LocalCommit, RemoteCommit: shown.RemoteCommit}
+			for _, conflict := range shown.Conflicts {
+				choice := localdolt.PullChoice{Conflict: conflict.ID, Take: "ours"}
+				if conflict.Kind == "live-fact-key" {
+					choice.Take, choice.Winner = "winner", facts[0].ID
+				}
+				resolution.Choices = append(resolution.Choices, choice)
+			}
+			data, err := json.Marshal(resolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			merged := decodeJSON[localdolt.TransferResult](t, runMemdoltIn(t, string(data), "pull", "--resolve", "-", "--dir", b, "--json"))
+			if !merged.Changed || merged.LocalCommit != shown.LocalCommit || merged.RemoteCommit != shown.RemoteCommit {
+				t.Fatalf("human conflict resolution = %+v", merged)
+			}
+			runMemdolt(t, "fact", "verify", facts[0].ID, "--dir", b)
+			runMemdolt(t, "decision", "set-summary", decisions[0].ID, "reviewed remote summary", "--dir", b)
+			runMemdolt(t, "decision", "supersede", decisions[1].ID, "--by", decisions[0].ID, "--dir", b)
+			stop()
+			listed := decodeJSON[factListReport](t, runMemdolt(t, "fact", "list", "--dir", b, "--json"))
+			if len(listed.Facts) != 3 {
+				t.Fatalf("reopened human fact list lost rows: %+v", listed)
+			}
+			for _, fact := range listed.Facts {
+				switch fact.ID {
+				case shared.ID:
+					if fact.Value != "local value" || fact.Source != "observed" || fact.Kind != "convention" || fact.Evidence != "local.md" {
+						t.Fatalf("chosen human fact fields changed: %+v", fact)
+					}
+				case facts[0].ID:
+					if fact.Value != "remote fact" || fact.SupersededBy != "" || fact.VerifiedAt == nil {
+						t.Fatalf("chosen fact winner changed: %+v", fact)
+					}
+				case facts[1].ID:
+					if fact.Value != "local fact" || fact.SupersededBy != facts[0].ID {
+						t.Fatalf("fact loser was removed or overwritten: %+v", fact)
+					}
+				default:
+					t.Fatalf("unexpected merged fact: %+v", fact)
+				}
+			}
+			decisionRows := decodeJSON[decisionListReport](t, runMemdolt(t, "decision", "list", "--dir", b, "--json"))
+			if len(decisionRows.Decisions) != 2 {
+				t.Fatalf("default human list lost superseded decisions: %+v", decisionRows)
+			}
+			for _, decision := range decisionRows.Decisions {
+				if decision.ID == decisions[0].ID && (decision.Status != "active" || decision.Summary != "reviewed remote summary" || decision.Evidence != "remote.md") ||
+					decision.ID == decisions[1].ID && (decision.Status != "superseded" || decision.SupersededBy != decisions[0].ID || decision.Summary != "local summary") {
+					t.Fatalf("human decision fields changed after pull: %+v", decision)
+				}
+			}
+		})
+	}
+}

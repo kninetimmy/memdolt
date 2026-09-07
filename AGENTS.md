@@ -19,6 +19,113 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Trusted human repository memory (issue #139).** Before this delivery,
+facts and decisions had schema, reviewed agent proposals and committed readers,
+but their ordinary human CLI commands remained in the unshipped CRUD/parity
+work. After it, `fact add <key> <value>`, `fact list`, `fact verify <id-or-key>`,
+`fact supersede <old> --by <new>`, `decision add <title> --rationale <text>`,
+`decision list`, `decision set-summary <id> <summary>` and
+`decision supersede <old> --by <new>` ship for initialized repositories.
+Every command supports `--dir`/`--json`. Writers accept the existing `--actor`
+spelling but require its normalized identity to be `user`; agents still
+propose and humans review. This is the trusted CLI boundary, not proof that
+an OS process is a person. Source labels and remote SQL users grant no authority.
+
+Fact add requires a dotted key without empty segments. It inserts a fresh
+ULID when no live row exists, or updates that live row's value/source/kind/
+evidence/verified_at while retaining id and created_at. Omitted kind/evidence
+clear to NULL. Whitespace-only kind/summary becomes NULL; nonblank text keeps
+its whitespace. Source defaults to `user` and retains the tagged vocabulary
+`user`, `git`, `observed`, `agent:<id>`, `user+agent:<id>` with lowercase agent
+identifiers. `--evidence` and decision `--alternatives` write the actual schema
+fields; confidence remains removed. Fact verification changes only verified_at.
+Fact verify/supersede resolve an unambiguous exact id or key across live and
+superseded rows; historical key ambiguity requires explicit ids. Supersession
+links existing same-kind rows, preserves both and refuses self-links, cycles,
+missing replacements and corrupt replacement chains. Decision supersession
+also sets the old status to `superseded`. No deletion or resurrection occurs.
+
+CLI fact lists retain superseded rows, support literal dotted `--prefix` and
+`--limit`, and use recall's configured stale horizon. CLI decision lists default
+to all statuses, matching memhub v0.2.0's dispatcher; `--status active` filters
+them. MCP keeps its prior active default and ten-row default limit. Decision
+`--summary`, `--source`, `--alternatives` and `--evidence` remain readable after
+supersession. Lists show committed main only. Changes to value or summary make
+old vectors fail the existing current-source hash check; `index status/rebuild`
+repairs the local derived index. Render captures current committed text and
+retained superseded rows. Identical summaries/links and same-second verification
+report `unchanged` without an empty commit; DATETIME precision is one second.
+
+The complete structural blast radius is:
+
+- `cmd/memdolt/root.go` adds only the two command families. New
+  `cmd/memdolt/human_memory.go` owns their flags, help, validation, shared reads,
+  existing-store/direct/verified-owner choice, close-before-output lifecycle
+  and confirmed-result reporting. Previous children and their behavior remain.
+- New `localdolt/human_memory.go` defines `FactAddOptions`,
+  `DecisionAddOptions`, `HumanMemoryResult`, and the six explicit Store mutations.
+  `humanMemoryWrite` validates human attribution, shares `proposalMu`, refuses
+  dirty main/active merges, reuses `validateTransferSchema` including the exact
+  STORED live_key expression, scans new text/source/raw and canonical actor/
+  persisted links, and uses one guarded `commitConn` operation. Source/key/text
+  widths, UTF-8 and SQL/config/scan failures refuse. Read checks precede writes;
+  a changed captured main refuses before commit. Foreign Dolt sessions do not
+  share the mutex, so the final external-writer interval is not coordinated.
+  These human restrictions bind those six methods through `humanMemoryWrite`,
+  not every Store mutation or source column. Existing proposal, contradiction,
+  elicitation, transfer and direct-lane rules remain.
+- `localdolt/documents.go` renames the former `documentConn` to
+  `initializedMainConn(ctx, purpose)` for document and human callers. The four
+  document methods keep their existing current-schema, immutable hash,
+  committed-snapshot, file/config and mutation behavior; diagnostics name the
+  caller's purpose. No migration or ordinary `Open` behavior changes.
+- `localdolt/localdolt.go` retains statement validation, deny-list, opt-in clean
+  guard and transaction execution. Before #139 its `Commit` comment claimed
+  every failure left nothing behind and `commitConn` discarded a hash after
+  outer transaction finalization failed. After it, `commitConnFinalize` retains
+  the real DOLT_COMMIT result plus an error naming its hash: the pinned Dolt
+  procedure has already persisted before `sql.Tx.Commit`. Earlier failures
+  still invoke rollback. This result contract binds `commitConn`/`Store.Commit`;
+  older document/lane/raw owner wrappers still discard the structured result
+  on error, though their error now carries the hash. `CommitNotes`/`Toolset`
+  retry bookkeeping is unchanged and remains separate follow-up work.
+- `localdolt/propose.go` keeps `ProposeSupersede` fact-only; before #139 its
+  comment said no decision lane requested supersession, after it the new human
+  lane does. `stage` uses a returned hash for automatic cleanup only without a
+  staging error, preserving the prior expected-head refusal and retained
+  proposal residue after a late failure. Its private finalization test hook
+  is nil in production. Successful staging/review guards remain unchanged.
+- New `memory/records.go` moves the former MCP fact/decision records and list
+  queries into `ListFacts`/`ListDecisions`. Existing columns, nullable display,
+  ordering, literal-prefix escaping and staleness behavior remain.
+  `retrieval/recall.go` keeps `FactIsStale` as a wrapper over the same comparison
+  now in memory; `sourceAge` uses it too. Caller-side configuration remains
+  independent, avoiding a memory-to-retrieval dependency; ranking is unchanged.
+  `mcpserver/tools.go` delegates its two readers to them with its existing
+  defaults. All nineteen registrations, schemas, attribution and staged writes
+  remain; no human mutation or supersede-as-accept tool is added.
+  After integrating #137, those nineteen tools remain alongside `repo_pull`
+  and `repo_push` (twenty-one total); the human-only mutation boundary remains.
+- `storeipc/operation.go` extends `Backend` and its explicit allow-list with
+  six typed human operations. New `storeipc/human_memory.go` owns their typed
+  arguments and OwnerStore methods, rejects invalid UTF-8 before JSON can
+  rewrite it, submits each mutation once and retains confirmed results with
+  errors. Probe/authentication failures never fall back, and a lost reply
+  means unknown outcome: inspect fact/decision lists before retrying. Existing
+  operations, authentication, actor propagation and cancellation remain.
+- New human-memory tests in CLI, localdolt, storeipc and MCP exercise direct/
+  owner lifecycle, fields/history/provenance, chain and dirty/proposal refusals,
+  deny/config errors, late/unknown/output failures, concurrent upserts, real
+  transaction finalization, MCP read/agent boundaries and production vector
+  invalidation/retrieval/render behavior. They reuse existing fixture helpers;
+  no tests change production policy or claim real-host/global acceptance.
+- PRD §§3.1/11.2/12/16, server instructions and the three wrap-up templates
+  record this human-versus-agent boundary. Their approval, proposal and note
+  lifecycle obligations remain. No dependency, durable migration, global flag,
+  global promotion, top-level history/status/stats or full M5 acceptance ships;
+  existing `repo status` remains distinct and the remaining parity matrix is
+  follow-up work.
+
 **Committed render delivery (issue #133).** Before this delivery, render was
 deferred: there was no `memdolt render` command or registered `render` tool,
 and the core wrap-up templates explicitly omitted that step. After it,
@@ -824,6 +931,12 @@ export GOFLAGS=-tags=gms_pure_go
     independent-divergence refusal expectations. MCP `tools_test.go`, CLI
     `serve_test.go` and `host_templates_test.go` retain existing assertions and
     recognize the implemented transfer tools. Tests change no production policy.
+    After #139 integration, `TestPullCLIIntegratesHumanFactAndDecisionWrites`
+    creates both conflict surfaces through the real human CLI commands,
+    resolves the complete pull directly and through a live owner, then reopens
+    shared fact/decision readers and exercises human verification/summary/
+    supersession. The generic confirmed-commit and failed-stage residue
+    changes from #139 remain unchanged beside pull's own promotion boundary.
   - `mcpserver/instructions.md`, all three wrap-up templates, this AGENTS record
     and PRD §§5.2/6.3/11.1/11.2/16 document the same behavior and limits. The
     templates add guidance for transfers already requested by the operator;
