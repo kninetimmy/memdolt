@@ -90,8 +90,12 @@ func TestDocumentMCPPathsSchemasAndModernLegacyAttribution(t *testing.T) {
 			callError(t, client, "doc_add", map[string]any{"file": traversal}, "outside")
 			configPath := filepath.Join(base, ".memdolt", "config.toml")
 			writeMCPDocument(t, configPath, fmt.Sprintf("[doc]\nallowed_dirs=[%q]\n", filepath.ToSlash(outside)))
+			canonicalExternal, err := filepath.EvalSymlinks(external)
+			if err != nil {
+				t.Fatal(err)
+			}
 			allowed := callAs[localdolt.DocResult](t, client, "doc_add", map[string]any{"file": external})
-			if allowed.Status != "created" || allowed.EnabledDefaultRecall || allowed.Document.Path != external {
+			if allowed.Status != "created" || allowed.EnabledDefaultRecall || allowed.Document.Path != canonicalExternal {
 				t.Fatalf("allow-list ingestion = %+v", allowed)
 			}
 			for _, args := range []map[string]any{

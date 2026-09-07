@@ -37,8 +37,12 @@ func TestDocumentCLIDirectAndOwnerLifecycle(t *testing.T) {
 			t.Chdir(sourceDir)
 			file := "spec's reference.md"
 			writeTestFile(t, file, "# Title\n\n## 子\n\nUnicode 内容\n")
+			canonicalFile, err := filepath.EvalSymlinks(filepath.Join(sourceDir, file))
+			if err != nil {
+				t.Fatal(err)
+			}
 			added := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "add", file, "--title", "Selected title", "--actor", "Claude Code", "--dir", base, "--json"))
-			if added.Status != "created" || added.Document.Title != "Selected title" || added.Document.Path != filepath.Join(sourceDir, file) || added.Document.ChunkCount != 2 || !added.EnabledDefaultRecall {
+			if added.Status != "created" || added.Document.Title != "Selected title" || added.Document.Path != canonicalFile || added.Document.ChunkCount != 2 || !added.EnabledDefaultRecall {
 				t.Fatalf("CLI add = %+v", added)
 			}
 			shown := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "show", file, "--dir", base, "--json"))
@@ -99,7 +103,11 @@ func TestDocumentRenderIntegrationDirectAndOwner(t *testing.T) {
 			shown := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "show", added.Document.ID, "--dir", base, "--json"))
 			for generation := range 2 {
 				rendered := decodeJSON[render.Result](t, runMemdolt(t, "render", "--dir", base, "--json"))
-				if rendered.Status != "written" || rendered.SourceCommit != added.Commit || rendered.OutputDir != filepath.Join(base, "memory-view") || len(rendered.WrittenFiles) != 2 || len(rendered.BackupFiles) != generation*2 {
+				canonicalOutput, err := filepath.EvalSymlinks(filepath.Join(base, "memory-view"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if rendered.Status != "written" || rendered.SourceCommit != added.Commit || rendered.OutputDir != canonicalOutput || len(rendered.WrittenFiles) != 2 || len(rendered.BackupFiles) != generation*2 {
 					t.Fatalf("render generation %d = %+v", generation, rendered)
 				}
 				project, err := os.ReadFile(filepath.Join(rendered.OutputDir, "PROJECT.md"))
@@ -281,8 +289,12 @@ func TestDocumentCLIProtectsOwnerMetadataAndPreservesRootFreedom(t *testing.T) {
 			}
 			outside := filepath.Join(t.TempDir(), "ordinary.md")
 			writeTestFile(t, outside, "# Ordinary external reference\n")
+			canonicalOutside, err := filepath.EvalSymlinks(outside)
+			if err != nil {
+				t.Fatal(err)
+			}
 			allowed := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "add", outside, "--dir", base, "--json"))
-			if allowed.Status != "created" || allowed.Document.Path != outside {
+			if allowed.Status != "created" || allowed.Document.Path != canonicalOutside {
 				t.Fatal("owner credential protection changed ordinary CLI root freedom")
 			}
 		})
