@@ -1,14 +1,18 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -440,5 +444,268 @@ func TestRepoPullContinuationExpiryCancelAndMintFailureKeepAllChoicesPending(t *
 				t.Fatal("continuation failure partially promoted choices")
 			}
 		})
+	}
+}
+
+type pullUnicodeWireWriter struct {
+	io.WriteCloser
+	replacement []byte
+	changed     atomic.Bool
+}
+
+func (w *pullUnicodeWireWriter) Write(p []byte) (int, error) {
+	if !bytes.Contains(p, []byte("WIRE_UNICODE_MARKER")) {
+		return w.WriteCloser.Write(p)
+	}
+	w.changed.Store(true)
+	_, err := w.WriteCloser.Write(bytes.ReplaceAll(p, []byte("WIRE_UNICODE_MARKER"), w.replacement))
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func TestRepoPullRawMCPUnicodeBeforeSDKDecoding(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, replacement := range []string{"bad\xfftext", `bad\ud800text`, `bad\udc00text`, `\ud83d\ude00\ufffd`, "literal �"} {
+			t.Run(fmt.Sprintf("legacy=%t/%q", legacy, replacement), func(t *testing.T) {
+				base, st, _, _ := mcpPullFixture(t, 1)
+				shown, err := st.Pull(context.Background(), localdolt.TransferOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				row := maps.Clone(shown.Conflicts[0].Rows[0].Ours)
+				marker := "WIRE_UNICODE_MARKER"
+				row["notes"] = &marker
+				choice, err := json.Marshal(localdolt.PullChoice{Conflict: shown.Conflicts[0].ID, Take: "manual", Row: row})
+				if err != nil {
+					t.Fatal(err)
+				}
+				server := New("test")
+				tools := RegisterTools(server, base, st)
+				defer func() {
+					if err := tools.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				options := &mcp.ClientOptions{ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+					return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"choice_0": string(choice)}}, nil
+				}}
+				var wire *pullUnicodeWireWriter
+				client, session := connectWithWireWriter(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, legacy, options, func(writer io.WriteCloser) io.WriteCloser {
+					wire = &pullUnicodeWireWriter{WriteCloser: writer, replacement: []byte(replacement)}
+					return wire
+				})
+				before := mcpPullSnapshot(t, st.Store)
+				response, callErr := client.CallTool(context.Background(), &mcp.CallToolParams{Name: "repo_pull", Arguments: map[string]any{}})
+				if err := client.Close(); err != nil {
+					t.Error(err)
+				}
+				serverErr := session.Wait()
+				if !wire.changed.Load() {
+					t.Fatal("fixture did not send altered raw protocol bytes")
+				}
+				valid := replacement == `\ud83d\ude00\ufffd` || replacement == "literal �"
+				if !valid {
+					if callErr == nil && response != nil && !response.IsError {
+						t.Fatal("malformed wire content was accepted")
+					}
+					if serverErr == nil || mcpPullSnapshot(t, st.Store) != before {
+						t.Fatalf("malformed wire did not fail before promotion: %v", serverErr)
+					}
+				} else {
+					want := "literal �"
+					if replacement != want {
+						want = "😀�"
+					}
+					if callErr != nil || serverErr != nil || response.IsError || testText(t, st.Store, "SELECT notes FROM tasks WHERE id = ?", shown.Conflicts[0].Rows[0].ID) != want {
+						t.Fatalf("valid wire text changed: %v, %v, %+v", callErr, serverErr, response)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRepoPullMCPInnerChoiceUnicodeRefuses(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		base, st, _, _ := mcpPullFixture(t, 1)
+		shown, err := st.Pull(context.Background(), localdolt.TransferOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := maps.Clone(shown.Conflicts[0].Rows[0].Ours)
+		marker := "INNER_UNICODE_MARKER"
+		row["notes"] = &marker
+		choice, err := json.Marshal(localdolt.PullChoice{Conflict: shown.Conflicts[0].ID, Take: "manual", Row: row})
+		if err != nil {
+			t.Fatal(err)
+		}
+		choice = bytes.Replace(choice, []byte(marker), []byte(`\ud800`), 1)
+		server := New("test")
+		tools := RegisterTools(server, base, st)
+		options := &mcp.ClientOptions{ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+			return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"choice_0": string(choice)}}, nil
+		}}
+		client, session := connectWithOptions(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, legacy, options)
+		before := mcpPullSnapshot(t, st.Store)
+		callError(t, client, "repo_pull", map[string]any{}, "surrogate")
+		if mcpPullSnapshot(t, st.Store) != before {
+			t.Fatal("inner choice replacement changed roots")
+		}
+		closeSessions(t, client, session)
+		if err := tools.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRepoPullMCPRefusesManualNoteProvenance(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			base, st, remote, _ := mcpPullFixture(t, 1)
+			for i, writer := range []*localdolt.Store{st.Store, remote} {
+				if _, err := writer.Commit(context.Background(), store.CommitRequest{Author: memory.UserActor.CommitAuthor(), Message: "note provenance conflict fixture", NoText: true, Statements: []store.Statement{{SQL: "INSERT INTO session_notes (id, actor, actor_raw, text, session_id, provider_id, model_id, variant) VALUES ('note', 'agent:opencode', 'cli', ?, 'ses_original', 'original_provider', NULL, '')", Args: []any{[]string{"ours", "theirs"}[i]}}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := remote.Push(context.Background(), localdolt.TransferOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			shown, err := st.Pull(context.Background(), localdolt.TransferOptions{})
+			if err != nil || len(shown.Conflicts) != 2 {
+				t.Fatalf("note fixture = %+v, %v", shown, err)
+			}
+			server := New("test")
+			tools := RegisterTools(server, base, st)
+			defer func() {
+				if err := tools.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			options := &mcp.ClientOptions{ElicitationHandler: func(_ context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+				content := map[string]any{}
+				for i, conflict := range shown.Conflicts {
+					field := fmt.Sprintf("choice_%d", i)
+					encodedSchema, err := json.Marshal(req.Params.RequestedSchema)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(string(encodedSchema), field) {
+						continue
+					}
+					choice := localdolt.PullChoice{Conflict: conflict.ID, Take: "ours"}
+					if conflict.Table == "session_notes" {
+						choice.Take, choice.Row = "manual", maps.Clone(conflict.Rows[0].Ours)
+						forged := "fabricated_model"
+						choice.Row["model_id"] = &forged
+					}
+					encoded, err := json.Marshal(choice)
+					if err != nil {
+						t.Fatal(err)
+					}
+					content[field] = string(encoded)
+				}
+				return &mcp.ElicitResult{Action: "accept", Content: content}, nil
+			}}
+			client, session := connectWithOptions(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, legacy, options)
+			defer closeSessions(t, client, session)
+			before := mcpPullSnapshot(t, st.Store)
+			callError(t, client, "repo_pull", map[string]any{}, "provenance column model_id")
+			if mcpPullSnapshot(t, st.Store) != before {
+				t.Fatal("manual provenance response partially promoted the merge")
+			}
+		})
+	}
+}
+
+func TestRepoPullMCPLiveKeyResultsOmitAbsentRowImages(t *testing.T) {
+	base, st, remote, _ := mcpPullFixture(t, 0)
+	ctx := context.Background()
+	for _, writer := range []*localdolt.Store{st.Store, remote} {
+		if _, err := writer.FactAdd(ctx, localdolt.FactAddOptions{Fact: localdolt.Fact{Key: "collision.key", Value: "retain both rows"}, Source: "user", Actor: memory.UserActor}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := remote.Push(ctx, localdolt.TransferOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	server := New("test")
+	tools := RegisterTools(server, base, st)
+	defer func() {
+		if err := tools.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	client, session := connect(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false)
+	fallback := callAs[repoPullOutput](t, client, "repo_pull", map[string]any{})
+	closeSessions(t, client, session)
+	if fallback.Result.Status != "conflicted" || len(fallback.Result.Conflicts) != 1 || len(fallback.Result.Conflicts[0].Rows) != 2 {
+		t.Fatalf("typed absent-image fallback = %+v", fallback)
+	}
+	conflict := fallback.Result.Conflicts[0]
+	for _, row := range conflict.Rows {
+		if row.Base != nil {
+			t.Fatal("new fact has a fabricated base image")
+		}
+	}
+	choice, err := json.Marshal(localdolt.PullChoice{Conflict: conflict.ID, Take: "winner", Winner: conflict.Rows[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := &mcp.ClientOptions{ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"choice_0": string(choice)}}, nil
+	}}
+	client, session = connectWithOptions(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false, options)
+	defer closeSessions(t, client, session)
+	result := callAs[repoPullOutput](t, client, "repo_pull", map[string]any{})
+	if !result.Result.Changed || testCount(t, st.Store, "SELECT COUNT(*) FROM facts WHERE `key`='collision.key'") != 2 || testCount(t, st.Store, "SELECT COUNT(*) FROM facts WHERE live_key='collision.key'") != 1 {
+		t.Fatalf("typed live-key merge = %+v", result)
+	}
+}
+
+func TestRepoPullMCPAbsentMergedImageRetainsLateResult(t *testing.T) {
+	base, st, _, ids := mcpPullFixture(t, 1)
+	ctx := context.Background()
+	if _, err := st.Commit(ctx, store.CommitRequest{Author: memory.UserActor.CommitAuthor(), Message: "synthetic delete versus edit", NoText: true, Statements: []store.Statement{{SQL: "DELETE FROM tasks WHERE id = ?", Args: []any{ids[0]}}}}); err != nil {
+		t.Fatal(err)
+	}
+	server := New("test")
+	tools := RegisterTools(server, base, pullLateFailureBackend{st})
+	defer func() {
+		if err := tools.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	client, session := connect(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false)
+	fallback := callAs[repoPullOutput](t, client, "repo_pull", map[string]any{})
+	closeSessions(t, client, session)
+	if len(fallback.Result.Conflicts) != 1 || len(fallback.Result.Conflicts[0].Rows) != 1 {
+		t.Fatalf("delete/edit fallback = %+v", fallback)
+	}
+	row := fallback.Result.Conflicts[0].Rows[0]
+	if row.Ours != nil || row.Merged != nil || row.Base == nil || row.Theirs == nil {
+		t.Fatalf("absent images changed: %+v", row)
+	}
+	choice, err := json.Marshal(localdolt.PullChoice{Conflict: fallback.Result.Conflicts[0].ID, Take: "theirs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := &mcp.ClientOptions{ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"choice_0": string(choice)}}, nil
+	}}
+	client, session = connectWithOptions(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false, options)
+	defer closeSessions(t, client, session)
+	response := manualPullCall(t, client, "", nil, map[string]any{})
+	encoded, err := json.Marshal(response.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result repoPullOutput
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !response.IsError || !result.Result.Changed || result.Result.MainCommit != testText(t, st.Store, "SELECT DOLT_HASHOF('main')") || testText(t, st.Store, "SELECT notes FROM tasks WHERE id = ?", ids[0]) != "theirs" {
+		t.Fatalf("absent-image confirmed result lost: %+v", result)
 	}
 }

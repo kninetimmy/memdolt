@@ -1,14 +1,19 @@
 package localdolt
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"maps"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/kninetimmy/memdolt/internal/store"
 )
@@ -357,6 +362,151 @@ func TestPullChoiceJSONRejectsAmbiguity(t *testing.T) {
 		if _, err := DecodePullChoice(strings.NewReader(raw)); err == nil {
 			t.Fatalf("accepted ambiguous choice %s", raw)
 		}
+	}
+}
+
+func TestPullResolutionRejectsMalformedUnicodeBeforePromotion(t *testing.T) {
+	for _, invalid := range []string{"bad\xfftext", `bad\ud800text`, `bad\udc00text`, `bad\ud800\u0041text`} {
+		t.Run(fmt.Sprintf("%q", invalid), func(t *testing.T) {
+			_, b, _ := pullFixture(t, "value")
+			ctx := context.Background()
+			shown, err := b.Pull(ctx, TransferOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := maps.Clone(shown.Conflicts[0].Rows[0].Ours)
+			delete(row, "live_key")
+			marker := "UNICODE_MARKER"
+			row["value"] = &marker
+			resolution := PullResolution{LocalCommit: shown.LocalCommit, RemoteCommit: shown.RemoteCommit, Choices: []PullChoice{{Conflict: shown.Conflicts[0].ID, Take: "manual", Row: row}}}
+			data, err := json.Marshal(resolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = bytes.Replace(data, []byte(marker), []byte(invalid), 1)
+			before := statusSnapshot(t, b)
+			decoded, decodeErr := DecodePullResolution(bytes.NewReader(data))
+			if decodeErr == nil {
+				result, mergeErr := b.Pull(ctx, TransferOptions{Resolution: decoded})
+				t.Errorf("malformed input decoded and reached pull: %+v, %v", result, mergeErr)
+			}
+			if statusSnapshot(t, b) != before {
+				t.Fatal("malformed text changed main or working/staged roots")
+			}
+		})
+	}
+}
+
+func TestPullJSONUnicodePreservesValidTextAndFraming(t *testing.T) {
+	for _, test := range []struct{ encoded, want string }{
+		{`"café 😀 �"`, "café 😀 �"},
+		{`"\ud83d\ude00\ufffd"`, "😀�"},
+		{`"\\ud800"`, `\ud800`},
+		{`"\\\ud83d\ude00"`, `\😀`},
+		{`"\/\n\""`, "/\n\""},
+	} {
+		raw := `{"conflict":"fixture","take":"manual","row":{"value":` + test.encoded + `}}`
+		choice, err := DecodePullChoice(strings.NewReader(raw))
+		if err != nil || choice.Row["value"] == nil || *choice.Row["value"] != test.want {
+			t.Fatalf("decode %s = %+v, %v", raw, choice, err)
+		}
+		data, err := io.ReadAll(JSONUnicodeReader(iotest.OneByteReader(strings.NewReader(raw + "\r\n"))))
+		if err != nil || string(data) != raw+"\r\n" {
+			t.Fatalf("stream changed valid bytes: %q, %v", data, err)
+		}
+	}
+	large := "[\n\"" + strings.Repeat("x", 128*1024) + "😀\", \"\\ud83d\\ude00\"]\r\n{}\n"
+	data, err := io.ReadAll(JSONUnicodeReader(strings.NewReader(large)))
+	if err != nil || string(data) != large {
+		t.Fatalf("large/batch framing changed: %d bytes, %v", len(data), err)
+	}
+	for _, bad := range []string{"\xff", "\xc0\xaf", "\xed\xa0\x80", "\xf0\x9f", `"\ud800"`, `"\udc00"`, `"\ud800\ud800"`, `"\ud800\u"`, `"\ud800\u12"`} {
+		if _, err := DecodePullChoice(strings.NewReader(`{"row":{"value":"` + bad + `"}}`)); err == nil {
+			t.Fatalf("bad choice accepted %q", bad)
+		}
+		if _, err := io.ReadAll(JSONUnicodeReader(iotest.OneByteReader(strings.NewReader(bad)))); err == nil {
+			t.Fatalf("bad stream accepted %q", bad)
+		}
+	}
+}
+
+func TestPullTypedInvalidUTF8RefusesBeforeCapture(t *testing.T) {
+	_, b, _ := pullFixture(t, "value")
+	ctx := context.Background()
+	shown, err := b.Pull(ctx, TransferOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := statusSnapshot(t, b)
+	for _, field := range []string{"value", "column", "author", "remote"} {
+		row := maps.Clone(shown.Conflicts[0].Rows[0].Ours)
+		delete(row, "live_key")
+		opts := TransferOptions{Resolution: &PullResolution{LocalCommit: shown.LocalCommit, RemoteCommit: shown.RemoteCommit, Choices: []PullChoice{{Conflict: shown.Conflicts[0].ID, Take: "manual", Row: row}}}}
+		invalid := "bad\xfftext"
+		switch field {
+		case "value":
+			row["value"] = &invalid
+		case "column":
+			row[invalid] = nil
+		case "author":
+			opts.Author.Name = invalid
+		case "remote":
+			opts.Remote = invalid
+		}
+		result, err := b.transfer(ctx, "pull", opts, transferHooks{afterCapture: func() { t.Fatal("invalid Go string reached transfer capture") }})
+		if err == nil || !strings.Contains(err.Error(), "UTF-8") || result.Changed || statusSnapshot(t, b) != before {
+			t.Fatalf("invalid %s = %+v, %v", field, result, err)
+		}
+	}
+}
+
+func TestPullManualNoteProvenanceIsImmutable(t *testing.T) {
+	for _, take := range []string{"manual", "ours", "theirs"} {
+		t.Run(take, func(t *testing.T) {
+			a, _ := transferFixture(t)
+			statusCommit(t, a, store.Statement{SQL: "INSERT INTO session_notes (id,actor,actor_raw,text,created_at,session_id,agent_id,provider_id,model_id,variant) VALUES ('note','agent:opencode','cli','base','2026-01-01 00:00:00','ses_original',NULL,'provider_original',NULL,'')"})
+			statusPush(t, a)
+			b := transferClone(t, a)
+			statusCommit(t, a, store.Statement{SQL: "UPDATE session_notes SET text='theirs', session_id='ses_remote', model_id='remote_model' WHERE id='note'"})
+			statusCommit(t, b, store.Statement{SQL: "UPDATE session_notes SET text='ours' WHERE id='note'"})
+			statusPush(t, a)
+			ctx := context.Background()
+			shown, err := b.Pull(ctx, TransferOptions{})
+			if err != nil || len(shown.Conflicts) != 1 {
+				t.Fatalf("note conflict = %+v, %v", shown, err)
+			}
+			before := statusSnapshot(t, b)
+			resolution := &PullResolution{LocalCommit: shown.LocalCommit, RemoteCommit: shown.RemoteCommit}
+			for _, column := range []string{"session_id", "agent_id", "provider_id", "model_id", "variant"} {
+				row := maps.Clone(shown.Conflicts[0].Rows[0].Ours)
+				value := "forged_" + column
+				row[column] = &value
+				resolution.Choices = []PullChoice{{Conflict: shown.Conflicts[0].ID, Take: "manual", Row: row}}
+				result, err := b.Pull(ctx, TransferOptions{Resolution: resolution})
+				if err == nil || result.Changed || statusSnapshot(t, b) != before {
+					t.Fatalf("manual %s changed provenance or roots: %+v, %v", column, result, err)
+				}
+			}
+			final := maps.Clone(shown.Conflicts[0].Rows[0].Ours)
+			choice := PullChoice{Conflict: shown.Conflicts[0].ID, Take: take}
+			switch take {
+			case "manual":
+				value := "manual note with unchanged nullable provenance"
+				final["text"] = &value
+				choice.Row = final
+			case "theirs":
+				final = shown.Conflicts[0].Rows[0].Theirs
+			}
+			resolution.Choices = []PullChoice{choice}
+			result, err := b.Pull(ctx, TransferOptions{Resolution: resolution})
+			if err != nil || !result.Changed {
+				t.Fatalf("complete %s choice = %+v, %v", take, result, err)
+			}
+			actual, err := pullRow(ctx, b.db, "session_notes", result.MainCommit, "note")
+			if err != nil || !reflect.DeepEqual(actual, final) {
+				t.Fatalf("chosen nullable note changed: %+v, %v", actual, err)
+			}
+		})
 	}
 }
 

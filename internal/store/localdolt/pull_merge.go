@@ -38,10 +38,10 @@ type PullConflict struct {
 
 type PullConflictRow struct {
 	ID          string             `json:"id"`
-	Base        map[string]*string `json:"base"`
-	Ours        map[string]*string `json:"ours"`
-	Theirs      map[string]*string `json:"theirs"`
-	Merged      map[string]*string `json:"merged"`
+	Base        map[string]*string `json:"base,omitempty"`
+	Ours        map[string]*string `json:"ours,omitempty"`
+	Theirs      map[string]*string `json:"theirs,omitempty"`
+	Merged      map[string]*string `json:"merged,omitempty"`
 	BaseBlame   *PullProvenance    `json:"baseBlame,omitempty"`
 	OursBlame   *PullProvenance    `json:"oursBlame,omitempty"`
 	TheirsBlame *PullProvenance    `json:"theirsBlame,omitempty"`
@@ -682,7 +682,7 @@ func (s *Store) writePullRow(ctx context.Context, tx *sql.Tx, table string, show
 		if anchor == nil {
 			anchor = shown.Theirs
 		}
-		for _, column := range []string{columns[0], "key", "source", "actor", "actor_raw", "created_at", "decided_at", "ingested_at", "doc_id", "ord", "path", "target"} {
+		for _, column := range []string{columns[0], "key", "source", "actor", "actor_raw", "session_id", "agent_id", "provider_id", "model_id", "variant", "created_at", "decided_at", "ingested_at", "doc_id", "ord", "path", "target"} {
 			if _, exists := anchor[column]; exists && !samePullCell(anchor[column], final[column]) {
 				return fmt.Errorf("manual choice cannot change row identity or provenance column %s", column)
 			}

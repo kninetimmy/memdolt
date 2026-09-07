@@ -34,3 +34,11 @@
   `memdolt pull --resolve <file>`. Inspect local/remote main after an unknown
   reply; never replay automatically. Transfer does not flush queued notes,
   promote pending/global proposals or refresh derived/rendered files.
+  Before issue #137's cycle-1 correction, malformed Unicode could be replaced
+  during JSON decoding and manual note choices could rewrite five provenance
+  fields. Both now refuse: retain session/agent/provider/model/variant metadata
+  as well as actor identity. Unchanged nullable fields and choosing an existing
+  complete side remain valid. Absent row images are omitted; nullable cells in
+  present rows remain explicit. The shipped stdio reader checks raw Unicode
+  before SDK conversion; valid U+FFFD is allowed, and text a client already
+  replaced before transmission cannot be reconstructed.

@@ -53,7 +53,7 @@ func TestPullCLIConflictResolutionDirectAndLiveOwner(t *testing.T) {
 			}
 			resolution := localdolt.PullResolution{LocalCommit: shown.LocalCommit, RemoteCommit: shown.RemoteCommit, Choices: []localdolt.PullChoice{{Conflict: shown.Conflicts[0].ID, Take: "manual"}}}
 			resolution.Choices[0].Row = shown.Conflicts[0].Rows[0].Ours
-			manual := "reviewed manual CLI value"
+			manual := "reviewed manual CLI value: café 😀 �"
 			resolution.Choices[0].Row["notes"] = &manual
 			data, err := json.Marshal(resolution)
 			if err != nil {
@@ -69,6 +69,18 @@ func TestPullCLIConflictResolutionDirectAndLiveOwner(t *testing.T) {
 			}
 			if err := runMemdoltErr(t, "pull", "--dir", b, "--resolve", malformed); !strings.Contains(err, "duplicate") {
 				t.Fatal(err)
+			}
+			for _, invalid := range []string{"bad\xfftext", `bad\ud800text`, `bad\udc00text`, `bad\ud800\u0041text`} {
+				bad := bytes.Replace(data, []byte(manual), []byte(invalid), 1)
+				if err := os.WriteFile(malformed, bad, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := runMemdoltErr(t, "pull", "--dir", b, "--resolve", malformed); !strings.Contains(err, "UTF-8") && !strings.Contains(err, "surrogate") {
+					t.Fatal(err)
+				}
+				if runMemdolt(t, "repo", "status", "--local", "--dir", b, "--json") != before {
+					t.Fatal("malformed CLI Unicode changed main or its working set")
+				}
 			}
 			resolved := decodeJSON[localdolt.TransferResult](t, runMemdolt(t, "pull", "--dir", b, "--resolve", file, "--json"))
 			if !resolved.Changed || resolved.LocalCommit != shown.LocalCommit || resolved.RemoteCommit != shown.RemoteCommit {

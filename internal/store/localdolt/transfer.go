@@ -102,6 +102,9 @@ func (s *Store) transfer(ctx context.Context, operation string, opts TransferOpt
 		opts.Remote = "origin"
 	}
 	result = TransferResult{Operation: operation, Remote: opts.Remote, Status: "refused"}
+	if err := opts.ValidateText(); err != nil {
+		return result, err
+	}
 	if operation == "push" && opts.Resolution != nil {
 		return result, errors.New("conflict choices apply only to pull")
 	}

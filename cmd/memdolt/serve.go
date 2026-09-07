@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -21,13 +22,26 @@ func newServeCommand() *cobra.Command {
 		Short: "Serve memdolt tools over MCP stdio",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runServe(cmd.Context(), dir, mcpserver.New(resolveVersion().Version), &mcp.StdioTransport{}, nil)
+			transport := &mcp.IOTransport{
+				Reader: struct {
+					io.Reader
+					io.Closer
+				}{localdolt.JSONUnicodeReader(os.Stdin), os.Stdin},
+				Writer: stdioWriter{os.Stdout},
+			}
+			return runServe(cmd.Context(), dir, mcpserver.New(resolveVersion().Version), transport, nil)
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", ".",
 		"repository root whose store to serve (the store lives in <dir>/.memdolt)")
 	return cmd
 }
+
+// Match StdioTransport's stdout lifetime while guarding its input bytes. The
+// SDK's actual IO connection still owns protocol negotiation and batch rules.
+type stdioWriter struct{ io.Writer }
+
+func (stdioWriter) Close() error { return nil }
 
 // runServe owns shutdown ordering for one stdio session. Protocol serving ends
 // first; pending work can still use the live endpoint and store; then IPC and

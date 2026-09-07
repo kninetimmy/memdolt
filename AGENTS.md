@@ -944,6 +944,63 @@ export GOFLAGS=-tags=gms_pure_go
     Hub deployment, version/two-machine acceptance, optional live-SQL topology,
     global promotion and full M4/parity completion remain separate.
 
+  **Issue #137 review cycle 1.** Before this correction, `decodePullJSON`
+  relied on `encoding/json`, which silently replaced malformed UTF-8 and lone
+  UTF-16 surrogate escapes before validation; exact SQL readback therefore
+  compared against already-altered text. After it, `pull_json.go`'s shared
+  `ValidateJSONUnicode` runs before either decoder entry point can convert
+  strings. `JSONUnicodeReader` supplies the same rune/escape check to streaming
+  consumers, preserving bytes, framing, valid surrogate pairs and literal
+  U+FFFD. JSON grammar still belongs to the existing decoder. The guard adds
+  a fixed bufio buffer and at most one 12-byte encoded pair, with no new message
+  size limit or full-message copy. Existing decoder/file/message buffering is
+  otherwise unchanged. Already-rewritten text from a third-party client cannot
+  be recovered or distinguished from a deliberately supplied replacement rune.
+
+  `TransferOptions.ValidateText` now checks every typed Go string before
+  `localdolt.transfer` executes or `OwnerStore.transfer` marshals it; invalid
+  input refuses before submission, with no retry. `storeipc.operationArgs`
+  validates raw Unicode before unmarshalling every typed operation that uses
+  that helper, not just pull. Other decode paths and other operations' existing
+  pre-marshal checks retain their scope. SQL binding, deny-list checks, owner
+  credentials, exact heads and the #139 commit/failure-residue policies remain.
+
+  `cmd/memdolt/serve.go`'s `newServeCommand` now constructs the SDK IOTransport
+  with that guarded stdin reader and the original stdin closer; `stdioWriter`
+  preserves StdioTransport's no-close stdout behavior. Before the correction,
+  the SDK could replace malformed outer form-response text before tool
+  middleware; afterward the actual stdio byte stream rejects it first. The
+  SDK connection remains intact, including its private negotiation hook,
+  legacy batch rules and cancellation. This wire boundary binds the shipped
+  `newServeCommand` transport and explicit `JSONUnicodeReader` consumers;
+  `mcpserver.New` alone and arbitrary transports injected into `runServe` do
+  not acquire it. `runServe` retains protocol/pending-work/IPC/store shutdown
+  ordering. A wire rejection ends that protocol connection; existing orderly
+  note-shutdown behavior remains separate from a refused pull resolution.
+
+  Before the correction, `writePullRow` froze actor/actor_raw but omitted
+  session_id, agent_id, provider_id, model_id and variant. After it, all five
+  schema-v4 provenance columns are immutable in manual choices too. Unchanged
+  nullable metadata and an explicitly selected complete existing ours/theirs
+  image remain supported. A new regression also exposed absent row images
+  serialized as null while the generated MCP schema required objects. After
+  the correction, `PullConflictRow` follows `RepoRowDiff`: absent base/ours/
+  theirs/merged images are omitted, and every nullable cell in a present image
+  remains explicit. Typed fallback, refusal and confirmed result-plus-error
+  reports now validate for insert/insert and delete/edit conflicts.
+
+  Added checks in existing localdolt/CLI/IPC/MCP pull test files reproduce both
+  reported defects, compare main and working/staged roots on refusal, exercise
+  every note provenance column, preserve valid text and sides, and send actual
+  malformed protocol bytes after the test client's serialization. Existing
+  `mcpserver/server_test.go` connection helpers use guarded real IO pipes;
+  `cmd/memdolt/serve_test.go` covers the original closer, actual stdio modern
+  discovery, genuine legacy initialization, a batch larger than 64 KiB, and
+  the SDK's newer-legacy batch refusal. These fixtures alter no production
+  policy. This record, PRD §11.2 and server instructions retain the exact
+  before/after and scope; no dependency, schema migration or approval bypass
+  is added.
+
 - Configure repository remotes: `memdolt repo remote list` and
   `memdolt repo remote add <name> <absolute-url> [--user <sql-user>]` support
   `--dir` and `--json`. **Before #129, remote setup required native Dolt with

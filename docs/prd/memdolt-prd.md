@@ -1601,6 +1601,46 @@ templates add guidance for already-authorized transfers, retaining approval,
 provenance and queued-note boundaries. Hub deployment/version/two-machine
 acceptance, optional live SQL and global promotion remain separate.
 
+**Issue #137 review-cycle corrections.** Before cycle 1, the shared operator
+decoder's `encoding/json` calls replaced malformed UTF-8 and unpaired UTF-16
+surrogate escapes, so SQL readback could not detect the original loss. After
+it, `ValidateJSONUnicode` rejects those encodings before decoding, while the
+existing decoder still owns JSON syntax/field validation. Its streaming
+`JSONUnicodeReader` uses bounded buffering and passes bytes/framing unchanged;
+valid surrogate pairs, escaped literal backslashes and literal U+FFFD remain
+valid. Typed `TransferOptions` strings are checked before direct execution and
+OwnerStore JSON serialization. `operationArgs` checks raw Unicode for every
+typed owner operation using that helper, before unmarshalling. Other wire paths
+retain their prior scope; no already-rewritten client text can be reconstructed.
+
+Before cycle 1, the SDK could also replace malformed outer MCP response text
+before receiving middleware. `newServeCommand` now gives the SDK IOTransport
+a guarded stdin reader with its original closer and unchanged no-close stdout
+semantics. The SDK connection itself still owns negotiation, batching and
+cancellation; valid message sizes/framing and runServe's shutdown order remain.
+This wire check binds that actual stdio construction and explicit reader users,
+not `mcpserver.New` alone or arbitrary runServe-injected transports. Invalid
+wire text terminates the connection without resolving the pull; the existing
+orderly pending-note shutdown policy remains unchanged.
+
+Before cycle 1, manual notes could replace session_id, agent_id, provider_id,
+model_id and variant despite the provenance promise. `writePullRow` now freezes
+all five alongside actor/actor_raw. Unchanged nullable metadata and selecting
+an actual complete existing side remain supported. The new test also exposed
+null absent images violating the generated MCP object schema. `PullConflictRow`
+now follows `RepoRowDiff`'s omission convention for absent base/ours/theirs/
+merged images; every nullable column of present rows remains represented.
+Fallback, refusal and confirmed-error results stay typed and preserve effects.
+
+The added regressions exercise raw and typed Unicode at decoder/direct/CLI/
+owner/MCP boundaries, each immutable provenance field, valid text and side
+choices, preserved roots, and schema-valid absent-image results. Actual stdio
+tests retain modern discovery, genuine legacy and batch negotiation, large
+valid messages and source-close cancellation. AGENTS.md enumerates every
+touched symbol/file and its retained behavior. Existing confirmation, deny-list,
+no-replay, #139 commit/result/residue and durable-schema policies remain; no
+dependency or migration is added.
+
 **M4 remote configuration subset (issue #129):** before this slice, the #127
 setup remedy above required native Dolt with the owner stopped. After it,
 `memdolt repo remote list` and `memdolt repo remote add <name> <absolute-url>
