@@ -82,6 +82,15 @@ func decodeMemhubExport(data []byte) (InteropBundle, []InteropIdentity, legacyHi
 	if err := decodeInteropJSON(data, &source); err != nil {
 		return bundle, nil, history, err
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return bundle, nil, history, err
+	}
+	for _, name := range []string{"session_notes", "project_state", "project_arch"} {
+		if raw, present := fields[name]; present && strings.TrimSpace(string(raw)) == "null" {
+			return bundle, nil, history, fmt.Errorf("memhub %s must be an array when present; only absence defaults to empty", name)
+		}
+	}
 	if source.Version != 1 || source.ExportedAt == nil || source.ExportedBy == nil || source.Schema == nil || source.Project == nil || source.Project.Root == nil || source.Project.Created == nil {
 		return bundle, nil, history, errors.New("require the complete memhub export v1 header (tagged v0.2.0 plus optional v0.2.2 note metadata)")
 	}
@@ -307,6 +316,18 @@ func memhubString(row memhubRow, key string) string {
 }
 
 func memhubTimestamp(value string) (string, error) {
+	// time.Parse accepts and truncates fractional digits beyond nanoseconds.
+	// Inspect them before parsing so a tiny nonzero fraction cannot disappear.
+	if dot := strings.IndexAny(value, ".,"); dot >= 0 {
+		for _, digit := range value[dot+1:] {
+			if digit < '0' || digit > '9' {
+				break
+			}
+			if digit != '0' {
+				return "", errors.New("timestamp cannot be represented losslessly in UTC DATETIME seconds")
+			}
+		}
+	}
 	for _, format := range []string{time.DateTime, time.RFC3339Nano} {
 		stamp, err := time.Parse(format, value)
 		if err == nil && stamp.Nanosecond() == 0 && stamp.UTC().Year() >= 1000 && stamp.UTC().Year() <= 9999 {
@@ -342,8 +363,10 @@ func validateMemhubPayload(kind string, payload memhubRow) error {
 	if kind == "supersede" && (!slices.Contains([]string{"fact", "decision"}, memhubString(payload, "target_kind")) || memhubString(payload, "old") == memhubString(payload, "new")) {
 		return errors.New("malformed legacy supersede target or identifiers")
 	}
-	if target := memhubString(payload, "target"); target != "" && !slices.Contains([]string{"repo", "global"}, target) {
-		return errors.New("unsupported legacy proposal target")
+	if _, present := payload["target"]; present {
+		if !slices.Contains([]string{"repo", "global"}, memhubString(payload, "target")) {
+			return errors.New("unsupported legacy proposal target")
+		}
 	}
 	return nil
 }

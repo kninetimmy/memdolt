@@ -30,7 +30,8 @@ type ImportMemoryOptions struct {
 
 // IdentityMap describes the complete mapping, not a claim that every pending
 // proposal exists. MainCommit and CreatedProposals are the confirmed effects;
-// RemainingProposals is the untouched suffix. No automatic replay is safe.
+// RemainingProposals lacks confirmed completion; a failed attempt can leave
+// inspected branch residue. No automatic replay is safe.
 type InteropResult struct {
 	Operation          string            `json:"operation"`
 	Status             string            `json:"status"`
@@ -43,11 +44,19 @@ type InteropResult struct {
 	IdentityMap        []InteropIdentity `json:"identity_map,omitempty"`
 	CreatedProposals   []StagedProposal  `json:"created_proposals"`
 	RemainingProposals []string          `json:"remaining_proposals"`
-	ProposalResidue    *StagedProposal   `json:"proposal_residue,omitempty"`
+	ProposalResidue    *InteropResidue   `json:"proposal_residue,omitempty"`
 	RetainedDocuments  int               `json:"retained_documents"`
 	RetainedDocChunks  int               `json:"retained_doc_chunks"`
 	Guidance           string            `json:"guidance"`
 	Error              string            `json:"error,omitempty"`
+}
+
+// A failed staging attempt can retain a branch without a complete proposal.
+// Head is its inspected branch head, not a claim that its payload committed.
+type InteropResidue struct {
+	ID     string `json:"id"`
+	Branch string `json:"branch"`
+	Head   string `json:"head"`
 }
 
 const interopGuidance = "Inspect `memdolt repo status --local`, `memdolt review list`, committed rows and reported hashes before any retry. Keep the original bundle. Imports require a fresh initialized target; no wipe or automatic replay. Documents are excluded; select sources explicitly with `memdolt doc add`. Rebuild with `memdolt index rebuild` and verify `memdolt eval retrieval`."
@@ -57,6 +66,8 @@ type interopHooks struct {
 	beforeMain     func() error
 	afterMain      func() error
 	beforeProposal func(int) error
+	finalizeMain   func(*sql.Tx) error
+	finalizeStage  func(*sql.Tx) error
 }
 
 func (s *Store) ExportMemory(ctx context.Context, opts ExportMemoryOptions) (InteropResult, error) {
@@ -314,15 +325,35 @@ func (s *Store) importMemory(ctx context.Context, opts ImportMemoryOptions, hook
 	author := memory.UserActor.CommitAuthor()
 	text := interopText(bundle)
 	text = append(text, author.Name, author.Email)
+	if opts.FromMemhub {
+		// Pending raw provenance is persisted in the annotation as JSON text.
+		// Scan its decoded strings too; escaping must not hide denied content.
+		var source memhubExport
+		if err := decodeInteropJSON(data, &source); err != nil {
+			return result, err
+		}
+		text = append(text, *source.ExportedBy)
+		for _, pending := range source.Pending {
+			if memhubString(pending, "status") == "pending" {
+				text = append(text, memhubString(pending, "actor_raw"), memhubString(pending, "provenance_json"))
+				var provenance any
+				if err := decodeInteropJSON([]byte(memhubString(pending, "provenance_json")), &provenance); err != nil {
+					return result, err
+				}
+				text = append(text, interopJSONText(provenance)...)
+			}
+		}
+	}
+	if err := s.checkDenyList(text); err != nil {
+		return result, err
+	}
 	stages := make([]stagedWrite, len(bundle.Proposals))
 	for i, proposal := range bundle.Proposals {
 		stages[i], err = interopStagedWrite(proposal, author)
 		if err != nil {
 			return result, err
 		}
-	}
-	if err := s.checkDenyList(text); err != nil {
-		return result, err
+		stages[i].finalizeCommit = hooks.finalizeStage
 	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -355,6 +386,9 @@ func (s *Store) importMemory(ctx context.Context, opts ImportMemoryOptions, hook
 	if len(branches) != 0 {
 		return result, errors.New("import requires no proposal branches, including cleanup residue; inspect source and destination and use a fresh initialized target")
 	}
+	if err := validateInteropFactKeys(ctx, conn, bundle); err != nil {
+		return result, err
+	}
 	for _, table := range []struct {
 		name string
 		dest *int
@@ -368,6 +402,10 @@ func (s *Store) importMemory(ctx context.Context, opts ImportMemoryOptions, hook
 			return result, err
 		}
 	}
+	current, err := branchHead(ctx, conn, MainBranch)
+	if err != nil || current != main {
+		return result, errors.Join(errors.New("main changed while preparing the import; inspect and use a fresh initialized target"), err)
+	}
 	var statements []store.Statement
 	for _, table := range interopTables {
 		for _, row := range bundle.Tables[table] {
@@ -376,15 +414,23 @@ func (s *Store) importMemory(ctx context.Context, opts ImportMemoryOptions, hook
 	}
 	result.SourceCommit, result.Counts = bundle.MainCommit, interopCounts(bundle)
 	if len(statements) != 0 {
-		commit, commitErr := s.commitConn(ctx, conn, store.CommitRequest{
+		req := store.CommitRequest{
 			Statements: statements, Text: text, RequireClean: true, Author: author,
 			Message: "import memory " + result.SourceDigest,
-		})
+		}
+		finalize := hooks.finalizeMain
+		if finalize == nil {
+			finalize = (*sql.Tx).Commit
+		}
+		commit, commitErr := s.commitConnFinalize(ctx, conn, req, finalize)
 		if commit.Hash != "" {
 			result.MainCommit, result.Status, result.IdentityMap = commit.Hash, "partial", identities
 			result.RemainingProposals = interopProposalIDs(bundle)
 		}
 		if commitErr != nil {
+			if commit.Hash == "" {
+				result.Status, result.IdentityMap, result.RemainingProposals = "unknown", identities, interopProposalIDs(bundle)
+			}
 			return result, fmt.Errorf("import commit failed or finalization incomplete; inspect confirmed main and proposal prefix before retry: %w", commitErr)
 		}
 	}
@@ -406,8 +452,16 @@ func (s *Store) importMemory(ctx context.Context, opts ImportMemoryOptions, hook
 			result.RemainingProposals = slices.Clone(result.RemainingProposals[1:])
 		}
 		if stageErr != nil {
-			if created.ID != "" {
-				result.ProposalResidue = &created
+			branch := ProposalBranch(staged.id)
+			head, inspectErr := branchHead(context.WithoutCancel(ctx), conn, branch)
+			if inspectErr == nil {
+				result.ProposalResidue = &InteropResidue{ID: staged.id, Branch: branch, Head: head}
+				if created.Commit == "" {
+					result.Status = "unknown"
+				}
+			} else if !errors.Is(inspectErr, sql.ErrNoRows) {
+				result.Status = "unknown"
+				stageErr = errors.Join(stageErr, fmt.Errorf("inspect failed imported proposal residue: %w", inspectErr))
 			}
 			return result, fmt.Errorf("import stopped at proposal %d; main and the reported created prefix remain; inspect before retry: %w", i+1, stageErr)
 		}
@@ -418,7 +472,7 @@ func (s *Store) importMemory(ctx context.Context, opts ImportMemoryOptions, hook
 
 func interopStagedWrite(p InteropProposal, author store.Actor) (stagedWrite, error) {
 	actor := store.Actor{Name: interopValue(p.Metadata, "actor"), Email: "import-source@memdolt.invalid"}
-	w := stagedWrite{kind: ProposalKind(interopValue(p.Metadata, "kind")), id: p.ID, commitAuthor: &author,
+	w := stagedWrite{kind: ProposalKind(interopValue(p.Metadata, "kind")), id: p.ID, commitAuthor: &author, imported: &p,
 		proposal: Proposal{Rationale: interopValue(p.Metadata, "rationale"), Actor: actor, Target: TargetRepo},
 		message:  "import pending proposal " + p.ID}
 	if err := w.proposal.validate(); err != nil {
@@ -461,6 +515,28 @@ func interopStagedWrite(p InteropProposal, author store.Actor) (stagedWrite, err
 		}
 	}
 	return w, nil
+}
+
+// Compare again on the just-cut branch, as fact-conflict staging does. This
+// catches a foreign main change before branch cut without overwriting its row
+// in an imported proposal. The final interval is not a foreign-writer CAS.
+func validateInteropStage(ctx context.Context, conn *sql.Conn, proposal InteropProposal) error {
+	var head string
+	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&head); err != nil {
+		return err
+	}
+	view := map[string]map[string]InteropRow{}
+	for _, table := range []string{"facts", "decisions"} {
+		rows, err := readInteropRows(ctx, conn, head, table)
+		if err != nil {
+			return err
+		}
+		view[table] = map[string]InteropRow{}
+		for _, row := range rows {
+			view[table][interopValue(row, "id")] = row
+		}
+	}
+	return validateInteropProposal(proposal, view)
 }
 
 func interopInsert(table string, row InteropRow) store.Statement {
@@ -545,4 +621,67 @@ func interopText(bundle InteropBundle) []string {
 		}
 	}
 	return text
+}
+
+func interopJSONText(value any) []string {
+	var text []string
+	switch value := value.(type) {
+	case string:
+		text = append(text, value)
+	case []any:
+		for _, item := range value {
+			text = append(text, interopJSONText(item)...)
+		}
+	case map[string]any:
+		for key, item := range value {
+			text = append(text, key)
+			text = append(text, interopJSONText(item)...)
+		}
+	}
+	return text
+}
+
+// Exact Go strings alone do not establish uniqueness under a destination's
+// SQL collation. Ask that collation about all main/proposal live-key sets with
+// bound values, before any INSERT. IDs and enum keys have canonical ASCII forms.
+func validateInteropFactKeys(ctx context.Context, conn *sql.Conn, bundle InteropBundle) error {
+	var collation string
+	if err := conn.QueryRowContext(ctx, "SELECT collation_name FROM information_schema.columns WHERE table_schema = ? AND table_name = 'facts' AND column_name = 'live_key'", DatabaseName).Scan(&collation); err != nil {
+		return fmt.Errorf("read fact-key collation before import: %w", err)
+	}
+	main := map[string]InteropRow{}
+	for _, row := range bundle.Tables["facts"] {
+		main[interopValue(row, "id")] = row
+	}
+	for i := -1; i < len(bundle.Proposals); i++ {
+		view := main
+		if i >= 0 {
+			view = maps.Clone(main)
+			for _, change := range bundle.Proposals[i].Changes {
+				if change.Table == "facts" {
+					view[interopValue(change.To, "id")] = change.To
+				}
+			}
+		}
+		var terms []string
+		var args []any
+		for _, row := range view {
+			if row["superseded_by"] == nil && row["key"] != nil {
+				terms = append(terms, "SELECT CAST(? AS CHAR) COLLATE "+quoteIdentifier(collation)+" AS fact_key")
+				args = append(args, *row["key"])
+			}
+		}
+		if len(terms) < 2 {
+			continue
+		}
+		var count int
+		err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM ("+strings.Join(terms, " UNION ALL ")+") AS candidate_keys GROUP BY fact_key HAVING COUNT(*) > 1 LIMIT 1", args...).Scan(&count)
+		if err == nil {
+			return errors.New("ambiguous live fact keys under the destination collation; reconcile source keys before import")
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("validate imported fact-key uniqueness: %w", err)
+		}
+	}
+	return nil
 }

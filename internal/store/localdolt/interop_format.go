@@ -193,6 +193,7 @@ func validateInteropMemory(b InteropBundle) error {
 		return err
 	}
 	seen := map[string]bool{}
+	inserted := map[string]bool{}
 	for i, proposal := range b.Proposals {
 		if seen[proposal.ID] || indexed["proposals"][proposal.ID] != nil {
 			return fmt.Errorf("duplicate/committed pending proposal identity at position %d", i+1)
@@ -200,6 +201,15 @@ func validateInteropMemory(b InteropBundle) error {
 		seen[proposal.ID] = true
 		if err := validateInteropProposal(proposal, indexed); err != nil {
 			return fmt.Errorf("pending proposal %d: %w", i+1, err)
+		}
+		for _, change := range proposal.Changes {
+			if change.From == nil {
+				id := change.Table + "/" + interopValue(change.To, "id")
+				if inserted[id] {
+					return errors.New("duplicate newly inserted identity across pending proposals")
+				}
+				inserted[id] = true
+			}
 		}
 	}
 	return nil
@@ -227,6 +237,9 @@ func validateInteropRow(table string, row InteropRow) error {
 		}
 		if value == nil {
 			continue
+		}
+		if !utf8.ValidString(*value) {
+			return fmt.Errorf("%s.%s must be valid UTF-8; refuse lossy JSON conversion", table, name)
 		}
 		kind = strings.TrimSuffix(kind, "!")
 		switch {
@@ -278,6 +291,8 @@ func validateInteropReferences(indexed map[string]map[string]InteropRow) error {
 				live[key] = true
 			}
 			seen := map[string]bool{id: true}
+			// ponytail: walk each memory-sized chain; share visitation state if
+			// unusually long chains make this quadratic validation measurable.
 			for next := row["superseded_by"]; next != nil; next = row["superseded_by"] {
 				if seen[*next] {
 					return fmt.Errorf("cyclic %s supersession", table)
@@ -306,6 +321,9 @@ func validateInteropProposal(p InteropProposal, main map[string]map[string]Inter
 	if strings.TrimSpace(interopValue(p.Metadata, "rationale")) == "" || p.Metadata["created_at"] == nil {
 		return errors.New("proposal requires its original rationale and creation time")
 	}
+	if err := (store.Actor{Name: interopValue(p.Metadata, "actor"), Email: "import-source@memdolt.invalid"}).Validate(); err != nil {
+		return errors.New("proposal actor cannot be represented by ordinary staging")
+	}
 	kind := ProposalKind(interopValue(p.Metadata, "kind"))
 	if len(p.Changes) == 0 || len(p.Changes) > 2 {
 		return errors.New("unsupported proposal payload: require an ordinary fact, decision, overwrite or fact supersede")
@@ -325,6 +343,13 @@ func validateInteropProposal(p InteropProposal, main map[string]map[string]Inter
 		}
 		if err := validateInteropRow(table, change.To); err != nil {
 			return err
+		}
+		if table == "facts" {
+			if err := (Fact{Key: interopValue(change.To, "key"), Value: interopValue(change.To, "value")}).validate(); err != nil {
+				return errors.New("proposal payload must contain an ordinary nonempty single-line fact key and nonempty value")
+			}
+		} else if err := (Decision{Title: interopValue(change.To, "title"), Rationale: interopValue(change.To, "rationale")}).validate(); err != nil {
+			return errors.New("proposal payload must contain an ordinary nonempty single-line decision title and rationale")
 		}
 		id := interopValue(change.To, "id")
 		if seen[id] {
@@ -346,6 +371,9 @@ func validateInteropProposal(p InteropProposal, main map[string]map[string]Inter
 			}
 			if interopValue(change.From, "id") != id || !sameInteropRow(change.From, main[table][id]) {
 				return errors.New("proposal before-image differs from committed main; reconcile the source proposal before exporting")
+			}
+			if sameInteropRow(change.From, change.To) {
+				return errors.New("proposal modification must actually change the row")
 			}
 			if table != "facts" || change.From["superseded_by"] != nil {
 				return errors.New("only an ordinary live-fact overwrite or supersede is supported")

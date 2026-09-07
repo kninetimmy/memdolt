@@ -104,6 +104,9 @@ func emitInterop(cmd *cobra.Command, result localdolt.InteropResult, err error) 
 		result.Error = err.Error()
 	}
 	lines := []string{result.Operation + ": " + result.Status, "bundle: " + result.File}
+	if result.SourceDigest != "" {
+		lines = append(lines, "source digest: "+result.SourceDigest)
+	}
 	if result.MainCommit != "" {
 		lines = append(lines, "confirmed import commit: "+result.MainCommit)
 	}
@@ -115,6 +118,9 @@ func emitInterop(cmd *cobra.Command, result localdolt.InteropResult, err error) 
 	}
 	if len(result.RemainingProposals) != 0 {
 		lines = append(lines, fmt.Sprintf("remaining proposal IDs: %v", result.RemainingProposals))
+	}
+	if result.ProposalResidue != nil {
+		lines = append(lines, "inspect failed proposal residue: "+result.ProposalResidue.Branch+" head "+result.ProposalResidue.Head)
 	}
 	lines = append(lines, result.Guidance)
 	if err != nil {

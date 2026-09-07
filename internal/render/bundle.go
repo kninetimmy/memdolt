@@ -9,12 +9,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 )
 
 // BundlePath applies the renderer's rooted local-file discipline to an
 // explicitly selected interop file. No bundle may live in repository plumbing.
 // Unlike renderer configuration, relative CLI operands are resolved by the CLI.
 func BundlePath(path string) error {
+	if !utf8.ValidString(path) || strings.ContainsRune(path, 0) {
+		return errors.New("bundle path must be valid UTF-8 without NUL")
+	}
 	if !filepath.IsAbs(path) || strings.HasPrefix(filepath.VolumeName(path), `\\`) {
 		return errors.New("bundle path must be an absolute local filesystem path")
 	}
