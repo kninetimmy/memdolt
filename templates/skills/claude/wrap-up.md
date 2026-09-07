@@ -1,6 +1,6 @@
 ---
 name: wrap-up
-description: Wrap up a Claude Code memdolt session through the current M3 tools.
+description: Wrap up a Claude Code memdolt session with the implemented memory tools.
 framework: memdolt
 ---
 
@@ -20,7 +20,13 @@ framework: memdolt
 5. Record the approved summary with `log_session_note`.
    Report it as queued: its actor's batch commits at the five-minute deadline
    or orderly server shutdown; an abrupt exit can lose an uncommitted note.
+6. Call `render` (CLI equivalent: `memdolt render --json`) to refresh the local
+   generated files from committed main. Report the source commit, written
+   outputs, and recoverable backups. The queued summary above is excluded
+   until its existing flush point; rendering does not flush it or promote claims.
 
-Stop on the first tool failure. M3 has no wrap-up render, sync, transcript,
-metrics, visualization, document, global, locate, or repository-operation step;
-do not discover or emulate those deferred surfaces.
+Stop on the first tool failure; on a partial render or unknown reply, inspect
+the reported outputs/backups before retrying. Before issue #133, M3 had no
+wrap-up render, sync, transcript, metrics, visualization, document, global,
+locate, or repository-operation step. After it, step 6 adds only render;
+the other operations remain outside this template.

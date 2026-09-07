@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
@@ -39,6 +40,7 @@ const (
 	opPull             = "pull"
 	opListRemotes      = "list_remotes"
 	opAddRemote        = "add_remote"
+	opRender           = "render"
 	opRepoStatus       = "repo_status"
 )
 
@@ -67,6 +69,7 @@ type Backend interface {
 	Pull(context.Context, localdolt.TransferOptions) (localdolt.TransferResult, error)
 	ListRemotes(context.Context) ([]localdolt.Remote, error)
 	AddRemote(context.Context, localdolt.Remote) (localdolt.Remote, error)
+	Render(context.Context) (render.Result, error)
 	RepoStatus(context.Context, localdolt.RepoStatusOptions) (localdolt.RepoStatusReport, error)
 }
 
@@ -186,6 +189,15 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var result any
 	var err error
 	switch req.Operation {
+	case opRender:
+		// A complete render executes once in the owner. Its typed result also
+		// preserves backups and partial replacements when preparation/finalization
+		// fails; no destination or query is accepted from the IPC client.
+		rendered, renderErr := h.store.Render(ctx)
+		if renderErr != nil {
+			rendered.Error = renderErr.Error()
+		}
+		result = rendered
 	case opRepoStatus:
 		args, decodeErr := operationArgs[localdolt.RepoStatusOptions](req.Args)
 		if decodeErr != nil {
