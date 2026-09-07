@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/dolthub/vitess/go/vt/sqlparser"
 
@@ -349,38 +348,11 @@ func previewRepoMerge(ctx context.Context, conn *sql.Conn, report *RepoStatusRep
 	if err != nil || !maps.Equal(localSchema, remoteSchema) || !maps.Equal(localSchema, baseSchema) {
 		return errors.Join(errors.New("mergeability of schema changes is unassessed; inspect and reconcile the committed schemas with Dolt"), err)
 	}
-	var beforeWorking, beforeStaged string
-	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF_DB('WORKING'), DOLT_HASHOF_DB('STAGED')").Scan(&beforeWorking, &beforeStaged); err != nil {
-		return err
-	}
-	// Own rollback even after cancellation; database/sql's automatic rollback
-	// otherwise cannot report the driver's rollback error to this caller.
-	tx, err := conn.BeginTx(context.WithoutCancel(ctx), nil)
+	tx, finish, err := repoMergeTransaction(ctx, conn, report.MainCommit, hooks.rollback)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		rollback := tx.Rollback
-		if hooks.rollback != nil {
-			rollback = func() error { return hooks.rollback(tx) }
-		}
-		if rollbackErr := rollback(); rollbackErr != nil {
-			err = errors.Join(err, fmt.Errorf("roll back repository merge preview; inspect main before further work: %w", rollbackErr))
-		}
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-		defer cancel()
-		var afterWorking, afterStaged string
-		rootErr := conn.QueryRowContext(cleanupCtx, "SELECT DOLT_HASHOF_DB('WORKING'), DOLT_HASHOF_DB('STAGED')").Scan(&afterWorking, &afterStaged)
-		head, headErr := branchHead(cleanupCtx, conn, MainBranch)
-		cleanErr := requireTransferClean(cleanupCtx, conn)
-		if rootErr != nil || headErr != nil || cleanErr != nil || head != report.MainCommit || beforeWorking != afterWorking || beforeStaged != afterStaged {
-			err = errors.Join(err, errors.New("repository preview restoration could not be verified; stop and inspect main and its working/staged roots with Dolt"), rootErr, headErr, cleanErr)
-		}
-	}()
-	head, err := branchHead(ctx, tx, MainBranch)
-	if err != nil || head != report.MainCommit {
-		return errors.Join(errors.New("main changed after status capture; inspect it before retrying"), err)
-	}
+	defer func() { err = errors.Join(err, finish(false)) }()
 	var hash, message sql.NullString
 	var fastForward, conflicts sql.NullInt64
 	if err := tx.QueryRowContext(ctx, "CALL DOLT_MERGE('--no-ff', '--no-commit', ?)", report.RemoteCommit).Scan(&hash, &fastForward, &conflicts, &message); err != nil {

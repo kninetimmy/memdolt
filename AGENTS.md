@@ -182,6 +182,8 @@ The complete structural blast radius is:
   `mcpserver/tools.go` delegates its two readers to them with its existing
   defaults. All nineteen registrations, schemas, attribution and staged writes
   remain; no human mutation or supersede-as-accept tool is added.
+  After integrating #137, those nineteen tools remain alongside `repo_pull`
+  and `repo_push` (twenty-one total); the human-only mutation boundary remains.
 - `storeipc/operation.go` extends `Backend` and its explicit allow-list with
   six typed human operations. New `storeipc/human_memory.go` owns their typed
   arguments and OwnerStore methods, rejects invalid UTF-8 before JSON can
@@ -893,6 +895,190 @@ export GOFLAGS=-tags=gms_pure_go
     cross-version or full-M4 acceptance. This record and PRD §§5.2/11.2/16
     preserve the phasing. No dependency, migration, MCP tool, remote editor,
     conflict dialog, topology backend or hub deployment changes.
+  **Divergence delivery (issue #137).** Before this delivery, the #127 record
+  above refused all divergence and made no merge commit, while #131 only
+  previewed it. After #137, `pull` retains push, fast-forward and contained
+  history behavior and auto-merges compatible independent committed changes
+  in one attributed commit whose ordered parents are the captured local and
+  remote hashes. Dirty/staged/active-merge states still refuse. No migration,
+  competing owner, proposal/tag publication, or source/artifact rewrite is added.
+
+  `memdolt pull --json` returns a visible `conflicted` report and nonzero exit
+  for actual conflicts, with complete base/ours/theirs/merged nullable rows,
+  native row blame and reachable commit author/email/date/message. Main and
+  both roots are restored before output or human interaction. Use
+  `memdolt pull [remote] --resolve <file>` (or `-` for stdin) to submit
+  `localCommit`, `remoteCommit`, and exactly one `choices` entry per conflict.
+  A data choice names `conflict` and `take=ours|theirs|manual`; manual supplies
+  every writable column in `row`, including nulls, omitting generated
+  `facts.live_key`. A live-key choice uses `take=winner|manual`, a displayed
+  `winner` ID, and the full winner row for manual values. Losers receive
+  supersession links and remain present. Identity/provenance changes, duplicate
+  JSON keys, unknown fields, incomplete choices, coercion/truncation and stale
+  local or fetched remote heads refuse before promotion. A done task requires
+  an explicit `reopen=true` choice to become open/blocked; choosing deletion
+  cannot erase a completed task. No timestamp heuristic chooses a final row.
+
+  Supported data conflicts are same-primary-key rows in facts, decisions,
+  tasks, notes, commands, narratives, documents, chunks and proposal metadata.
+  Chosen document deletion refuses if it would cascade into other chunks.
+  Actual distinct-row uniqueness repair is restricted to `facts.live_key`:
+  select an existing durable winner and retain every loser by supersession.
+  The shared verifier clears attributed already-satisfied UNIQUE records on
+  maintained tables without changing their rows. Unresolved document-path or
+  chunk uniqueness, foreign-key/unknown constraint records, metadata/schema
+  conflicts and unattributed records require Dolt inspection or compatible
+  upgrade/repair. Every final merge requires empty data and constraint surfaces,
+  all maintained UNIQUE/FK checks, and acyclic, non-dangling fact/decision
+  supersession links. Unknown tables/columns or differing committed DDL refuse.
+
+  `repo_pull` and `repo_push` are real typed tools. Compatible pull merges use
+  the requesting MCP agent; human-confirmed conflict merges use `user`. MCP
+  cannot supply an author, password, SQL, or direct resolution object. Modern
+  clients receive one conflict form per round, with a single-use continuation
+  after nine; genuine legacy clients receive all remaining conflicts in one
+  form. No list is truncated and no prefix is promoted. Each opaque state has
+  a two-minute expiry and is stored only as a hashed lookup in process-local
+  SQLite, bound to repository/client/action, selected remote/user, exact heads,
+  conflict snapshot, position and accumulated choices. Every state is consumed
+  before interpreting its response; missing/forged/replayed/expired/mismatched
+  states, cancellation, decline, restart, or pre-promotion storage/response
+  failure cannot merge. Unsupported form capabilities or missing client identity
+  return the CLI remedy. The final complete operation re-fetches and revalidates
+  both heads; changing local main during review requires a fresh review.
+
+  The pinned `DOLT_COMMIT` is the promotion point: it can advance main before
+  `database/sql.Tx.Commit`. Every choice, deny-list and invariant check runs
+  before that call. A returned commit hash remains reported if later SQL
+  finalization, connection/output/bookkeeping or transport work fails; a lost
+  reply reports an unknown outcome and never replays. No durable transaction
+  spans human interaction. Capturing, preview rollback and final mutation use
+  the existing owning Store `proposalMu`; foreign Dolt sessions remain outside
+  that boundary. Fetch still retains only its objects and selected tracking
+  ref, and never follows tags or mutates the source. Passwords remain solely
+  in the executing owner's environment. Existing proposal contradiction/review,
+  agent provenance, note flush, global exclusion and no-delete expected-commit
+  acceptance policies remain intact.
+
+  The complete structural blast radius for #137 is:
+
+  - `localdolt/transfer.go` extends `TransferOptions` with attributed author and
+    complete optional resolution, and `TransferResult` with base, conflicts,
+    verified cleared records and remedies. `Push` retains its main-only scan
+    and fast-forward publication; `Pull` adds divergence handling and exact-head
+    resolution checks. `transferHooks` supplies deterministic verification seams.
+    Existing preflight, remote credential selection/redaction, file-source
+    preservation, no replay and result-plus-error boundaries still hold.
+  - New `localdolt/pull_merge.go` owns `pullMerge`, the conflict/report/repair
+    helpers and final application-invariant checks. These stricter merge rules
+    bind divergent pull alone, not fast-forward pull, every Store write or
+    proposal accept. Its `repoMergeTransaction` is shared with
+    `repo_status.go`'s existing `previewRepoMerge`: status retains its read-only
+    assessment, rollback verification and original constraint scope; it does
+    not gain resolution or promotion. Native revision-qualified blame views
+    change database context internally, so pull reads them after rollback and
+    recreates the captured merge for final resolution. Fixed schema allow-lists,
+    validated 32-character revision literals and bound values apply to all new
+    pull queries. Existing `review.go` verification/merge helpers are reused;
+    their proposal allow-list, contradiction and cleanup policies are unchanged.
+  - New `localdolt/pull_json.go` shares strict operator JSON decoding between
+    CLI files/stdin and MCP form strings. Those decoder restrictions apply to
+    these operator inputs alone, not every JSON or arbitrary SQL caller.
+  - `cmd/memdolt/transfer.go` adds pull-only `--resolve`, rooted regular-file
+    reading, detailed help and conflict output. Push flags and direct/verified
+    owner selection remain. Pull now prints structured confirmed effects on a
+    later failure; ordinary refusals retain visible diagnostics. Root command
+    registration remains unchanged. Existing `storeipc/operation.go` and
+    `owner_store.go` carry the expanded typed options/results unchanged through
+    their existing one-submit application operation and error envelope; no new
+    raw operation, password field or competing engine is introduced.
+  - `mcpserver/tools.go` adds two registrations to the nineteen existing tools.
+    New `mcpserver/transfer.go` owns typed handlers, human forms, continuation
+    and structured error preservation. The count of twenty-one binds
+    `RegisterTools`, not arbitrary SDK servers. `elicitation.go` adds one
+    pending-pull payload; `elicitation_state.go` stores it in the existing
+    ephemeral SQLite row. Prior fact/review states, hashed single-use tokens,
+    expiry, per-client attribution, note batching and shutdown still hold.
+    No durable schema or dependency changes.
+  - New `localdolt/pull_merge_test.go`, `storeipc/pull_merge_test.go`,
+    `mcpserver/transfer_test.go` and `cmd/memdolt/pull_merge_test.go` exercise
+    synthetic direct/owner/CLI/MCP merges, history/provenance, all supported
+    policies and refusals, manual input, multi-round/legacy/capability paths,
+    state failures, interleavings and lost/late results. Existing localdolt
+    transfer/status and storeipc transfer tests replace only their obsolete
+    independent-divergence refusal expectations. MCP `tools_test.go`, CLI
+    `serve_test.go` and `host_templates_test.go` retain existing assertions and
+    recognize the implemented transfer tools. Tests change no production policy.
+    After #139 integration, `TestPullCLIIntegratesHumanFactAndDecisionWrites`
+    creates both conflict surfaces through the real human CLI commands,
+    resolves the complete pull directly and through a live owner, then reopens
+    shared fact/decision readers and exercises human verification/summary/
+    supersession. The generic confirmed-commit and failed-stage residue
+    changes from #139 remain unchanged beside pull's own promotion boundary.
+  - `mcpserver/instructions.md`, all three wrap-up templates, this AGENTS record
+    and PRD §§5.2/6.3/11.1/11.2/16 document the same behavior and limits. The
+    templates add guidance for transfers already requested by the operator;
+    existing per-item approval and queued-note/provenance rules still hold.
+    Hub deployment, version/two-machine acceptance, optional live-SQL topology,
+    global promotion and full M4/parity completion remain separate.
+
+  **Issue #137 review cycle 1.** Before this correction, `decodePullJSON`
+  relied on `encoding/json`, which silently replaced malformed UTF-8 and lone
+  UTF-16 surrogate escapes before validation; exact SQL readback therefore
+  compared against already-altered text. After it, `pull_json.go`'s shared
+  `ValidateJSONUnicode` runs before either decoder entry point can convert
+  strings. `JSONUnicodeReader` supplies the same rune/escape check to streaming
+  consumers, preserving bytes, framing, valid surrogate pairs and literal
+  U+FFFD. JSON grammar still belongs to the existing decoder. The guard adds
+  a fixed bufio buffer and at most one 12-byte encoded pair, with no new message
+  size limit or full-message copy. Existing decoder/file/message buffering is
+  otherwise unchanged. Already-rewritten text from a third-party client cannot
+  be recovered or distinguished from a deliberately supplied replacement rune.
+
+  `TransferOptions.ValidateText` now checks every typed Go string before
+  `localdolt.transfer` executes or `OwnerStore.transfer` marshals it; invalid
+  input refuses before submission, with no retry. `storeipc.operationArgs`
+  validates raw Unicode before unmarshalling every typed operation that uses
+  that helper, not just pull. Other decode paths and other operations' existing
+  pre-marshal checks retain their scope. SQL binding, deny-list checks, owner
+  credentials, exact heads and the #139 commit/failure-residue policies remain.
+
+  `cmd/memdolt/serve.go`'s `newServeCommand` now constructs the SDK IOTransport
+  with that guarded stdin reader and the original stdin closer; `stdioWriter`
+  preserves StdioTransport's no-close stdout behavior. Before the correction,
+  the SDK could replace malformed outer form-response text before tool
+  middleware; afterward the actual stdio byte stream rejects it first. The
+  SDK connection remains intact, including its private negotiation hook,
+  legacy batch rules and cancellation. This wire boundary binds the shipped
+  `newServeCommand` transport and explicit `JSONUnicodeReader` consumers;
+  `mcpserver.New` alone and arbitrary transports injected into `runServe` do
+  not acquire it. `runServe` retains protocol/pending-work/IPC/store shutdown
+  ordering. A wire rejection ends that protocol connection; existing orderly
+  note-shutdown behavior remains separate from a refused pull resolution.
+
+  Before the correction, `writePullRow` froze actor/actor_raw but omitted
+  session_id, agent_id, provider_id, model_id and variant. After it, all five
+  schema-v4 provenance columns are immutable in manual choices too. Unchanged
+  nullable metadata and an explicitly selected complete existing ours/theirs
+  image remain supported. A new regression also exposed absent row images
+  serialized as null while the generated MCP schema required objects. After
+  the correction, `PullConflictRow` follows `RepoRowDiff`: absent base/ours/
+  theirs/merged images are omitted, and every nullable cell in a present image
+  remains explicit. Typed fallback, refusal and confirmed result-plus-error
+  reports now validate for insert/insert and delete/edit conflicts.
+
+  Added checks in existing localdolt/CLI/IPC/MCP pull test files reproduce both
+  reported defects, compare main and working/staged roots on refusal, exercise
+  every note provenance column, preserve valid text and sides, and send actual
+  malformed protocol bytes after the test client's serialization. Existing
+  `mcpserver/server_test.go` connection helpers use guarded real IO pipes;
+  `cmd/memdolt/serve_test.go` covers the original closer, actual stdio modern
+  discovery, genuine legacy initialization, a batch larger than 64 KiB, and
+  the SDK's newer-legacy batch refusal. These fixtures alter no production
+  policy. This record, PRD §11.2 and server instructions retain the exact
+  before/after and scope; no dependency, schema migration or approval bypass
+  is added.
+
 - Configure repository remotes: `memdolt repo remote list` and
   `memdolt repo remote add <name> <absolute-url> [--user <sql-user>]` support
   `--dir` and `--json`. **Before #129, remote setup required native Dolt with

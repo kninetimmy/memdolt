@@ -49,6 +49,7 @@ type pendingElicitation struct {
 	Accepted        []localdolt.AcceptResult
 	Skipped         []string
 	Fact            *pendingFactConflict
+	Pull            *pendingPull
 	NextCursor      string
 }
 
