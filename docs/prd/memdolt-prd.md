@@ -227,6 +227,16 @@ restriction binds `localdolt.Clone`; `init` keeps its earlier stop-owner
 refusal and migration behavior, ordinary commands retain owner routing, and
 `doctor` and `version` retain their prior behavior.
 
+Before issue #127, that bootstrap was the only shipped transfer. After it,
+`push` and fast-forward-only `pull` operate on initialized stores through the
+same direct/authenticated-owner choice as ordinary commands. Each sends one
+complete typed operation; the owner runs the network work with its own
+environment and cancellation context. Probe/authentication failures never
+fall back to an embedded open, and a lost transfer response is not resubmitted.
+The unknown-outcome remedy is inspection of local and remote main before a
+retry. Confirmed promotion plus a later error survives the application/IPC
+boundary. Clone and init retain the exclusive bootstrap behavior above.
+
 This is more machinery than memhub needed (SQLite WAL handles multi-process natively). It is the honest price of Dolt embedded, paid once, in one module.
 
 ### 5.3 On-disk layout
@@ -399,9 +409,11 @@ remain the only bypasses. The structural blast radius is explicit:
   old `main`; concurrent accepts had previously been left to Dolt transaction
   timing. After issue #106, `proposalMu` retains that accept ordering and also
   serializes memdolt's proposal staging, rejection, and expiry mutations on
-  that Store. This boundary binds those four localdolt mutation paths alone,
-  not `PendingProposals`, `ProposalDiff`, direct-lane commits, every Store
-  implementation, or a foreign Dolt session editing the data directory.
+  that Store. At that delivery the boundary bound those four localdolt mutation
+  paths alone, not `PendingProposals`, `ProposalDiff`, direct-lane commits,
+  every Store implementation, or a foreign Dolt session editing the data directory.
+  Issue #127 adds direct commits and transfers to that same Store mutex (§11.2);
+  the read and foreign-session exclusions remain unchanged.
 - `localdolt.requireSupersedeShape` and `validateSupersedeChanges` bind the
   model bypass to the shape `ProposeSupersede` actually stages: one live fact
   is changed only by its `superseded_by`/generated `live_key` handoff, one
@@ -778,8 +790,9 @@ keep-both, or cancel paths. The complete structural blast radius is:
   mutate the same branch after validation. **After it,** `stage`,
   `AcceptProposal`, `RejectProposal`, and `ExpireProposals` share the mutex, so
   one of those operations finishes before another can act on the branch.
-  `PendingProposals` and `ProposalDiff` remain reads, direct-lane commits still
-  move `main` independently, and a foreign Dolt session does not share the Go
+  `PendingProposals` and `ProposalDiff` remain reads. At issue #106, direct-lane
+  commits still moved `main` independently; issue #127 adds them and transfers
+  to this mutex as recorded in §11.2. A foreign Dolt session does not share the Go
   mutex. **Before the cycle-3 fix,** expected-commit acceptance shared the
   eager cleanup used by CLI accept, reject, expire, and failed staging: it read
   the branch's `dolt_branches.hash`, compared it with the observed commit, then
@@ -1023,6 +1036,149 @@ hub/client version compatibility across releases, or the two-machine network
 gate. No configuration editor, application push/pull, remote status/diff,
 conflict dialog, hub installation, topology backend or full M4 completion is
 part of this slice.
+
+**M4 main transfer subset (issue #127):** before this issue, the status and
+clone subsets above left application push/pull deferred. After it,
+`memdolt push [remote]` and `memdolt pull [remote]` ship with `--dir`, `--user`
+and `--json`, defaulting to configured `origin`. They require an existing,
+initialized current-schema store and never create or migrate one. Missing
+remotes report “no remote” and a concrete remedy: stop the owner, configure
+`dolt remote add <name> <absolute-url>` in `.memdolt/dolt/memory`, or clone
+into a fresh `--dir`. No remote editor, arbitrary URL/branch/refspec operand,
+force, prune or all-branches option ships.
+
+Push scans and publishes only the captured committed main hash, creating
+remote main or advancing it by fast-forward. It never publishes unmerged
+proposal refs or working-set changes and never resets remote history.
+A later local main advance cannot change the captured upload. Pull fetches
+remote main into its tracking ref before inspecting the exact immutable
+candidate; equal or already-contained history is unchanged. A fast-forward
+candidate must have current metadata and the supported application table and
+column shapes before promotion. Missing/malformed/older/newer/incompatible
+metadata refuses with a compatible-client/remote-repair remedy. Divergence
+refuses without auto-merge or conflict resolution. Successful pull preserves
+commit identities and adds no merge, genesis or migration commit.
+
+Before the issue #127 cycle-2 fix, the main fetch in `transferProcedure` used
+`actions.FetchRefSpecs`, whose non-shallow path also called `FetchFollowTags`.
+That could replace existing local tag hashes and metadata or add remote-only
+tags before candidate validation; its `cli.Println` also emitted unsolicited
+newlines on direct CLI or live MCP owner stdout. After the fix, that pull path
+uses `FetchRemoteBranch` for `refs/heads/main` and `SetHeadToCommit` only for the
+selected `refs/remotes/<remote>/main`. Local tags and their metadata remain
+unchanged, remote tags are not followed, and fetch emits no progress output.
+These restrictions bind memdolt's pull path through `transferProcedure` alone;
+native Dolt fetch/tag operations and clone keep their existing behavior.
+Captured push, remote authentication and file-source preservation remain;
+main still moves only after ancestry, schema and changed-text validation, and
+fetched objects/tracking refs may still remain after refusal.
+
+Both refuse dirty main working sets and active merge/conflict states before
+transfer. Before #127, `Store.proposalMu` covered stage, accept, reject and
+expiry but not direct `Commit`. After it, those mutations, direct commits and
+entire transfers share the mutex on one owning Store, preventing pull from
+replacing successful writes and review from sweeping another actor's write.
+Network latency therefore delays memdolt mutations. Reads and migrations are
+outside this mutex, as are foreign Dolt processes; no external-process lock
+claim is made. Pending proposal refs/contents and the existing review,
+contradiction, attribution and note-batching rules remain intact.
+
+Configured URLs retain clone's explicit HTTP/HTTPS remotesapi or absolute
+file-URL restrictions. URL credentials, queries/fragments, unsupported
+schemes, invalid ports/users, flag-like names and unsupported stored driver
+parameters refuse before contact. Only the native Windows stored spelling
+`file://C:/...` is restored to `file:///C:/...`, and native decoded file-path
+spaces are re-escaped before validation. An explicit
+`--user` overrides the validated stored SQL username; neither means anonymous.
+Passwords come only from `DOLT_REMOTE_PASSWORD` in the process executing the
+transfer, including an already-running owner. Missing owner credentials name
+the restart-with-environment remedy. No caller password crosses IPC, no
+personal Dolt credential is used, and no process-global credentials are
+changed per request. Plaintext, URL-encoded and Basic forms are redacted from
+diagnostics and never persisted in configuration.
+
+`transferTables` explicitly maintains the application column shapes and scan
+coverage: facts, decisions, tasks, session notes with all five provenance
+fields, commands, both narratives, documents/chunks, proposal metadata and
+meta. Its shape check requires the known table/column sets, types,
+nullability and primary columns; it is not a comprehensive index/constraint
+audit. Push scans persisted snapshot text/provenance; pull scans only added
+or changed values relative to captured local main. Scan/config/read failure
+refuses upload or promotion. Unchanged local history is not rescanned on pull.
+Fetched objects and tracking refs may remain after refusal, including
+historical matching text: this is not a history scrub. The original write
+declarations and review scanner remain unchanged; this third scan binds
+`Push`/`Pull` alone, not every native Dolt transfer or future memory lane.
+
+Before the issue #127 cycle-1 fix, that column check did not validate generation
+mode or expression, yet the scanner exempted `facts.live_key` as derived.
+Replacing it with a writable column or a changed generated expression could
+therefore transfer denied text and lose the supported live-key derivation.
+After the fix, `transferLiveKey` reads `SHOW CREATE TABLE` at the exact captured
+or candidate commit, parses the complete DDL with the pinned SQL parser, and
+requires STORED generation and the complete canonical expression
+`IF(superseded_by IS NULL, key, NULL)` before granting its scan exemption.
+Read/parse/shape failure refuses without echoing remote DDL. This restriction
+binds `facts.live_key` in push/pull validation alone; it does not change clone,
+migrations, review or every generated column, and it adds no comprehensive
+index/constraint audit. Existing table/column and scan behavior remains.
+The regression covers upload and promotion refusal for writable, changed
+STORED-expression and VIRTUAL columns, with remote files and local main intact.
+
+File pull reuses clone's source-preserving opener, including sources without
+oldgen; journaled or otherwise unsupported sources refuse with inspection and
+prepared-remote remedies. File transfers resolve the selected remote and
+refuse contained symlinks. Push writes only within the selected file remote,
+and no recursive cleanup or unrelated-file deletion is added. Embeddings,
+rendered output, adjacent configuration and code indexes remain untouched;
+existing stale-index detection and explicit rebuild remain the remedy.
+Success is one JSON object (or the equivalent human report) containing
+`operation`, `remote`, `localCommit`, `remoteCommit`, `mainCommit`, `changed`
+and `status` (`changed`/`current`). Close/output failures are visible;
+confirmed hashes remain in later-failure diagnostics. Lost responses require
+inspection before retry, without automatic resubmission.
+
+The structure touched is the root's additive command registration; new CLI
+`transfer.go` and its tests; `repo.go`'s help-only removal of the obsolete
+deferred-push/pull statement; new `localdolt/transfer.go`, `transfer_schema.go`
+and `transfer_engine.go`, plus the two transfer test files; `Commit`'s added
+mutex participation in `localdolt.go`; the typed `storeipc/operation.go` and
+`owner_store.go` additions and their transfer tests; and this PRD/AGENTS record.
+`transfer_engine.go` registers `memdolt_transfer` once before engine startup.
+Only `runEngineTransfer` supplies its private context capability; ordinary
+SQL/IPC Commit callers fail closed. This seam accesses the existing owning
+session's DbData and pinned push/fetch actions, with fresh remote handles and
+the credential-free dialer used by clone. Native SQL push/fetch would load
+personal credentials when no username is supplied, and their stored username
+can override `--user`; native procedures keep those behaviors, while memdolt's
+transfer path avoids both. The capability restriction binds that one private
+procedure, not all SQL procedures. Strict Dolt hash validation precedes
+revision-identifier construction; raw SQL values remain bound. The existing
+owner authentication, cancellation, operation allow-list, unlimited transfer
+duration and single-submit rules still hold. `Open`, `Migrate`, clone/init,
+offline repo status and the sixteen MCP tools retain their prior contracts.
+`AGENTS.md` records the same per-symbol blast radius.
+
+Automated evidence uses fresh filesystem remotes and initialized clients,
+direct production operations and authenticated owner IPC, ordinary CLI reads,
+independent clones and exact history/data/provenance comparisons. It exercises
+no-op, divergence/non-fast-forward, dirty/incompatible/deny-list refusals,
+note provenance, pending proposals, deterministic main-write/proposal
+interleavings, source/adjacent-file preservation, synthetic authentication,
+cancellation and lost/post-success responses. It establishes no real-hub,
+two-machine network, cross-version, v2.x or full-M4 acceptance. No dependency
+version, migration, MCP sync tool, remote editor, merge/conflict dialog,
+topology backend or hub deployment change is included.
+
+The cycle-2 regression in `cmd/memdolt/transfer_test.go` exercises allowed
+and deny-list-refused pulls in subprocesses, both directly and through a real
+`serve` owner verified by authenticated IPC. It compares the complete local
+tag list, commit hashes, taggers, emails, timestamps and messages against
+conflicting and remote-only tag fixtures. Raw CLI stdout must contain only
+one success JSON line or remain empty on refusal; owner stdout must remain
+empty when no MCP input was sent. It also checks clean owner shutdown and
+reopened main/working-set state. This adds local synthetic evidence only;
+the preceding acceptance limits still hold.
 
 ### 11.3 Config
 
@@ -1285,6 +1441,15 @@ without replacing the two-machine round-trip/no-conversion gate. Application
 push/pull, remote status/diff, configuration editing, conflict elicitation,
 hub setup, measured hub/client version compatibility, topology configuration
 and the optional remote `Store` implementation remain pending.
+
+**M4 main transfer subset (issue #127):** before this slice, the #125 record
+above left application push/pull pending. After it, main-only push and
+validated fast-forward pull ship as bounded in §11.2. Local synthetic direct
+and authenticated-owner tests add transfer and preservation evidence; they
+do not replace the two-machine round-trip/no-conversion gate or establish
+hub/client version compatibility. Remote editing/status/diff, divergence
+merge/conflict elicitation, hub setup, topology configuration and the optional
+remote Store remain pending. M5 and M6 are unchanged.
 
 ---
 
