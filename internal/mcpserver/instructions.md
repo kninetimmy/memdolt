@@ -16,3 +16,17 @@
   `convention.*`, `env.*`, or `gotcha.*` instead of inventing an ad hoc key.
 - Facts state what is true. Decisions record what was chosen and why. If the
   claim has a “because,” file it as a decision.
+- For repository transfers requested by the operator, use `repo_pull` and
+  `repo_push` over the configured remote. Before issue #137 these tools were
+  absent; now compatible divergence merges committed history as the requesting
+  agent. Actual conflicts need explicit human form choices over the displayed
+  rows and blame; never synthesize a confirmation or choose by timestamp.
+  Every choice stays pending until the complete merge validates and commits as
+  user. Preserve done tasks unless the human explicitly reopens them; fact
+  losers are superseded and retained. Follow nextCursor after nine modern
+  forms to reach remaining conflicts within two minutes; legacy clients receive
+  one complete form. Expiry, cancellation, restart or changed heads needs fresh
+  review. Without form support, report `memdolt pull --json` and
+  `memdolt pull --resolve <file>`. Inspect local/remote main after an unknown
+  reply; never replay automatically. Transfer does not flush queued notes,
+  promote pending/global proposals or refresh derived/rendered files.

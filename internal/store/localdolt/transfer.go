@@ -13,26 +13,34 @@ import (
 	"strings"
 
 	"github.com/kninetimmy/memdolt/internal/layout"
+	"github.com/kninetimmy/memdolt/internal/store"
 )
 
 // TransferOptions selects an existing configured remote. Passwords never cross
 // this application/IPC boundary; the executing process supplies its environment.
 type TransferOptions struct {
-	Remote string `json:"remote"`
-	User   string `json:"user,omitempty"`
+	Remote     string          `json:"remote"`
+	User       string          `json:"user,omitempty"`
+	Author     store.Actor     `json:"author,omitempty"`
+	Resolution *PullResolution `json:"resolution,omitempty"`
 }
 
 // TransferResult preserves exact observed hashes, including confirmed promotion
 // when a later step fails. RemoteCommit is the fetched or published main hash;
 // LocalCommit is the captured local main, MainCommit the confirmed resulting main.
 type TransferResult struct {
-	Operation    string `json:"operation"`
-	Remote       string `json:"remote"`
-	LocalCommit  string `json:"localCommit"`
-	RemoteCommit string `json:"remoteCommit"`
-	MainCommit   string `json:"mainCommit"`
-	Changed      bool   `json:"changed"`
-	Status       string `json:"status"`
+	Operation    string             `json:"operation"`
+	Remote       string             `json:"remote"`
+	LocalCommit  string             `json:"localCommit"`
+	RemoteCommit string             `json:"remoteCommit"`
+	MainCommit   string             `json:"mainCommit"`
+	Changed      bool               `json:"changed"`
+	Status       string             `json:"status"`
+	MergeBase    string             `json:"mergeBase,omitempty"`
+	Conflicts    []PullConflict     `json:"conflicts,omitempty"`
+	Cleared      []ClearedViolation `json:"cleared,omitempty"`
+	Remedy       string             `json:"remedy,omitempty"`
+	Error        string             `json:"error,omitempty"`
 }
 
 var transferRemoteName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -84,6 +92,8 @@ func (s *Store) Pull(ctx context.Context, opts TransferOptions) (TransferResult,
 type transferHooks struct {
 	afterCapture func()
 	beforeMove   func()
+	beforeCommit func() error
+	finalize     func(*sql.Tx) error
 	afterMove    func() error
 }
 
@@ -92,6 +102,12 @@ func (s *Store) transfer(ctx context.Context, operation string, opts TransferOpt
 		opts.Remote = "origin"
 	}
 	result = TransferResult{Operation: operation, Remote: opts.Remote, Status: "refused"}
+	if operation == "push" && opts.Resolution != nil {
+		return result, errors.New("conflict choices apply only to pull")
+	}
+	if opts.Resolution != nil && (!transferHash.MatchString(opts.Resolution.LocalCommit) || !transferHash.MatchString(opts.Resolution.RemoteCommit)) {
+		return result, errors.New("resolution requires the exact displayed localCommit and remoteCommit hashes")
+	}
 	if !transferRemoteName.MatchString(opts.Remote) {
 		return result, errors.New("invalid remote name; select one configured name using 1-64 ASCII letters, digits, dots, underscores or hyphens, starting with a letter or digit")
 	}
@@ -168,19 +184,25 @@ func (s *Store) transfer(ctx context.Context, operation string, opts TransferOpt
 		if !transferHash.MatchString(result.RemoteCommit) {
 			return result, errors.New("fetched main is not an immutable Dolt commit hash")
 		}
-		var base string
-		if err := conn.QueryRowContext(ctx, "SELECT DOLT_MERGE_BASE(?, ?)", result.LocalCommit, result.RemoteCommit).Scan(&base); err != nil {
+		if opts.Resolution != nil && (opts.Resolution.LocalCommit != result.LocalCommit || opts.Resolution.RemoteCommit != result.RemoteCommit) {
+			return result, errors.New("local or remote main changed since conflict review; run `memdolt pull --json` for a fresh review; no choices were applied")
+		}
+		if err := conn.QueryRowContext(ctx, "SELECT DOLT_MERGE_BASE(?, ?)", result.LocalCommit, result.RemoteCommit).Scan(&result.MergeBase); err != nil {
 			return result, fmt.Errorf("cannot establish fast-forward ancestry; inspect and reconcile histories manually: %w", err)
 		}
-		if base != result.RemoteCommit {
-			if base != result.LocalCommit {
-				return result, errors.New("divergent main histories; reconcile manually; automatic merge and conflict resolution are not supported")
-			}
+		if result.MergeBase != result.RemoteCommit {
 			if err := validateTransferSchema(ctx, conn, result.RemoteCommit); err != nil {
 				return result, fmt.Errorf("incompatible incoming store; update memdolt or repair/migrate the remote with a compatible client before retrying: %w", err)
 			}
 			if err := s.scanTransfer(ctx, conn, result.LocalCommit, result.RemoteCommit); err != nil {
 				return result, fmt.Errorf("refuse promotion: %w", err)
+			}
+			if result.MergeBase != result.LocalCommit {
+				err := s.pullMerge(ctx, conn, opts, &result, hooks)
+				return result, err
+			}
+			if opts.Resolution != nil {
+				return result, errors.New("there is no divergent merge to resolve; run `memdolt pull` again")
 			}
 			if hooks.beforeMove != nil {
 				hooks.beforeMove()
@@ -200,6 +222,8 @@ func (s *Store) transfer(ctx context.Context, operation string, opts TransferOpt
 			}
 			result.MainCommit = result.RemoteCommit
 			result.Changed = true
+		} else if opts.Resolution != nil {
+			return result, errors.New("the remote is already contained; the reviewed merge is no longer pending")
 		}
 	}
 	result.Status = "current"

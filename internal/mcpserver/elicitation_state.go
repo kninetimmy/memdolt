@@ -27,7 +27,8 @@ const elicitationStateSchema = `CREATE TABLE pending_elicitations (
   expires_at INTEGER NOT NULL,
   accepted TEXT NOT NULL,
   skipped TEXT NOT NULL,
-  fact TEXT NOT NULL
+  fact TEXT NOT NULL,
+  pull TEXT NOT NULL
 )`
 
 var errElicitationStateNotFound = errors.New("requestState is missing, forged, or already used")
@@ -62,7 +63,7 @@ func newElicitationStateStore() (*elicitationStateStore, error) {
 }
 
 func (s *elicitationStateStore) insert(ctx context.Context, state string, row pendingElicitation) error {
-	proposalIDs, proposalCommits, accepted, skipped, fact, err := encodePendingElicitation(row)
+	proposalIDs, proposalCommits, accepted, skipped, fact, pull, err := encodePendingElicitation(row)
 	if err != nil {
 		return err
 	}
@@ -75,10 +76,10 @@ func (s *elicitationStateStore) insert(ctx context.Context, state string, row pe
 		return fmt.Errorf("prune expired requestState rows: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO pending_elicitations
-	    (state_hash, repository, actor_name, actor_raw, proposal_ids, proposal_commits, queue_position, action, expires_at, accepted, skipped, fact)
-	    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	    (state_hash, repository, actor_name, actor_raw, proposal_ids, proposal_commits, queue_position, action, expires_at, accepted, skipped, fact, pull)
+	    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		requestStateHash(state), row.Repository, row.Actor.Name, row.Actor.Raw, proposalIDs, proposalCommits,
-		row.Position, row.Action, row.ExpiresAt.UnixNano(), accepted, skipped, fact)
+		row.Position, row.Action, row.ExpiresAt.UnixNano(), accepted, skipped, fact, pull)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("store requestState row: %w", err)
@@ -169,7 +170,7 @@ func (s *elicitationStateStore) Close() error {
 }
 
 const pendingElicitationSelect = `SELECT repository, actor_name, actor_raw, proposal_ids, proposal_commits,
-  queue_position, action, expires_at, accepted, skipped, fact
+  queue_position, action, expires_at, accepted, skipped, fact, pull
   FROM pending_elicitations WHERE state_hash = ?`
 
 type rowScanner interface {
@@ -178,11 +179,11 @@ type rowScanner interface {
 
 func scanPendingElicitation(scanner rowScanner) (pendingElicitation, error) {
 	var row pendingElicitation
-	var proposalIDs, proposalCommits, accepted, skipped, fact string
+	var proposalIDs, proposalCommits, accepted, skipped, fact, pull string
 	var expiresAt int64
 	if err := scanner.Scan(
 		&row.Repository, &row.Actor.Name, &row.Actor.Raw, &proposalIDs, &proposalCommits, &row.Position,
-		&row.Action, &expiresAt, &accepted, &skipped, &fact,
+		&row.Action, &expiresAt, &accepted, &skipped, &fact, &pull,
 	); err != nil {
 		return pendingElicitation{}, err
 	}
@@ -202,10 +203,13 @@ func scanPendingElicitation(scanner rowScanner) (pendingElicitation, error) {
 	if err := json.Unmarshal([]byte(fact), &row.Fact); err != nil {
 		return pendingElicitation{}, fmt.Errorf("decode requestState fact conflict: %w", err)
 	}
+	if err := json.Unmarshal([]byte(pull), &row.Pull); err != nil {
+		return pendingElicitation{}, fmt.Errorf("decode requestState pull conflict: %w", err)
+	}
 	return row, nil
 }
 
-func encodePendingElicitation(row pendingElicitation) (proposalIDs, proposalCommits, accepted, skipped, fact string, err error) {
+func encodePendingElicitation(row pendingElicitation) (proposalIDs, proposalCommits, accepted, skipped, fact, pull string, err error) {
 	values := []struct {
 		name  string
 		value any
@@ -216,15 +220,16 @@ func encodePendingElicitation(row pendingElicitation) (proposalIDs, proposalComm
 		{name: "accepted progress", value: row.Accepted, out: &accepted},
 		{name: "skipped progress", value: row.Skipped, out: &skipped},
 		{name: "fact conflict", value: row.Fact, out: &fact},
+		{name: "pull conflict", value: row.Pull, out: &pull},
 	}
 	for _, value := range values {
 		encoded, encodeErr := json.Marshal(value.value)
 		if encodeErr != nil {
-			return "", "", "", "", "", fmt.Errorf("encode requestState %s: %w", value.name, encodeErr)
+			return "", "", "", "", "", "", fmt.Errorf("encode requestState %s: %w", value.name, encodeErr)
 		}
 		*value.out = string(encoded)
 	}
-	return proposalIDs, proposalCommits, accepted, skipped, fact, nil
+	return proposalIDs, proposalCommits, accepted, skipped, fact, pull, nil
 }
 
 func requestStateHash(state string) []byte {

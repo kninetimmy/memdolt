@@ -246,6 +246,15 @@ The unknown-outcome remedy is inspection of local and remote main before a
 retry. Confirmed promotion plus a later error survives the application/IPC
 boundary. Clone and init retain the exclusive bootstrap behavior above.
 
+Before issue #137, that pull path refused divergence. After it, compatible
+divergence and complete explicit conflict resolution use the same single-owner,
+one-submit boundary. Capture/preview and final promotion each finish before
+human interaction; no durable transaction spans a dialog. Participating writes
+share the owning Store mutex, while foreign Dolt processes remain outside it.
+The pinned `DOLT_COMMIT` can advance main before SQL transaction finalization;
+all validations precede that promotion point and confirmed hashes survive later
+failures. Lost replies still require inspection, without replay (§11.2).
+
 Before issue #129, remote configuration still required native Dolt with the
 owner stopped. After it, `repo remote list` and `repo remote add` use that same
 direct/authenticated-owner choice. Each configuration action is one typed
@@ -374,6 +383,31 @@ Expected conflict classes and fail-closed policy **[design]**:
 After any nonzero merge, the client stops before commit and queries both per-table surfaces. It refuses unknown or unattributed rows. For a data conflict it writes only the operator-approved row through the conflict-resolution path. For a constraint violation it first runs constraint verification on the affected table, because v1.88.1 also records violations for rows that no longer violate anything — any branch that hands a unique value from one row to another, which is exactly what an accepted supersede proposal does **[V]** (`docs/spikes/m1-fact-key-uniqueness.md`). A violation the table verifies clean against is cleared on that evidence and logged, never raised to the operator as a conflict. Where verification fails, it repairs the underlying rows and removes the matching reviewed entries from `dolt_constraint_violations_<table>` in one transaction; `dolt conflicts resolve` is not used as a substitute. Before concluding the merge, it re-queries both surfaces and runs constraint verification for every affected table. Any remaining row or failed verification keeps the merge blocked. **[design]**
 
 Because the merge is per-cell, which same-row `tasks` races reach that review at all is decided by the write path, not by Dolt: stamping `updated_at` on every task mutation makes every such race a conflict, while writing only the columns a caller changed lets Dolt combine disjoint task edits unreviewed. `tasks` is a direct lane (§3.1), so either is admissible — but the client picks one deliberately rather than leaving it to whichever `UPDATE` a call site happens to emit. **[design]**
+
+**Divergent pull delivery (issue #137).** Before it, the policy above existed
+in proposal review's fail-closed subset and status's rolled-back preview, but
+pull refused every divergence. After it, divergent pull implements the policy:
+compatible committed changes create one two-parent merge; actual data conflicts
+show exact nullable base/ours/theirs rows and native blame plus reachable commit
+author, email, date and message. A complete operator-selected final row is
+required for each conflict. Same-live-key distinct facts retain every row:
+choose an existing winner (optionally its manual durable value) and supersede
+the other rows. Already-satisfied attributed UNIQUE records are verified and
+cleared without row changes. Task completion survives unless an operator
+explicitly chooses reopening; deletion cannot erase a done task. Final data
+and constraint surfaces must be empty, maintained UNIQUE/FK checks must pass,
+and fact/decision supersession links must be non-dangling and acyclic.
+
+Supported same-primary-key data conflicts cover facts, decisions, tasks,
+session notes, commands, both narratives, documents, document chunks and
+proposal metadata. A chosen document deletion that would cascade into other
+chunks refuses. Actual distinct-row uniqueness repair is confined to
+`facts.live_key`; unresolved document-path/chunk uniqueness, foreign-key or
+unknown constraint records, metadata/schema conflicts and unattributed records
+fail closed with a Dolt/upgrade remedy. All three immutable DDL snapshots must
+match the maintained schema. These extra checks bind divergent `Pull`, not
+every commit, proposal acceptance or fast-forward transfer. Their established
+validation and contradiction gates are unchanged.
 
 ### 6.4 Migrations & version skew
 
@@ -994,6 +1028,32 @@ binds `RegisterTools`, not arbitrary SDK servers. Global proposals remain
 counts from this repository. `repo_pull`/`repo_push` remain unregistered;
 their destination names above do not authorize refusal stubs.
 
+**Repo transfer tools (issue #137).** Before this delivery those two names
+remained absent; after it real typed `repo_pull` and `repo_push` join the
+nineteen implemented tools. All prior registrations, discovery/cache hints,
+modern/legacy agent-only attribution, note lifecycle, review dialogs and global
+exclusion remain. The twenty-one-tool count binds `RegisterTools`, not arbitrary
+SDK servers. Both tools select one configured `remote` and optional SQL `user`;
+passwords come exclusively from the executing owner. They expose no author,
+SQL, force, global target or direct resolution-object argument. Compatible
+divergent pull commits as the requesting agent. Human-confirmed choices commit
+the entire merge as `user`, retaining earlier row provenance in history.
+
+Modern pull conflict review presents one JSON-choice form per conflict. After
+nine forms it returns `nextCursor`; call `repo_pull` with `cursor` and the same
+remote/user to reach the remainder. Genuine legacy clients receive all remaining
+conflicts in one form. Every choice remains pending until all are present and
+validated; no truncation or partial promotion. Each state has a two-minute
+expiry, is stored only by a hashed random lookup in process-local SQLite, and
+binds repository/client/action, exact local/remote heads, input, displayed
+conflicts, position and prior choices. Consumption precedes interpretation.
+Missing, forged, replayed, expired, mismatched, declined or canceled responses,
+restart and pre-promotion response/state failures cannot merge. Unsupported form
+capabilities or absent attribution return a CLI remedy. Final `Pull` re-fetches
+and revalidates both heads; a later local write needs fresh review. No dialog
+holds a transaction or uncommitted merge on main. Confirmed result-plus-error
+responses remain structured; transport uncertainty never causes replay.
+
 ### 11.2 CLI
 
 Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
@@ -1346,6 +1406,78 @@ one success JSON line or remain empty on refusal; owner stdout must remain
 empty when no MCP input was sent. It also checks clean owner shutdown and
 reopened main/working-set state. This adds local synthetic evidence only;
 the preceding acceptance limits still hold.
+
+**Divergence and conflict resolution (issue #137).** Before it, the #127
+fast-forward-only and no-MCP statements above remained the pull contract.
+After it, `memdolt pull [remote] [--dir <repository>] [--user <sql-user>]`
+retains fast-forward/contained history behavior and auto-merges compatible
+divergence. `--json` reports captured local/remote/base hashes, resulting main,
+changed/current/conflicted status, every conflict and its real provenance,
+cleared verified records and remedies. A conflict prints its report and exits
+nonzero after rollback; main, working/staged roots, proposal/tag refs, source
+files and local derived/config/render artifacts are preserved. Only fetched
+objects and the selected tracking ref may remain.
+
+Submit all operator choices with `--resolve <file>` or `--resolve -` for stdin:
+
+```json
+{"localCommit":"<displayed local hash>","remoteCommit":"<displayed remote hash>","choices":[{"conflict":"<displayed id>","take":"ours"}]}
+```
+
+Data conflicts accept `take=ours|theirs|manual`. Manual supplies a complete
+`row` of writable columns, including nulls and omitting generated `live_key`.
+Live-fact-key conflicts accept `take=winner|manual` plus a displayed `winner`
+ID; manual also supplies the complete winner row. Losers are superseded, never
+deleted. A task choice must keep done unless `reopen=true` explicitly permits
+open/blocked. Manual identity/provenance changes, malformed/duplicate/unknown
+JSON fields, incomplete choices, changed heads and coerced/truncated values
+refuse before promotion. The resolution file is only read as a rooted regular
+file and remains unchanged. `pull --help` states the exact supported classes
+and remedies from §6.3. No UI dependency is added.
+
+Capture, native merge, inspection and rollback use the same transaction helper
+as repository status. The native revision-qualified blame view internally
+changes database context, so provenance is read after verified rollback;
+explicit resolution recreates the same captured merge and validates all choices
+and invariants together. The existing Store mutation mutex covers those steps
+and final head checks. No transaction remains open during human input.
+`DOLT_COMMIT` itself is the promotion point in the pinned driver, even before
+`database/sql.Tx.Commit`; subsequent finalization is not a reversible phase.
+Confirmed results survive late errors and are retained in CLI/MCP structured
+output. An uncertain promotion/reply reports inspection before retry, never an
+automatic replay. Existing upload/incoming changed-text scans remain, including
+provenance; new chosen text and supersession links pass the local deny-list.
+Unchanged local history is not retrospectively scrubbed. Foreign Dolt sessions
+are outside the Go mutex; no cross-process compare-and-swap is claimed.
+
+The structural change is `localdolt/transfer.go`'s options/result and divergence
+dispatch; new `pull_merge.go`'s transaction/conflict/provenance/repair/invariant
+helpers and `pull_json.go`'s strict shared parser; and `repo_status.go`'s reuse
+of that transaction helper with its existing read-only assessment preserved.
+Existing `review.go` helpers retain proposal allow-lists, contradiction checks
+and cleanup policy. `cmd/memdolt/transfer.go` adds help/file/stdin/structured
+conflict handling while preserving command registration and direct/owner
+routing. Existing IPC transfer operations carry the extended types and keep
+authentication, credential isolation, result envelopes and one-submit semantics.
+New `mcpserver/transfer.go` and two `tools.go` registrations implement the typed
+forms/continuation; `elicitation.go` and `elicitation_state.go` add an ephemeral
+pull payload while preserving earlier fact/review states, expiry and atomic
+consumption. No durable migration or dependency changes. The exact per-symbol
+scope and every touched test/instruction file are recorded in `AGENTS.md`.
+
+New localdolt, storeipc, CLI and MCP pull tests use only synthetic local remotes
+and existing dependencies. They check both-parent history and blame, independent
+and same-key merges, satisfied supersession, data/manual/task policies, schema,
+metadata/unknown constraints and invalid links, malformed/denied/stale input,
+root/ref/source preservation, modern continuation and genuine legacy forms,
+capability fallback, state attacks/expiry/cancel/storage failures, interleavings,
+and lost/late replies. Reopened ordinary CLI reads and a fresh clone verify
+successful results. Existing transfer/status tests replace only obsolete
+independent-divergence refusal expectations; tool discovery tests retain prior
+checks and include both real tools. MCP instructions and the three wrap-up
+templates add guidance for already-authorized transfers, retaining approval,
+provenance and queued-note boundaries. Hub deployment/version/two-machine
+acceptance, optional live SQL and global promotion remain separate.
 
 **M4 remote configuration subset (issue #129):** before this slice, the #127
 setup remedy above required native Dolt with the owner stopped. After it,
@@ -1967,6 +2099,14 @@ Divergence resolution, hub deployment/auth setup, measured version acceptance,
 topology configuration and the optional remote Store remain pending. The
 two-machine round-trip/no-conversion exit gate is unchanged; this slice does
 not complete M4.
+
+**M4 divergence subset (issue #137):** before it, #131 still left divergence
+resolution pending. After it, shared CLI/MCP pull merges and complete explicit
+conflict choices ship within §§6.3/11.1/11.2's atomicity, provenance, confirmation
+and owner boundaries; `repo_push` is also real. Synthetic local acceptance is
+not hub deployment, version compatibility or the two-machine/no-conversion
+exit gate. Optional live-SQL topology, global promotion and full M4 remain
+separate; M5/M6 and the remaining parity matrix are unchanged.
 
 **M5 repository document subset (issue #132):** the earlier milestone records
 left all M5 work deferred. Repository doc add/ls/show/rm and real MCP `doc_add`

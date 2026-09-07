@@ -166,9 +166,6 @@ func TestTransferDivergenceAndDirtyPreservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := cloneFileTree(t, remote)
-	if _, err := b.Pull(ctx, TransferOptions{}); err == nil || !strings.Contains(err.Error(), "divergent") {
-		t.Fatalf("divergent pull = %v", err)
-	}
 	if _, err := b.Push(ctx, TransferOptions{}); err == nil || !strings.Contains(err.Error(), "inspect remote main") {
 		t.Fatalf("non-ff push = %v", err)
 	}
@@ -182,6 +179,11 @@ func TestTransferDivergenceAndDirtyPreservation(t *testing.T) {
 	if transferMain(t, c) != remoteMain {
 		t.Fatal("non-ff push removed remote work")
 	}
+	merged, err := b.Pull(ctx, TransferOptions{})
+	if err != nil || !merged.Changed || merged.LocalCommit != local || merged.RemoteCommit != remoteMain {
+		t.Fatalf("independent divergent pull = %+v, %v", merged, err)
+	}
+	local = merged.MainCommit
 	if _, err := b.db.Exec("INSERT INTO tasks (id, title, status) VALUES ('dirty', 'preserve me', 'open')"); err != nil {
 		t.Fatal(err)
 	}
