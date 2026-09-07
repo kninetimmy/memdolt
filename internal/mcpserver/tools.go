@@ -76,6 +76,7 @@ func registerTools(server *mcp.Server, baseDir string, st Backend, interval time
 	mcp.AddTool(server, &mcp.Tool{Name: "repo_push", Description: "Publish captured committed main to one configured remote by fast-forward; never force or publish proposals. Password comes only from the executing owner's environment. An uncertain reply requires inspection before retrying."}, tools.repoPush)
 	mcp.AddTool(server, &mcp.Tool{Name: "recall", Description: "Recall ranked committed facts, decisions, tasks, and document chunks."}, tools.recall)
 	mcp.AddTool(server, &mcp.Tool{Name: "search", Description: "Search committed decision titles and rationales."}, tools.search)
+	mcp.AddTool(server, &mcp.Tool{Name: "locate", Description: "Locate local tracked source by intent with lazy refresh; return path/line/symbol breadcrumbs and snippets capped at six lines and 400 characters. Uses independent SQLite, never Dolt, recall, exports or sync. All source reads enforce root, link, owner-credential and deny checks."}, tools.locate)
 	mcp.AddTool(server, &mcp.Tool{Name: "list_tasks", Description: "List committed tasks by status, oldest first."}, tools.listTasks)
 	mcp.AddTool(server, &mcp.Tool{Name: "list_decisions", Description: "List committed decisions, newest first."}, tools.listDecisions)
 	mcp.AddTool(server, &mcp.Tool{Name: "list_facts", Description: "List committed facts by key, optionally under one literal dotted-key prefix; superseded rows remain visible."}, tools.listFacts)

@@ -40,8 +40,8 @@ func TestTrackedHostRegistrationsUseNativeCoexistingShapes(t *testing.T) {
 		!reflect.DeepEqual(openCodeServer.Command, []string{"memdolt", "serve"}) {
 		t.Fatalf("opencode.json memdolt registration = %+v, present %t", openCodeServer, ok)
 	}
-	if got := sortedRawKeys(openCode.Commands); !reflect.DeepEqual(got, []string{"check-init", "recall", "wrap-up"}) {
-		t.Fatalf("OpenCode commands = %q, want active core skills only", got)
+	if got := sortedRawKeys(openCode.Commands); !reflect.DeepEqual(got, []string{"check-init", "eval-locate", "locate", "recall", "wrap-up"}) {
+		t.Fatalf("OpenCode commands = %q, want active core and locator skills", got)
 	}
 	if !reflect.DeepEqual(openCode.Skills, []string{"templates/skills/opencode"}) {
 		t.Fatalf("OpenCode skill roots = %q", openCode.Skills)
@@ -49,7 +49,7 @@ func TestTrackedHostRegistrationsUseNativeCoexistingShapes(t *testing.T) {
 }
 
 func TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools(t *testing.T) {
-	want := []string{"check-init", "recall", "wrap-up"}
+	want := []string{"check-init", "eval-locate", "locate", "recall", "wrap-up"}
 	sets := map[string][]string{
 		"claude":   flatSkillNames(t, repoFile("templates", "skills", "claude")),
 		"codex":    directorySkillNames(t, repoFile("templates", "skills", "codex")),
@@ -68,7 +68,7 @@ func TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools(t *testing.T) 
 		}
 		text := string(body)
 		for _, deferredTool := range []string{
-			"`locate`", "`doc_add`", "`repo_status`",
+			"`doc_add`", "`repo_status`",
 			"`history`", "`archive_transcript`",
 		} {
 			if strings.Contains(text, deferredTool) {

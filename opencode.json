@@ -10,6 +10,14 @@
     }
   },
   "commands": {
+    "eval-locate": {
+      "description": "Evaluate the memdolt local code locator",
+      "template": "Use the memdolt eval-locate skill. Arguments: $ARGUMENTS"
+    },
+    "locate": {
+      "description": "Locate local tracked source by intent",
+      "template": "Use the memdolt locate skill. Arguments: $ARGUMENTS"
+    },
     "check-init": {
       "description": "Check memdolt project health",
       "template": "Use the memdolt check-init skill. Arguments: $ARGUMENTS"
