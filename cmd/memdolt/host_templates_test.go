@@ -48,7 +48,7 @@ func TestTrackedHostRegistrationsUseNativeCoexistingShapes(t *testing.T) {
 	}
 }
 
-func TestCoreSkillTemplatesMatchAcrossHostsAndStayInsideM3(t *testing.T) {
+func TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools(t *testing.T) {
 	want := []string{"check-init", "recall", "wrap-up"}
 	sets := map[string][]string{
 		"claude":   flatSkillNames(t, repoFile("templates", "skills", "claude")),
@@ -68,7 +68,7 @@ func TestCoreSkillTemplatesMatchAcrossHostsAndStayInsideM3(t *testing.T) {
 		}
 		text := string(body)
 		for _, deferredTool := range []string{
-			"`locate`", "`doc_add`", "`render`", "`repo_status`", "`repo_pull`",
+			"`locate`", "`doc_add`", "`repo_status`", "`repo_pull`",
 			"`repo_push`", "`history`", "`archive_transcript`",
 		} {
 			if strings.Contains(text, deferredTool) {
@@ -87,7 +87,7 @@ func TestCoreSkillTemplatesMatchAcrossHostsAndStayInsideM3(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		text := string(body)
-		for _, required := range []string{"explicit per-item approval", "propose_fact", "propose_decision", "Never promote"} {
+		for _, required := range []string{"explicit per-item approval", "propose_fact", "propose_decision", "Never promote", "`render`", "committed main", "backups before retrying"} {
 			if !strings.Contains(text, required) {
 				t.Errorf("%s is missing proposal/review boundary phrase %q", path, required)
 			}

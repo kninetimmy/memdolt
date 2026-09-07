@@ -19,6 +19,102 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Committed render delivery (issue #133).** Before this delivery, render was
+deferred: there was no `memdolt render` command or registered `render` tool,
+and the core wrap-up templates explicitly omitted that step. After it,
+`memdolt render [--dir <repository>] [--json]` and the real typed MCP `render`
+tool generate `PROJECT.md` and `PROJECT_LEDGER.md` from one committed `main`.
+This does not replace this repository's memhub Session Continuity instructions
+above or invoke memhub. The complete structural blast radius is:
+
+- New `internal/render/render.go` owns `Run`, the coherent capture, formatting
+  and result. Every category and the real `DOLT_LOG` walk uses the captured
+  immutable hash, not a moving `main`/`HEAD` or working set. The pinned driver
+  panics preparing `AS OF ?`; `capture` therefore validates the exact
+  32-character Dolt hash grammar before building that revision literal.
+  Other SQL values remain bound, and the table/column/order list is fixed.
+  This literal rule binds `capture` alone, not arbitrary queries. Source/row
+  close failures abort before file preparation. The marker and source schema,
+  commit and generation time identify each view. Latest state/architecture,
+  ten newest notes with raw/canonical actor and optional provenance, all
+  decisions, ordered tasks, and facts including stale/superseded rows remain
+  visible; bodies, evidence, summaries and alternatives retain their text.
+  ULIDs replace memhub integer references. Activity is up to fifty reachable
+  commits in thirty days with real author/email/message/date. No render commit,
+  fabricated writes_log, transcript archive or token accounting is added.
+- New `internal/render/files.go` owns the independent render config reader,
+  output checks, preparation, backups, rooted replacement and temporary cleanup.
+  `[render].output_dir` defaults to `.memdolt/rendered`; relative paths must
+  stay under the canonical repository, and explicitly configured absolute local
+  paths are allowed. Network/device paths, symlink/reparse traversal, protected
+  `.git`/`.memhub`/`.orchestrator` paths, and `.memdolt` paths outside its
+  `rendered` subtree are refused. Configuration supplies the optional
+  `project_name` and positive `[retrieval].fact_stale_after_days`; absent values
+  use the repository basename and the existing ninety-day default. Invalid
+  TOML/render keys and unsafe destinations fail visibly. The existing retrieval
+  and deny-list config readers retain their independent behavior.
+  New `path_windows.go` checks all reparse attributes; `path_other.go` checks
+  symlinks. Directory handles and identity checks confine reached paths.
+- `writeFiles` refuses existing unmarked same-name user files, prepares both
+  complete files plus any original backups before replacing either, and retains
+  complete backups in `.memdolt/backups/rendered`. It uses `os.Root.Rename`
+  on sibling files, with the reached platform's guarantees; the pair is not
+  transactionally atomic and directory-entry crash durability is not promised.
+  On Windows the installed Go implementation reaches `NtSetInformationFile`
+  replacement and its native compatibility fallback. Each confirmed replacement
+  and complete backup survives in the result even when later work fails.
+  Other user files remain untouched. The output's exclusively created
+  `.memdolt-render.lock` refuses overlapping cooperating generations, including
+  different owners configured for the same directory. It is separate from the
+  unchanged store advisory lock and has no automatic stale/PID protocol: after
+  a crash, stop all renders and inspect files/backups before removing residue.
+  Only this render's verified temporary artifacts are cleaned up. Foreign
+  writers are not coordinated; identity/content checks detect changes before
+  replacement but cannot provide a filesystem compare-and-swap against a change
+  in the final interval. These file restrictions bind this renderer alone.
+- New `localdolt/render.go` implements `Store.Render` under the existing
+  `proposalMu`, sharing direct/proposal/transfer mutation ordering. Before
+  #133 that mutex excluded render because it did not exist; after it the whole
+  render operation participates. Other reads, migrations and foreign Dolt
+  sessions retain their prior boundaries. Pinned reads still identify one
+  snapshot if a nonparticipating writer moves main. No memory, refs, dirty
+  rows, note batches or history are changed by rendering.
+- `storeipc/operation.go` adds `Backend.Render` and one explicit `render`
+  operation; `owner_store.go` submits the entire operation once and preserves
+  results with errors. No output path or raw query is accepted for rendering.
+  Lost replies say the outcome is unknown and require inspection before retry.
+  Authentication, verified-owner selection, cancellation, existing operations
+  and their no-replay boundary remain intact.
+- `cmd/memdolt/root.go` adds the command while retaining all previous children.
+  New `cmd/memdolt/render.go` reuses existing-store preflight and direct/verified
+  owner selection, closes before output, and exposes written files/backups and
+  errors in human/JSON reports. `RequireExistingTransferStore` now also serves
+  render; its existing callers retain their behavior and ordinary `Open` still
+  creates missing stores. Render itself never initializes or migrates.
+- `mcpserver/tools.go` adds `render` to the existing sixteen registrations;
+  new `mcpserver/render.go` uses an empty typed input and a typed result, retaining
+  structured file effects even on a visible tool error. `New`'s modern/legacy
+  agent attribution, static cache hints, review behavior and note lifecycle
+  remain. Render does not flush queued notes; only the existing deadline or
+  orderly shutdown does. `instructions.md` adds that same committed-view rule.
+- New `render/files_test.go`, `localdolt/render_test.go`, `cmd/memdolt/render_test.go`,
+  `mcpserver/render_test.go`, `storeipc/render_test.go`, and the shared synthetic
+  `render/testdata/memory.sql` exercise content, committed/dirty/proposal
+  isolation, immutable history, preparation/backup/replacement/finalization
+  errors, routing, lost replies, concurrency and file preservation. Existing
+  `tools_test.go` and `serve_test.go` retain their checks and include render in
+  discovery. `host_templates_test.go` allows that implemented tool and checks
+  its workflow boundaries; no test changes production behavior.
+- The three core wrap-up templates add render after approved writes, retaining
+  their before/after deferral record and approval/provenance gates. Claude/Codex
+  explicitly report that their queued summary is absent until its existing
+  flush point. OpenCode's verified CLI summary is already committed. PRD
+  §§5.2/11.1/11.2/11.3/11.4/12/16 record the same read/file/owner boundaries.
+  Existing `.gitignore` already keeps default output and backups local; custom
+  destinations need an operator-managed ignore rule. No dependency, durable
+  migration, unrelated backend, full M5 parity, global memory or gated workflow
+  is added.
+
 Go module at the repo root: `github.com/kninetimmy/memdolt`, Go ≥1.26.2
 (the minimum `github.com/dolthub/driver` requires).
 

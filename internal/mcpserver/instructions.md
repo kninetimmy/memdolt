@@ -3,6 +3,10 @@
 - On turn one, read `.memdolt/rendered/PROJECT.md` once for project context.
 - Recall relevant memory before reading `PROJECT_LEDGER.md`; use the ledger only
   when recall is empty or the user explicitly asks for it.
+- Use `render` to refresh these local files at the configured output directory
+  (default `.memdolt/rendered`). It reads one committed main snapshot and does
+  not flush queued notes or promote proposals. Inspect reported outputs and
+  backups before retrying any partial failure or unknown response.
 - To find code by intent, use `locate` before grep. Use grep only to confirm or
   narrow the files that locate returns.
 - Never write durable facts or decisions directly. Stage claims with
