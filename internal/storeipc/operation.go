@@ -39,6 +39,7 @@ const (
 	opPull             = "pull"
 	opListRemotes      = "list_remotes"
 	opAddRemote        = "add_remote"
+	opRepoStatus       = "repo_status"
 )
 
 // Backend is the initialized data-store surface the live owner exposes. The
@@ -66,6 +67,7 @@ type Backend interface {
 	Pull(context.Context, localdolt.TransferOptions) (localdolt.TransferResult, error)
 	ListRemotes(context.Context) ([]localdolt.Remote, error)
 	AddRemote(context.Context, localdolt.Remote) (localdolt.Remote, error)
+	RepoStatus(context.Context, localdolt.RepoStatusOptions) (localdolt.RepoStatusReport, error)
 }
 
 var _ Backend = (*localdolt.Store)(nil)
@@ -184,6 +186,13 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var result any
 	var err error
 	switch req.Operation {
+	case opRepoStatus:
+		args, decodeErr := operationArgs[localdolt.RepoStatusOptions](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		result, err = h.store.RepoStatus(ctx, args)
 	case opListRemotes:
 		result, err = h.store.ListRemotes(ctx)
 	case opAddRemote:

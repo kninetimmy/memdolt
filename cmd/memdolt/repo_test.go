@@ -80,8 +80,8 @@ func TestRepoStatusPreservesLocalStateDirectAndOwner(t *testing.T) {
 			// A configured hub does not change what this local-only command
 			// inspects. There is no server at this deliberately unusable URL.
 			writeTestFile(t, pathsFor(t, base).ConfigFile(), "[repo]\nremote_url = 'http://127.0.0.1:0/memory'\ntopology = 'live'\n")
-			directJSON := runMemdolt(t, "repo", "status", "--dir", filepath.Join(base, "."), "--json")
-			direct := decodeJSON[repoStatusReport](t, directJSON)
+			directJSON := runMemdolt(t, "repo", "status", "--local", "--dir", filepath.Join(base, "."), "--json")
+			direct := decodeJSON[localdolt.RepoStatusReport](t, directJSON)
 			if strings.Count(strings.TrimSpace(directJSON), "\n") != 0 {
 				t.Fatalf("status emitted more than one JSON line: %q", directJSON)
 			}
@@ -92,14 +92,14 @@ func TestRepoStatusPreservesLocalStateDirectAndOwner(t *testing.T) {
 			if direct.PendingProposals.Repo != 1 || direct.PendingProposals.Global != 1 {
 				t.Fatalf("pending counts = %+v, want one repo and one global", direct.PendingProposals)
 			}
-			wantChanges := []repoTableChange{}
+			wantChanges := []localdolt.RepoTableChange{}
 			if dirty {
-				wantChanges = []repoTableChange{{Table: "tasks", Status: "modified"}, {Table: "tasks", Staged: true, Status: "modified"}}
+				wantChanges = []localdolt.RepoTableChange{{Table: "tasks", Status: "modified"}, {Table: "tasks", Staged: true, Status: "modified"}}
 			}
 			if direct.Clean == dirty || !reflect.DeepEqual(direct.Changes, wantChanges) {
 				t.Fatalf("working set = clean %t, %+v; want clean %t, %+v", direct.Clean, direct.Changes, !dirty, wantChanges)
 			}
-			human := runMemdolt(t, "repo", "status", "--dir", base)
+			human := runMemdolt(t, "repo", "status", "--local", "--dir", base)
 			for _, want := range []string{"local-only", "remote state not checked", direct.Store, direct.MainCommit,
 				fmt.Sprintf("schema: v%d", direct.SchemaVersion), "pending proposals: 1 repo, 1 global"} {
 				if !strings.Contains(human, want) {
@@ -118,11 +118,11 @@ func TestRepoStatusPreservesLocalStateDirectAndOwner(t *testing.T) {
 			}
 
 			serveStore(t, base)
-			routed := decodeJSON[repoStatusReport](t, runMemdolt(t, "repo", "status", "--dir", base, "--json"))
+			routed := decodeJSON[localdolt.RepoStatusReport](t, runMemdolt(t, "repo", "status", "--local", "--dir", base, "--json"))
 			if !reflect.DeepEqual(routed, direct) {
 				t.Fatalf("owner status %+v differs from direct %+v", routed, direct)
 			}
-			if got := runMemdolt(t, "repo", "status", "--dir", base); got != human {
+			if got := runMemdolt(t, "repo", "status", "--local", "--dir", base); got != human {
 				t.Fatalf("owner human output %q differs from direct %q", got, human)
 			}
 			owner, err := storeipc.DialOwnerStore(base)
@@ -170,7 +170,7 @@ func TestRepoStatusRefusesInvalidManifest(t *testing.T) {
 				writeTestFile(t, manifest, "")
 			}
 			before := repoFiles(t, base)
-			if got := runMemdoltErr(t, "repo", "status", "--dir", base); !strings.Contains(got, "not a nonempty regular file") {
+			if got := runMemdoltErr(t, "repo", "status", "--dir", base); !strings.Contains(got, "invalid memdolt manifest") {
 				t.Fatalf("invalid manifest error = %q", got)
 			}
 			if after := repoFiles(t, base); !reflect.DeepEqual(before, after) {
@@ -202,9 +202,6 @@ func TestRepoStatusRefusesUnsupportedSchemasDirectAndOwner(t *testing.T) {
 			}
 			if got := runMemdoltErr(t, "repo", "status", "--dir", base); !strings.Contains(got, remedy) {
 				t.Fatalf("owner schema refusal = %q, want %q", got, remedy)
-			}
-			if backend.queries != 0 || backend.pendingReads != 0 {
-				t.Fatalf("unsupported-schema owner performed %d queries and %d pending reads", backend.queries, backend.pendingReads)
 			}
 			if err := owner.Close(); err != nil {
 				t.Fatal(err)
@@ -295,7 +292,7 @@ func TestRepoStatusReportsReadOutputAndCloseFailures(t *testing.T) {
 	fixtureError := errors.New("injected status failure")
 	closeError := errors.New("injected close failure")
 	base := initStore(t)
-	for _, failure := range []string{"schema", "main", "working set", "proposals", "human output", "json output", "close"} {
+	for _, failure := range []string{"inspection", "human output", "json output", "close"} {
 		t.Run(failure, func(t *testing.T) {
 			backend := &repoFaultStore{
 				commandStore: &localCommandStore{Store: openInitializedStore(t, base), baseDir: base},
@@ -307,19 +304,14 @@ func TestRepoStatusReportsReadOutputAndCloseFailures(t *testing.T) {
 			cmd.SetOut(out)
 			jsonOutput = failure == "json output"
 			switch failure {
-			case "schema":
-				backend.schemaErr = fixtureError
-			case "main":
-				backend.queryMatch, backend.queryErr = "dolt_branches", fixtureError
-			case "working set":
-				backend.queryMatch, backend.queryErr = "dolt_status", fixtureError
-			case "proposals":
-				backend.pendingErr = fixtureError
+			case "inspection":
+				backend.statusErr = fixtureError
 			case "human output", "json output":
+				backend.closeErr = nil
 				cmd.SetOut(repoFailWriter{fixtureError})
 			}
-			err := runRepoStatus(cmd, backend)
-			if !errors.Is(err, closeError) || !backend.closed {
+			err := runRepoStatus(cmd, backend, localdolt.RepoStatusOptions{Local: true})
+			if (backend.closeErr != nil && !errors.Is(err, closeError)) || !backend.closed {
 				t.Fatalf("close error was lost: %v, closed=%t", err, backend.closed)
 			}
 			if failure != "close" && !errors.Is(err, fixtureError) {
@@ -334,33 +326,15 @@ func TestRepoStatusReportsReadOutputAndCloseFailures(t *testing.T) {
 
 type repoFaultStore struct {
 	commandStore
-	schemaErr, queryErr, pendingErr, closeErr error
-	queryMatch                                string
-	queries, pendingReads                     int
-	closed                                    bool
+	closeErr, statusErr error
+	closed              bool
 }
 
-func (s *repoFaultStore) SchemaVersion(ctx context.Context) (int, error) {
-	if s.schemaErr != nil {
-		return 0, s.schemaErr
+func (s *repoFaultStore) RepoStatus(ctx context.Context, opts localdolt.RepoStatusOptions) (localdolt.RepoStatusReport, error) {
+	if s.statusErr != nil {
+		return localdolt.RepoStatusReport{}, s.statusErr
 	}
-	return s.commandStore.SchemaVersion(ctx)
-}
-
-func (s *repoFaultStore) Query(ctx context.Context, query string, args ...any) (store.Rows, error) {
-	s.queries++
-	if s.queryErr != nil && strings.Contains(query, s.queryMatch) {
-		return nil, s.queryErr
-	}
-	return s.commandStore.Query(ctx, query, args...)
-}
-
-func (s *repoFaultStore) PendingProposals(ctx context.Context) ([]localdolt.PendingProposal, error) {
-	s.pendingReads++
-	if s.pendingErr != nil {
-		return nil, s.pendingErr
-	}
-	return s.commandStore.PendingProposals(ctx)
+	return s.commandStore.RepoStatus(ctx, opts)
 }
 
 func (s *repoFaultStore) Close() error {

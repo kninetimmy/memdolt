@@ -34,7 +34,7 @@ func TestTransferAuthenticationOverrideAnonymousRedactionAndCancellation(t *test
 		t.Fatal(err)
 	}
 	a, _ := transferFixture(t)
-	for _, operation := range []string{"push", "pull"} {
+	for _, operation := range []string{"push", "pull", "repo status"} {
 		for _, selection := range []struct {
 			stored, user string
 			cancel       bool
@@ -70,9 +70,18 @@ func TestTransferAuthenticationOverrideAnonymousRedactionAndCancellation(t *test
 					params = `{"` + dbfactory.GRPCUsernameAuthParam + `":"` + selection.stored + `"}`
 				}
 				a = transferConfiguredRemote(t, a, "http://"+listener.Addr().String()+"/fixture", params)
-				got, err := a.transfer(ctx, operation, TransferOptions{User: selection.user}, transferHooks{})
+				before := statusSnapshot(t, a)
+				var got any
+				if operation == "repo status" {
+					got, err = a.RepoStatus(ctx, RepoStatusOptions{User: selection.user})
+				} else {
+					got, err = a.transfer(ctx, operation, TransferOptions{User: selection.user}, transferHooks{})
+				}
 				if err == nil || strings.Contains(err.Error(), password) {
 					t.Fatalf("transfer = %+v, %v", got, err)
+				}
+				if operation == "repo status" && statusSnapshot(t, a) != before {
+					t.Fatal("auth/cancellation refusal changed refs or working state")
 				}
 				user := selection.user
 				if user == "" {
