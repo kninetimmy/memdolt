@@ -17,6 +17,10 @@ framework: memdolt
 4. Stage facts and decisions with `propose_fact`, `propose_decision`, or
    `propose_supersede`. Never promote them. Tell the user that a human reviews
    staged claims with `memdolt review`.
+   Before issue #139 human fact/decision CLI commands were deferred; after it
+   they exist for trusted terminal use. This agent workflow still uses the
+   reviewed lane; never substitute direct add/verify/summary/supersede commands
+   or `--actor user` for a proposal and human review.
 5. Record the approved summary with `log_session_note`.
    Report it as queued: its actor's batch commits at the five-minute deadline
    or orderly server shutdown; an abrupt exit can lose an uncommitted note.

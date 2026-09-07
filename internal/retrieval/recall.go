@@ -11,6 +11,7 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/embedding"
 	"github.com/kninetimmy/memdolt/internal/layout"
+	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/store"
 )
 
@@ -545,7 +546,7 @@ func sortCandidates(rows []*candidate) {
 // FactIsStale applies recall's day comparison without converting a configured
 // day horizon to time.Duration, which can overflow for valid int64 values.
 func FactIsStale(verifiedAt, now time.Time, staleAfterDays int64) bool {
-	return factAgeIsStale(ageDays(verifiedAt, now), staleAfterDays)
+	return memory.FactIsStale(verifiedAt, now, staleAfterDays)
 }
 
 func sourceAge(source store.RecallSource, now time.Time, staleAfterDays int64) (bool, *float64) {
@@ -565,16 +566,12 @@ func sourceAge(source store.RecallSource, now time.Time, staleAfterDays int64) (
 		return false, nil
 	}
 	days := ageDays(*timestamp, now)
-	stale := source.SourceType == "fact" && factAgeIsStale(days, staleAfterDays)
+	stale := source.SourceType == "fact" && FactIsStale(*timestamp, now, staleAfterDays)
 	return stale, &days
 }
 
 func ageDays(timestamp, now time.Time) float64 {
 	return max(now.Sub(timestamp.UTC()).Hours()/24, 0)
-}
-
-func factAgeIsStale(ageDays float64, staleAfterDays int64) bool {
-	return ageDays > float64(staleAfterDays)
 }
 
 func acceptedSource(source string) bool {

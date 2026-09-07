@@ -364,7 +364,9 @@ func (s *Store) ProposeDecision(ctx context.Context, p Proposal, d Decision) (St
 // without a generated column at all in the same spike (§6, control 2).
 //
 // It supersedes facts. Decisions carry a superseded_by column too, but no
-// uniqueness constraint orders their writes and no lane asks for it yet.
+// uniqueness constraint orders their writes. Before issue #139, no lane asked
+// for decision supersession. The trusted human DecisionSupersede now links
+// existing decisions; ProposeSupersede remains fact-only and stages a new row.
 func (s *Store) ProposeSupersede(ctx context.Context, p Proposal, supersededID string, replacement Fact) (StagedProposal, error) {
 	if strings.TrimSpace(supersededID) == "" {
 		return StagedProposal{}, errors.New("localdolt: propose supersede: the id of the fact to supersede is required")
@@ -438,6 +440,10 @@ type stagedWrite struct {
 	// afterCheckout synchronizes the cleanup regression after this write's
 	// session is definitely on its proposal branch. Production writes leave it nil.
 	afterCheckout func()
+
+	// finalizeCommit injects the late transaction boundary in the staging
+	// residue regression. Production uses database/sql's Commit directly.
+	finalizeCommit func(*sql.Tx) error
 }
 
 // stage is the staged-write lane of PRD §3.1: one proposal, one branch cut
@@ -517,7 +523,10 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 
 	result, stageErr := s.stageOnBranch(ctx, conn, w, statements)
 	cleanupRecord := created
-	if result.Hash != "" {
+	// A late transaction error used to discard the hash in commitConn, leaving
+	// this failed staged commit as residue after the expected-head refusal.
+	// Retain that behavior now that the error also carries commit evidence.
+	if result.Hash != "" && stageErr == nil {
 		cleanupRecord.commit = result.Hash
 	}
 
@@ -562,12 +571,16 @@ func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite
 			return store.CommitResult{}, err
 		}
 	}
-	return s.commitConn(ctx, conn, store.CommitRequest{
+	req := store.CommitRequest{
 		Statements: statements,
 		Text:       w.text,
 		Message:    w.message,
 		Author:     w.proposal.Actor,
-	})
+	}
+	if w.finalizeCommit != nil {
+		return s.commitConnFinalize(ctx, conn, req, w.finalizeCommit)
+	}
+	return s.commitConn(ctx, conn, req)
 }
 
 func requireUnusedFactKey(ctx context.Context, conn *sql.Conn, key string) error {
