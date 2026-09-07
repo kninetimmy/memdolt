@@ -939,6 +939,174 @@ export GOFLAGS=-tags=gms_pure_go
   After it, the optional `mcp-registration-opencode` check also warns and exits
   zero when no supported parsed registration is found; it does not repair host
   config. The prior ownership, schema, and recall checks retain their behavior.
+- Ingest repository reference documents: `memdolt doc add <file> [--title <title>]`,
+  `doc ls` (`list` aliases it), `doc show <id-or-path>`, and `doc rm <id-or-path>`
+  support `--dir` and `--json`; add/rm also accept the existing `--actor` flag.
+  **Before issue #132, the documents/chunks schema and retrieval readers existed,
+  but ingestion and `doc_add` were deferred. After it, these repository commands
+  and the real typed `doc_add` tool ship.** No global flag, global document
+  backend, code index, other deferred tool, or full-M5 completion is implied.
+
+  Add reports created/updated/unchanged, metadata, ordered chunk breadcrumbs and
+  the changed operation's commit; show includes bodies, and remove reports
+  removed/not-found. Byte-identical SHA-256 input produces no commit or chunk
+  replacement, including when only the requested title differs. Changed bytes
+  retain the document ULID and replace its whole chunk set with fresh ULIDs in
+  one transaction/commit. Removal deletes chunks and their parent in one commit.
+  The existing unique path/index/FK schema is unchanged; a database collation
+  collision between distinct filesystem paths refuses instead of overwriting
+  another document. Source is always `user`, as §7.6 requires; the actual
+  normalized caller authors the commit. Source/path/title never grant human
+  review authority, and MCP `user` still means `agent:user`.
+
+  Before the #132 missing-source identity fix, full-path canonicalization fell
+  back to lexical cleaning when the source disappeared, losing still-existing
+  directory aliases and making original-path show/remove return not-found.
+  After it, `documentIdentityPath` resolves the nearest existing directory
+  ancestor and reattaches only missing literal components. Its sole caller,
+  `resolveDocument`, serves `DocShow` and `DocRemove` through both CLI and owner
+  routes. Exact stored paths and ULIDs still work without a resolvable source;
+  otherwise unexpected resolution errors remain visible. No alias registry or
+  inference of deleted symlink targets is added. The deterministic CLI regression
+  keeps the original aliased operand after leaf/parent deletion for direct and
+  owner calls, and localdolt checks errors plus exact identities. These lookup
+  changes do not alter ingestion confinement, owner-file protection or writes.
+
+  The chunker ports memhub v0.2.0's actual rules: nonempty ATX headings of levels
+  1–6, heading lines retained, ancestor breadcrumbs joined by ` > `, and an
+  optional preamble chunk. LF/CRLF line endings become LF in chunks while hashes
+  and byte counts use original UTF-8 bytes. Fences start with three backticks or
+  tildes and close on three or more of the same family, even a shorter run;
+  headings/blank lines inside them remain body text. Above the 2000-Unicode-
+  character soft target, paragraphs pack greedily at blank lines outside fences;
+  one oversized paragraph/fence stays intact. It is not a CommonMark parser.
+  Empty/whitespace files are valid zero-chunk documents. Paths, titles and
+  breadcrumbs must fit their existing 1024/512/1024-character columns; a single
+  chunk must fit the 65535-byte TEXT body. Invalid UTF-8, unsafe paths, widths,
+  deny/config failures and non-regular sources refuse before durability.
+
+  Ingesting into an empty documents table enables
+  `[retrieval] include_docs_in_default`, with an explicit result/notice when the
+  setting changes. This is the tagged baseline's empty-table trigger, so removing
+  every document resets it. Later unchanged/changed ingests and second documents
+  preserve a deliberate opt-out. The existing retrieval modes, filters and scoring
+  floors remain: default docs require a rerank to survive; explicit `doc_chunk`
+  queries also work in FTS. Run `index status`/`index rebuild` after changes.
+  Old vectors become orphaned and replacement chunks missing until rebuild;
+  deleted/replaced chunks cannot masquerade as current vectors or source rows.
+  The config flag and side-store are machine-local, not transferred with Dolt.
+
+  MCP relative file paths and relative `[doc] allowed_dirs` entries start at the
+  repository root. A source must resolve under the canonical root or a resolved
+  allowed directory; unresolved entries grant no access. Canonicalization plus
+  `os.Root` bounds the subsequent read against symlink escape. An existing invalid
+  or unreadable config fails closed; an absent config means repo-only access.
+  CLI paths are explicitly selected relative to the caller's working directory
+  and may be outside those roots. Both surfaces scan path, title, source, raw and
+  normalized caller, headings and content before committing. Config finalization
+  rereads and preserves unrelated TOML values semantically, writes/syncs a new
+  file and uses rooted rename. Comments/formatting need not survive. Detected
+  concurrent config edits refuse; foreign edits in the final read/rename interval
+  and stronger cross-platform crash guarantees are not claimed.
+
+  **Before the #132 owner-credential fix,** root confinement and optional
+  deny-list rules allowed `.memdolt/server.pid` when rules were absent or empty.
+  The owner token could enter the immediate `doc_add` chunk response and durable,
+  searchable memory. **After the fix,** both CLI and MCP refuse this store's
+  known owner metadata path before opening it as a source, and
+  `checkDocumentOwnerFile` verifies the opened source's identity against that
+  protected file before `io.ReadAll`. Canonical paths, symlink aliases and hard
+  links cannot bypass it. The already-open metadata directory bounds the check;
+  the owner file is opened only for `Stat`, never content. Missing owner metadata
+  permits ordinary direct use; link/type/open/stat/identity/close failures during
+  required verification refuse without document, commit or config effects.
+  Both compared identities come from opened handles, avoiding a negative Windows
+  `SameFile` answer that could hide a later path-lookup failure.
+
+  This protection binds `readDocumentFile` and thus every `DocAdd`, independently
+  of `DocAddOptions.Confined` and configured regex rules. Ordinary CLI root freedom
+  and all other deny-list semantics remain. It protects this store's known owner
+  file and file aliases, not arbitrary copied secrets or every filesystem/SQL
+  reader; it changes no existing stored rows, history or IPC token lifecycle.
+  The changed structure is `document_file.go`'s named-path/identity guard,
+  `documents.go` passing the existing metadata handle, CLI help and MCP input
+  description, new `mcpserver/doc_owner_test.go`, the added CLI/localdolt
+  regressions, and this AGENTS/PRD record. Synthetic absent/empty-rule fixtures
+  cover CLI and modern/legacy MCP refusals, real symlinks/hard links, no response
+  content or persistence/config effects, protection-check errors and retained
+  ordinary external-file CLI ingestion. No real user token is read by those tests.
+
+  The complete structural blast radius for #132 is:
+
+  - New `localdolt/documents.go` defines the document/options/result/chunk types
+    and `DocAdd`, `DocList`, `DocShow`, `DocRemove`. Add/remove hold the existing
+    `proposalMu` through reading, mutation and config finalization. Existing
+    direct writes, proposals, review and transfers keep their own rules; foreign
+    Dolt sessions and migrations remain outside that mutex. Document readers pin
+    one immutable main hash and exclude dirty/proposal rows. The named
+    `documentConn` checks current schema without migration and validates hashes
+    before constructing revision-qualified database identifiers; all source
+    paths/IDs/values stay SQL parameters. These restrictions bind the document
+    methods, not every Store read or native Dolt writer.
+  - New `document_markdown.go` owns only the tagged chunk/title rules above;
+    existing code-index plans and retrieval text formatting remain unchanged.
+    New `document_file.go` owns document argument/width validation, canonical
+    source reading, `[doc]`/include-flag config decoding and first-document config
+    replacement. Only `DocAddOptions.Confined` enables the MCP root restriction;
+    production `Toolset.docAdd` always sets it, while CLI add leaves it false.
+    Managed document configuration refuses linked directories/files. These are
+    document-seam restrictions, not new guarantees for all filesystem readers.
+  - `localdolt/localdolt.go` retains `commitConn`'s validation, transaction,
+    deny-list and opt-in clean guard. Its guard diagnostic previously named only
+    the session-note batch; it now names a guarded write because documents also
+    opt in. Note batching and other `CommitRequest` behavior are unchanged.
+    Existing schema/migrations, ULID helper, `RequireExistingTransferStore`,
+    `clonePath`, committed retrieval/embedding readers, index status/rebuild,
+    actor normalization and review gates are reused without behavioral changes.
+  - New `cmd/memdolt/doc.go` owns flags/help, caller-relative path resolution,
+    pre-open existing-store refusal, direct/verified-owner selection and output.
+    `runDoc` alone owns its close/error/output ordering; a confirmed mutation is
+    emitted with an error field and nonzero exit when a later step fails. A
+    first-document config failure gives the confirmed ID/commit plus an explicit
+    config remedy, never a replay. `root.go` only adds the command registration;
+    every existing CLI command retains its prior behavior.
+  - New `internal/mcpserver/doc.go` owns typed `file`/optional `title` input and
+    document output; it retains confirmed data alongside `IsError` for a late
+    failure. Before sibling integration, `tools.go` added its one real
+    registration to the prior sixteen. After integrating #133, its seventeen
+    tools including `render` remained and `doc_add` became the eighteenth.
+    After integrating #131, its eighteen tools including `render` and
+    `repo_status` remain and `doc_add` is the nineteenth.
+    Discovery, cache hints, modern/legacy agent-only attribution, note batching,
+    elicitation and shutdown behavior remain. The exact registered set binds
+    `RegisterTools` alone, not arbitrary SDK servers.
+  - `storeipc/operation.go` adds four explicit document operations to `Backend`
+    and the allow-list, with result-plus-error mutation replies; `owner_store.go`
+    submits each complete mutation once and names doc ls/show inspection after
+    a lost response. Existing token gates, bound values, cancellation, visible
+    owner failures and no-fallback routing remain. No new endpoint or timeout.
+  - New `localdolt/documents_test.go`, CLI/MCP/storeipc `doc_test.go` files test
+    the tagged cases, real committed lifecycle/index/recall, empty/concurrent
+    identity, SQL constraint rollback, dirty/proposal isolation, path/config/
+    width/deny refusals, direct/owner CLI, modern/legacy MCP, symlinks and
+    lost/confirmed-late replies. `tools_test.go` and `serve_test.go` extend tool
+    expectations; existing checks remain. This record and PRD §§7/8/11/16 add
+    before/after phasing. No dependency, durable migration or global support is
+    added, and these local fixture checks establish no cross-machine path parity.
+
+  Document/render integration retains #133's renderer, IPC method, instructions
+  and templates. Both complete operations share the existing `proposalMu`.
+  The document CLI tests now exercise configured render output directly and
+  through the live owner after first-document config finalization; the MCP
+  tests exercise both tools on modern and legacy sessions. They verify the
+  document commit is render's source and appears in real activity, while
+  document metadata/chunks and hash no-op behavior remain unchanged. The
+  renderer's category set remains #133's; no document-body section is added.
+  After integrating #131, the same CLI/MCP checks exercise `repo status --local`
+  (`local: true` over MCP) and default no-remote status against the document
+  commit. Both preserve the stored document and main hash. `RepoStatus` retains
+  #131's full operation, remote-aware default and explicit offline option;
+  document add/remove, render and status share the existing mutation mutex.
 - Build or inspect the derived embedding side-store (PRD §8.2): `go run
   ./cmd/memdolt index rebuild` synchronizes `.memdolt/embeddings.sqlite`
   with every committed fact, decision, task, and document chunk, while

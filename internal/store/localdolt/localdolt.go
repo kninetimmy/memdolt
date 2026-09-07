@@ -256,7 +256,7 @@ func (s *Store) commitConn(ctx context.Context, conn *sql.Conn, req store.Commit
 		return store.CommitResult{}, err
 	}
 	if req.RequireClean {
-		if err := requireCleanWorkingSet(ctx, conn, "commit the session-note batch"); err != nil {
+		if err := requireCleanWorkingSet(ctx, conn, "commit the guarded write"); err != nil {
 			return store.CommitResult{}, err
 		}
 	}

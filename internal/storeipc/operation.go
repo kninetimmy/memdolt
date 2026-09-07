@@ -40,6 +40,10 @@ const (
 	opPull             = "pull"
 	opListRemotes      = "list_remotes"
 	opAddRemote        = "add_remote"
+	opDocAdd           = "doc_add"
+	opDocList          = "doc_list"
+	opDocShow          = "doc_show"
+	opDocRemove        = "doc_remove"
 	opRender           = "render"
 	opRepoStatus       = "repo_status"
 )
@@ -69,6 +73,10 @@ type Backend interface {
 	Pull(context.Context, localdolt.TransferOptions) (localdolt.TransferResult, error)
 	ListRemotes(context.Context) ([]localdolt.Remote, error)
 	AddRemote(context.Context, localdolt.Remote) (localdolt.Remote, error)
+	DocAdd(context.Context, localdolt.DocAddOptions) (localdolt.DocResult, error)
+	DocList(context.Context) ([]localdolt.Document, error)
+	DocShow(context.Context, string) (localdolt.DocResult, error)
+	DocRemove(context.Context, string, memory.Actor) (localdolt.DocResult, error)
 	Render(context.Context) (render.Result, error)
 	RepoStatus(context.Context, localdolt.RepoStatusOptions) (localdolt.RepoStatusReport, error)
 }
@@ -168,6 +176,18 @@ type addRemoteResult struct {
 	Error  string           `json:"error,omitempty"`
 }
 
+type docIdentityArgs struct {
+	Ident string       `json:"ident"`
+	Actor memory.Actor `json:"actor"`
+}
+
+// Document data can commit before optional local config finalization fails.
+// The authenticated reply carries both facts without replaying the mutation.
+type docMutationResult struct {
+	Result localdolt.DocResult `json:"result"`
+	Error  string              `json:"error,omitempty"`
+}
+
 // ReviewAcceptFunc is the application review gate an owner exposes. The
 // production functions are internal/review.Accept and AcceptExpected; keeping
 // it explicit prevents the transport from falling back to a raw storage merge
@@ -189,6 +209,38 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var result any
 	var err error
 	switch req.Operation {
+	case opDocList:
+		result, err = h.store.DocList(ctx)
+	case opDocShow:
+		args, decodeErr := operationArgs[docIdentityArgs](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		result, err = h.store.DocShow(ctx, args.Ident)
+	case opDocAdd, opDocRemove:
+		var changed localdolt.DocResult
+		var changeErr error
+		if req.Operation == opDocAdd {
+			args, decodeErr := operationArgs[localdolt.DocAddOptions](req.Args)
+			if decodeErr != nil {
+				err = decodeErr
+				break
+			}
+			changed, changeErr = h.store.DocAdd(ctx, args)
+		} else {
+			args, decodeErr := operationArgs[docIdentityArgs](req.Args)
+			if decodeErr != nil {
+				err = decodeErr
+				break
+			}
+			changed, changeErr = h.store.DocRemove(ctx, args.Ident, args.Actor)
+		}
+		wire := docMutationResult{Result: changed}
+		if changeErr != nil {
+			wire.Error = changeErr.Error()
+		}
+		result = wire
 	case opRender:
 		// A complete render executes once in the owner. Its typed result also
 		// preserves backups and partial replacements when preparation/finalization
