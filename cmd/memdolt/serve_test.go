@@ -95,8 +95,8 @@ func TestServeCommandUsesStdioWithoutNonProtocolOutput(t *testing.T) {
 	if tools.TTLMs <= 0 {
 		t.Fatalf("tools/list ttlMs = %d, want positive", tools.TTLMs)
 	}
-	if len(tools.Tools) != 19 {
-		t.Fatalf("serve advertised %d tools, want the 18 existing tools including render and repo_status plus doc_add", len(tools.Tools))
+	if len(tools.Tools) != 20 {
+		t.Fatalf("serve advertised %d tools, want the 19 existing tools plus locate", len(tools.Tools))
 	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("close serve command: %v (stderr %q)", err, stderr.String())

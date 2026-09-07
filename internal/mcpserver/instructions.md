@@ -9,6 +9,11 @@
   backups before retrying any partial failure or unknown response.
 - To find code by intent, use `locate` before grep. Use grep only to confirm or
   narrow the files that locate returns.
+  Before issue #138 this named an absent tool; after it the real local locator
+  lazily refreshes tracked source in separate SQLite and returns at most six
+  lines and 400 characters per snippet. It never writes memory or flushes notes.
+  Treat breadcrumbs as leads: metadata-preserving edits can remain unseen, and
+  fusion has no nonsense floor. Report path, deny-rule and model failures.
 - Never write durable facts or decisions directly. Stage claims with
   `propose_fact`, `propose_decision`, or `propose_supersede`; a human promotes
   them through review.

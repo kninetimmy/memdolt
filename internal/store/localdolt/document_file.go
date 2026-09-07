@@ -238,35 +238,7 @@ func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig, metadat
 // link or a source path swapped before Open must not expose the owner token.
 // The protected file is opened for Stat only; its contents are never read.
 func checkDocumentOwnerFile(metadata *os.Root, source os.FileInfo) (err error) {
-	expected, err := metadata.Lstat(layout.PidFileName)
-	if os.IsNotExist(err) {
-		return nil // A short-lived direct owner need not have an IPC endpoint.
-	}
-	if err != nil {
-		return fmt.Errorf("verify protected memdolt owner metadata: %w", err)
-	}
-	if !expected.Mode().IsRegular() {
-		return errors.New("cannot verify protected memdolt owner metadata: expected a regular file")
-	}
-	owner, err := metadata.Open(layout.PidFileName)
-	if err != nil {
-		return fmt.Errorf("open protected memdolt owner metadata for identity verification: %w", err)
-	}
-	defer func() { err = errors.Join(err, owner.Close()) }()
-	actual, err := owner.Stat()
-	if err != nil {
-		return fmt.Errorf("stat protected memdolt owner metadata: %w", err)
-	}
-	if !actual.Mode().IsRegular() || !os.SameFile(expected, actual) {
-		return errors.New("protected memdolt owner metadata identity could not be verified")
-	}
-	// Both identities below come from File.Stat on open handles. In particular,
-	// Windows has already obtained file IDs; SameFile need not perform a later
-	// path lookup whose failure could otherwise be mistaken for different files.
-	if os.SameFile(source, actual) {
-		return errors.New("document ingestion refuses protected memdolt owner metadata")
-	}
-	return nil
+	return layout.CheckOwnerSource(metadata, source)
 }
 
 // Before missing-source resolution, a failed full-path EvalSymlinks fell back

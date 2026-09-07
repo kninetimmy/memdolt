@@ -76,6 +76,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: go test -tags golden,gms_pure_go ./tests/golden/... -v -timeout 30m -run TestRetrievalGolden
 
+      - name: Golden locator gate
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -tags golden,gms_pure_go ./tests/golden/... -run TestLocateGolden -count=1 -timeout 30m
+
   # A separate lane rather than a fourth entry in the matrix above: a new
   # matrix dimension would re-render the protected status-check names the test
   # job produces (`Test (ubuntu-latest)` etc.) and silently break branch

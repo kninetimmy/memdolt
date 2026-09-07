@@ -1,0 +1,32 @@
+[
+  {
+    "path": "services/payments.py",
+    "sha256": "2c604c284339225cca8e38d1053604cb6feda9c7ea0a16a9cda8932f74ec6a5b",
+    "content": "\"\"\"Payment capture and refund orchestration for the checkout service.\"\"\"\n\nimport logging\n\nlogger = logging.getLogger(__name__)\n\n\nclass PaymentProcessor:\n    \"\"\"Coordinates charge authorization against the payment gateway.\"\"\"\n\n    def authorize_charge(self, amount_cents: int, token: str) -> bool:\n        \"\"\"Authorize a charge for the given amount and card token.\"\"\"\n        logger.info(\"authorizing %d cents\", amount_cents)\n        return amount_cents > 0\n\n\ndef issue_refund(transaction_id: str, amount_cents: int) -> bool:\n    \"\"\"Issue a partial or full refund for a settled transaction.\"\"\"\n    return amount_cents >= 0\n"
+  },
+  {
+    "path": "geo/distance.go",
+    "sha256": "6c641eeb9dcbffea79e3b4d70d2ce22853c76241b5ac710880c7183d5c62f070",
+    "content": "// Package geo provides planar geometry helpers for the mapping subsystem.\npackage geo\n\nimport \"math\"\n\n// Point is a 2D coordinate in the plane.\ntype Point struct {\n\tX float64\n\tY float64\n}\n\n// EuclideanDistance returns the straight-line distance between two points.\nfunc EuclideanDistance(a, b Point) float64 {\n\tdx := a.X - b.X\n\tdy := a.Y - b.Y\n\treturn math.Sqrt(dx*dx + dy*dy)\n}\n"
+  },
+  {
+    "path": "src/auth/session.ts",
+    "sha256": "ade17c07bc913a17d7ddec9f32ffd09a239675885cfea72679a965b6ace5d21b",
+    "content": "/** @module session - Browser session token lifecycle for the web client. */\n\nexport interface Session {\n  token: string;\n  expiresAt: number;\n}\n\nexport function createSession(token: string, ttlSeconds: number): Session {\n  return { token, expiresAt: Date.now() + ttlSeconds * 1000 };\n}\n\nexport function isSessionExpired(session: Session): boolean {\n  return Date.now() > session.expiresAt;\n}\n"
+  },
+  {
+    "path": "lib/retry.js",
+    "sha256": "410bd473621f59ec5fcee0a0d02d31c26451e09037a6cf596f3ee4bff680babc",
+    "content": "/** @module retry - Exponential backoff retry helper for flaky network calls. */\n\nexport function backoffDelay(attempt) {\n  return Math.min(1000 * 2 ** attempt, 30000);\n}\n\nexport async function retryWithBackoff(fn, maxAttempts) {\n  let lastError;\n  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {\n    try {\n      return await fn();\n    } catch (err) {\n      lastError = err;\n    }\n  }\n  throw lastError;\n}\n"
+  },
+  {
+    "path": "src/Inventory/StockLedger.cs",
+    "sha256": "1f543db3518f2c86a1bbdab22b66e44b357254f3561b5fd67d3db7a40bb00a91",
+    "content": "/// <summary>Warehouse stock ledger tracking for the fulfillment pipeline.</summary>\nusing System;\n\nnamespace Inventory\n{\n    public class StockLedger\n    {\n        public int AvailableUnits(string sku)\n        {\n            return sku.Length;\n        }\n\n        public void ReserveStock(string sku, int quantity)\n        {\n            Console.WriteLine($\"reserving {quantity} of {sku}\");\n        }\n    }\n}\n"
+  },
+  {
+    "path": "src/main/java/app/RateLimiter.java",
+    "sha256": "46301ed2c3bde4862d9ef5172b5acb02984098b6bd81877ea8bc76fddc1c1e05",
+    "content": "/** Token-bucket rate limiting for the public API gateway. */\npackage app;\n\npublic class RateLimiter {\n    private final int capacity;\n\n    public RateLimiter(int capacity) {\n        this.capacity = capacity;\n    }\n\n    public boolean tryAcquire(int tokens) {\n        return tokens <= capacity;\n    }\n}\n"
+  }
+]
