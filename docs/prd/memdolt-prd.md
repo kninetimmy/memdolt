@@ -762,7 +762,9 @@ contract or permission to substitute a stub before its backend lands.
 Before issue #132, `doc_add` was still one of those absent names. After it,
 the real repository `doc_add` registration initially joined the sixteen tools
 present after #106. After integrating #133, those tools and `render` remain,
-and `doc_add` is the eighteenth tool. Its typed input is `file` plus optional
+and `doc_add` became the eighteenth tool. After subsequently integrating #131,
+`render` and `repo_status` remain and `doc_add` is the nineteenth tool.
+Its typed input is `file` plus optional
 `title`, with no global, actor, confinement-disable or arbitrary SQL argument.
 §11.2 records the
 shared document operation and path boundary; other deferred names stay absent.
@@ -970,6 +972,22 @@ Server instructions embed memhub's routing rules (recall-before-ledger, locate-b
 
 The server instructions text is itself a versioned, first-class artifact: checked in, and its changes are reviewed as deliberately as a schema migration, not tweaked ad hoc. It encodes the agent's recall-decision policy — recall-before-ledger, when to file a fact vs. a decision, what prefix a new fact key gets — and an undiscussed edit to that policy is exactly as load-bearing as an undiscussed column change. **[design]**
 
+**Remote inspection handoff (issue #131).** Before this slice, production
+registered seventeen tools (sixteen M3 tools plus #133's `render`) and
+`repo_status` remained absent. After it, those seventeen tools retain their
+behavior and the typed `repo_status` handler calls the same complete
+owning-store inspection as the CLI below. It accepts optional `remote`,
+`local`, `diff` and `user`; it cannot select another repository or supply a
+password. `local` requests offline
+inspection; `diff` requests exact committed local-to-remote changes with
+nullable row values. Structured output retains local fields and adds selected
+remote, captured commit hashes, status, assessment and any diff/remedy.
+Modern/legacy agent-only attribution, discovery, long tool-list TTL, notes,
+elicitation and orderly shutdown are unchanged. The eighteen-tool count
+binds `RegisterTools`, not arbitrary SDK servers. Global proposals remain
+counts from this repository. `repo_pull`/`repo_push` remain unregistered;
+their destination names above do not authorize refusal stubs.
+
 ### 11.2 CLI
 
 Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
@@ -999,6 +1017,88 @@ remote is configured, reachable, current, synchronized, or absent. After #123,
 remote status/diff (including `repo status --diff`), transfers, conflict dialogs,
 and hub setup remained unshipped. Issue #125 adds the clone transfer below;
 the other operations and the full M4 scope and exit gate in §16 still apply.
+
+**M4 remote inspection subset (issue #131):** before this slice, the #123
+status contract above was the default and the #129 slice below still left
+remote status/diff pending. After it, `memdolt repo status [remote] [--local]
+[--diff] [--user <sql-user>] [--dir <repository>] [--json]` inspects configured
+origin by default; a single optional name selects another configured remote.
+Missing origin produces a local `no-remote` result and `repo remote add`
+remedy. An explicitly missing remote is an error. `--local` preserves the
+former offline report, performs no remote/configuration request, and is
+incompatible with a remote operand, `--diff` or `--user`. Invalid combinations
+name command help. All prior local fields, pending reachability filtering,
+repo/global count meaning, existing-store guards and visible failures remain.
+
+One `Store.RepoStatus` operation captures local committed main, its schema,
+main working/staged table changes and pending counts under the owning Store's
+existing `proposalMu`. It refreshes validated native remote configuration and
+reuses the transfer credential contract: explicit SQL user overrides the
+validated stored user, absence of both means anonymous, and only the executing
+owner's `DOLT_REMOTE_PASSWORD` supplies a password. Caller passwords never
+cross IPC. Unsafe URLs/parameters refuse without echoing credentials; personal
+Dolt credentials are never loaded. The existing main-only fetch arm of
+`transferProcedure` reads committed remote main and updates only the selected
+tracking ref. File sources remain preserved; no tags, proposals, other refs
+or protocol stdout are replaced or used for fetch progress. Fetched objects
+and that tracking ref may remain after success or refusal. Authentication,
+network/read, missing-main and incompatible-schema failures stay visible;
+none is reported as current or no-remote.
+
+Ancestry compares the captured immutable hashes: equality is `current`, a
+contained remote is `ahead`, and a contained local is `behind`. True divergence
+is `diverged-mergeable`, `conflicted`, or `diverged-unassessed`. Dirty divergence
+retains its working/staged content and explains that clean main is required
+for merge assessment. Unassessable ancestry is an explicit refusal with a
+manual-inspection remedy. Hashes identify observed snapshots, not a guarantee
+that a remote remains at that head after the fetch.
+
+`statusSchema` retains transfer's exact column/type/generation checks and adds
+the known unique/FK constraints for status alone. `previewRepoMerge` requires
+clean main without an active merge/conflict and identical validated DDL at
+base/local/remote; schema changes or unknown constraints refuse assessment.
+It performs an actual no-commit/no-fast-forward merge of the captured remote
+hash in a transaction. It reads both Dolt conflict surfaces, attributes and
+verifies violation records, and clears only already-satisfied records inside
+that transaction. It also checks all maintained unique indexes and the
+document FK against the merged rows, even if no surface reports a violation.
+It always rolls back, including on cancellation, and verifies main hash,
+working/staged roots and clean merge/conflict state afterward. Rollback or
+restoration failure is a visible refusal with an inspection remedy, never
+successful read-only inspection. No merge/genesis/migration commit is made.
+Review's existing allow-list and promotion protocol remain unchanged: the
+extracted `verifyMergeViolations` accepts the status caller's separate validated
+table/key list, while `reviewViolations` still enforces its prior review list.
+`requireConstraintHolds` retains its checks/error text and now distinguishes
+proven duplicates from read/unknown failures internally. No contradiction
+inference, promotion deny-list scan or automatic conflict resolution runs here.
+
+`--diff` reports actual Dolt differences FROM captured local main TO captured
+remote main, ordered by table then primary key and classification. Each changed
+table includes its rows and any changed before/after DDL. Row types are
+`added`, `modified` and `deleted`; existing row images contain every column as
+an SQL-rendered string or explicit NULL, and an absent image is omitted.
+Revision-qualified diff tables use the validated committed columns, so even
+dirty local DDL cannot substitute working or proposal data. Ordinary status
+does not include row bodies. A missing remote or unvalidated incoming schema
+gets no claimed diff.
+
+CLI `repo.go`, authenticated `storeipc.Backend`/operation/`OwnerStore`, and MCP
+`repo.go` delegate the whole inspection once to this shared store method.
+Owner discovery still fails closed; a lost reply is never resubmitted and
+names inspection before retry. `runRepoStatus` now closes before success
+output. `PendingProposals` retains its behavior through an extracted
+connection-capable reader. The mutex now includes status; all earlier
+participants, including #133's render, retain their semantics, while other
+reads/migrations and foreign Dolt processes remain outside.
+No derived/index/render/configuration file is changed. The matching AGENTS
+record names every changed file/shared seam and the before/after limits.
+Local synthetic CLI/direct/owner/MCP tests exercise
+ancestry, both conflict surfaces, exact NULL/deletion diffs, preservation,
+interleavings, malformed/unsafe inputs, authentication/cancellation and
+cleanup/output/lost-response failures. They establish no real-hub deployment,
+credential acceptance, version compatibility or full two-machine M4 gate.
+No dependency, migration or deferred backend is added.
 
 **M4 clone bootstrap (issue #125):** before this issue there was no `clone`
 command. After it, `memdolt clone <remote-url> [--dir <repository>]
@@ -1416,13 +1516,18 @@ They establish no broader cross-machine path/format guarantee, global
 document backend or full M5 acceptance.
 
 After integration with #133, the existing seventeen tools including `render`
-remain and `doc_add` is the eighteenth. Both complete owner operations share
+remained and `doc_add` became the eighteenth. After integration with #131,
+the existing eighteen tools including `render` and `repo_status` remain and
+`doc_add` is the nineteenth. All three complete owner operations share
 `proposalMu`. Direct/authenticated-owner CLI and modern/legacy MCP integration
 tests verify rendering captures the ingested document commit while preserving
 its metadata, chunks and content-hash no-op. The first-document config update
 preserves real render settings. The renderer's existing categories, file
 replacement rules, instructions and templates remain; document commits appear
 as real activity, without a new document-body category.
+The same combined CLI/MCP checks now exercise explicit offline status and
+default no-remote status against the document commit, preserving the stored
+metadata/chunks and main hash. Configured-remote status behavior remains #131's.
 
 **Committed memory rendering (issue #133).** Before this delivery, the §12
 render workflow and its CLI/MCP names were deferred. After it, `memdolt render
@@ -1459,6 +1564,8 @@ a nonparticipating change to main; a source/scan/row-close failure refuses
 before output preparation. Pending proposals and uncommitted rows are excluded,
 and the current working set, refs and history remain unchanged. This boundary
 binds `Store.Render`, not every store read or generated-text helper.
+Issue #131 subsequently adds repository status to the same mutex without
+changing render's snapshot/file ordering or preservation behavior.
 
 `internal/render.writeFiles` uses directory handles, refuses symlink/reparse
 traversal and unmarked same-name user files, and prepares both complete sibling
@@ -1801,6 +1908,17 @@ the two-machine round-trip/no-conversion gate remains unchanged. Remote
 status/diff, divergence merge/conflict elicitation, hub setup/authentication
 operations and measured version compatibility, topology configuration and
 the optional remote Store remain pending. M5 and M6 are unchanged.
+
+**M4 remote inspection subset (issue #131):** before this slice, #129 still
+left remote status/diff pending. After it, remote-aware `repo status`, explicit
+offline `--local`, exact committed `--diff`, and the real `repo_status` MCP
+tool ship with §§11.1–11.2's captured-snapshot, retained-fetch and rollback
+boundaries. Local synthetic tests cover direct/authenticated-owner and
+modern/legacy MCP operation, conflicts/constraints and preservation/refusals.
+Divergence resolution, hub deployment/auth setup, measured version acceptance,
+topology configuration and the optional remote Store remain pending. The
+two-machine round-trip/no-conversion exit gate is unchanged; this slice does
+not complete M4.
 
 **M5 repository document subset (issue #132):** the earlier milestone records
 left all M5 work deferred. Repository doc add/ls/show/rm and real MCP `doc_add`

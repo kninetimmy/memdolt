@@ -79,6 +79,8 @@ above or invoke memhub. The complete structural blast radius is:
   sessions retain their prior boundaries. Pinned reads still identify one
   snapshot if a nonparticipating writer moves main. No memory, refs, dirty
   rows, note batches or history are changed by rendering.
+  Issue #131 subsequently adds repository status to the same mutex; render's
+  snapshot/file ordering and preservation behavior remain unchanged.
 - `storeipc/operation.go` adds `Backend.Render` and one explicit `render`
   operation; `owner_store.go` submits the entire operation once and preserves
   results with errors. No output path or raw query is accepted for rendering.
@@ -813,6 +815,114 @@ export GOFLAGS=-tags=gms_pure_go
   obligations stayed pending. Issue #125 adds only the clone transfer above;
   issue #127 adds the bounded push/pull above; the other obligations remain
   pending (PRD §§11.2 and 16).
+
+  **Before issue #131, the paragraph above described the default: status was
+  always offline and lived entirely in the CLI. After #131, `memdolt repo
+  status [remote] [--local] [--diff] [--user <sql-user>] [--dir <repository>]
+  [--json]` defaults to configured origin, and `--local` retains that former
+  offline behavior.** Missing origin gives an explicit `no-remote` local
+  report and setup remedy; an explicitly missing named remote refuses.
+  `--local` cannot be combined with a remote, `--diff` or `--user`.
+  All prior local fields remain. The report adds selected remote, exact
+  captured remote main and merge-base hashes, status and assessment. Status
+  distinguishes `current`, `ahead`, `behind`, `diverged-mergeable`, `conflicted`
+  and `diverged-unassessed`; dirty divergence explains the clean-main
+  prerequisite. Ancestry/schema/read failures are visible refusals.
+  `--diff` uses actual Dolt differences FROM captured local main TO captured
+  remote main, sorted by table and row key, with added/modified/deleted rows.
+  Values are SQL-rendered strings or explicit NULLs; a nonexistent before or
+  after row image is omitted. Changed table definitions are included. Ordinary
+  status omits row bodies. Missing/unvalidated remote data gets no claimed diff.
+
+  The complete structural blast radius for #131 is:
+
+  - `cmd/memdolt/repo.go` keeps `repo remote`, replaces status's scattered
+    reads with one typed store operation and closes before success output.
+    The CLI-local `readRepoStatus`, `repoStatusReport` and `repoTableChange`
+    become `readLocalRepoStatus`, `RepoStatusReport` and `RepoTableChange` in
+    localdolt; no other command's report or output ordering changes.
+    Its former local fields and pending-target meaning remain; only status's
+    default becomes remote-aware. The existing-store guard now reuses
+    `RequireExistingTransferStore`, also retaining its managed-path checks.
+    `openCommandStore` still fails closed on owner discovery/authentication;
+    ordinary `Open`, `Migrate`, and other commands retain their behavior.
+  - New `localdolt/repo_status.go` owns `RepoStatusOptions`, the shared report,
+    `Store.RepoStatus`, immutable schema/diff reads and `previewRepoMerge`.
+    `repoDiff`/`repoDiffRows` produce `RepoDiff`, `RepoTableDiff` and
+    `RepoRowDiff` from validated revisions with bound values; their nullable
+    row representation does not change review's `ProposalChange` format.
+    `proposalMu` now also covers the complete status capture/fetch/preview/
+    rollback, including offline capture. Before #131 it covered the mutations,
+    transfers, remote configuration and #133 render described above; all retain
+    their ordering and semantics. Other reads/migrations remain outside, as do
+    foreign Dolt processes. Status may delay participating writes during fetch.
+    It reads committed main's version and snapshots, preserves working/staged
+    data and proposals, and never creates a merge/genesis/migration commit.
+  - Status reuses `memdolt_remotes`' private owner capability to refresh
+    validated native configuration, then `configuredTransferRemote`,
+    `validateTransferFile`, `runEngineTransfer` and `redactCloneError`.
+    Their prior URL/user/password, anonymous, explicit-user precedence,
+    source-preserving opener, cancellation, credential redaction and absence of
+    personal credential loading remain. The main-only fetch/tag/stdout restrictions
+    previously bound the pull arm of `transferProcedure`; after #131 the same
+    arm also serves status. It still updates only the selected tracking ref;
+    fetched objects/ref updates may remain even after refusal. Push/pull
+    promotion rules, clone and native Dolt procedures remain unchanged.
+  - `statusSchema` reuses `validateTransferSchema`; `statusConstraints` and
+    `statusUniqueKeys` additionally check the known unique/FK constraints.
+    Only status owns that tighter constraint
+    contract; transfer's existing column/generation checks remain unchanged.
+    `previewRepoMerge` requires identical validated base/local/remote DDL,
+    clean main and no active merge/conflict. It merges the captured remote
+    hash inside a transaction, reads both conflict surfaces, verifies the
+    known unique indexes and document FK against actual merged rows, and
+    always rolls back, including on cancellation. It verifies main hash,
+    working/staged roots and clean merge/conflict state after rollback.
+    Rollback/restoration failures refuse and name inspection remedies.
+    This preview never promotes or resolves user conflicts; unknown records,
+    schema changes or unassessable ancestry refuse. The restriction binds
+    this preview alone, not every Dolt transaction or review acceptance.
+  - `localdolt/review.go` extracts `pendingProposals` for a caller-held
+    connection, retaining `PendingProposals`' reachability/count semantics.
+    It extracts `verifyMergeViolations` behind the unchanged review table
+    allow-list; status supplies its own validated table/key list. Attribution,
+    known-constraint verification and clearing only already-satisfied records
+    remain. `requireConstraintHolds` adds an internal error identity for a
+    proven duplicate without changing its check or existing diagnostics.
+    Shared `surfaceSummary`, `readViolations`, `classifyViolations`,
+    `rowsTouchedByMerge`, `uniqueIndexColumns` and `requireSurfacesEmpty`
+    retain their existing read, attribution and final-verification behavior.
+    Review still promotes only through its existing guards/commit protocol;
+    status uses these helpers only inside a rolled-back preview. Status does
+    not call contradiction inference or the promotion deny-list scanner.
+  - `storeipc/operation.go` and `owner_store.go` add typed `repo_status` to
+    `Backend` and the explicit allow-list. One request carries the whole
+    operation; no caller password travels over IPC and no retry occurs after
+    a lost response. Existing token authentication, cancellation, owner
+    authority and other operations retain their contracts.
+  - `mcpserver/tools.go` adds `repo_status` and new `mcpserver/repo.go` delegates
+    its typed input/output to that same store method. Before #131 production
+    registered seventeen tools: sixteen M3 tools plus #133's `render`. After
+    it, those seventeen remain and `repo_status` is the eighteenth.
+    Discovery, modern/legacy agent attribution, tool-list cache,
+    notes, review and shutdown remain. This count binds `RegisterTools` alone.
+    Global proposals are repository-local counts, never a global-store read;
+    `repo_pull` and `repo_push` remain absent until their MCP operations ship.
+  - New status tests in localdolt, storeipc, CLI and MCP cover production
+    direct/owner/modern/legacy paths, exact diffs, conflicts/constraints,
+    preservation/interleavings, malformed schemas and lost/cleanup/output
+    failures. `transfer_auth_test.go` extends its synthetic authentication/
+    cancellation cases to status. `repo_test.go` retains the offline fixtures
+    using `--local` and adapts failure injection to the single operation;
+    clone/transfer tests also explicitly select offline inspection. MCP tools
+    and serve tests update exact registration expectations. Tests change no
+    production behavior. PRD §§11.1/11.2/16 preserve the same before/after.
+
+  Evidence is local synthetic filesystem/transport testing with the pinned
+  driver. Derived/index/render/configuration files remain local and unchanged.
+  No dependency, migration, conflict-resolution UI, hub deployment/auth setup,
+  measured hub/client version acceptance, optional remote Store or full M4
+  completion is added. The two-machine acceptance gate remains pending.
 - Check a repository: `go run ./cmd/memdolt doctor` reports the store
   lock's ownership state (held, an orphaned record, absent), whether a live
   owner answers on its IPC endpoint, and whether the store's schema is
@@ -924,7 +1034,9 @@ export GOFLAGS=-tags=gms_pure_go
     document output; it retains confirmed data alongside `IsError` for a late
     failure. Before sibling integration, `tools.go` added its one real
     registration to the prior sixteen. After integrating #133, its seventeen
-    tools including `render` remain and `doc_add` is the eighteenth.
+    tools including `render` remained and `doc_add` became the eighteenth.
+    After integrating #131, its eighteen tools including `render` and
+    `repo_status` remain and `doc_add` is the nineteenth.
     Discovery, cache hints, modern/legacy agent-only attribution, note batching,
     elicitation and shutdown behavior remain. The exact registered set binds
     `RegisterTools` alone, not arbitrary SDK servers.
@@ -950,6 +1062,11 @@ export GOFLAGS=-tags=gms_pure_go
   document commit is render's source and appears in real activity, while
   document metadata/chunks and hash no-op behavior remain unchanged. The
   renderer's category set remains #133's; no document-body section is added.
+  After integrating #131, the same CLI/MCP checks exercise `repo status --local`
+  (`local: true` over MCP) and default no-remote status against the document
+  commit. Both preserve the stored document and main hash. `RepoStatus` retains
+  #131's full operation, remote-aware default and explicit offline option;
+  document add/remove, render and status share the existing mutation mutex.
 - Build or inspect the derived embedding side-store (PRD §8.2): `go run
   ./cmd/memdolt index rebuild` synchronizes `.memdolt/embeddings.sqlite`
   with every committed fact, decision, task, and document chunk, while

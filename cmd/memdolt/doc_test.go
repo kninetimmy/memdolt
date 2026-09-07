@@ -113,6 +113,18 @@ func TestDocumentRenderIntegrationDirectAndOwner(t *testing.T) {
 				if !bytes.Contains(project, []byte("# Document render integration")) || !bytes.Contains(ledger, []byte("doc add "+added.Document.ID)) || !bytes.Contains(ledger, []byte("agent:integration-agent")) || bytes.Contains(ledger, []byte(referenceBody)) {
 					t.Fatal("render lost configured naming or document commit provenance, or changed its category set")
 				}
+				for _, local := range []bool{true, false} {
+					args := []string{"repo", "status", "--dir", base, "--json"}
+					want := "no-remote"
+					if local {
+						args = append(args, "--local")
+						want = "offline"
+					}
+					status := decodeJSON[localdolt.RepoStatusReport](t, runMemdolt(t, args...))
+					if status.Status != want || status.MainCommit != added.Commit || !status.Clean {
+						t.Fatalf("document repository status local=%t: %+v", local, status)
+					}
+				}
 				after := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "show", added.Document.ID, "--dir", base, "--json"))
 				if !reflect.DeepEqual(shown, after) {
 					t.Fatalf("render changed document metadata/chunks: before=%+v after=%+v", shown, after)

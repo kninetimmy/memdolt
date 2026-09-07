@@ -45,6 +45,7 @@ const (
 	opDocShow          = "doc_show"
 	opDocRemove        = "doc_remove"
 	opRender           = "render"
+	opRepoStatus       = "repo_status"
 )
 
 // Backend is the initialized data-store surface the live owner exposes. The
@@ -77,6 +78,7 @@ type Backend interface {
 	DocShow(context.Context, string) (localdolt.DocResult, error)
 	DocRemove(context.Context, string, memory.Actor) (localdolt.DocResult, error)
 	Render(context.Context) (render.Result, error)
+	RepoStatus(context.Context, localdolt.RepoStatusOptions) (localdolt.RepoStatusReport, error)
 }
 
 var _ Backend = (*localdolt.Store)(nil)
@@ -248,6 +250,13 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			rendered.Error = renderErr.Error()
 		}
 		result = rendered
+	case opRepoStatus:
+		args, decodeErr := operationArgs[localdolt.RepoStatusOptions](req.Args)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		result, err = h.store.RepoStatus(ctx, args)
 	case opListRemotes:
 		result, err = h.store.ListRemotes(ctx)
 	case opAddRemote:

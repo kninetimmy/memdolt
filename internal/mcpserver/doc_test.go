@@ -61,6 +61,16 @@ func TestDocumentMCPPathsSchemasAndModernLegacyAttribution(t *testing.T) {
 			if rendered.Status != "written" || rendered.SourceCommit != added.Commit {
 				t.Fatalf("render did not capture the ingested document commit: %+v", rendered)
 			}
+			for _, local := range []bool{true, false} {
+				status := callAs[localdolt.RepoStatusReport](t, client, "repo_status", map[string]any{"local": local})
+				want := "no-remote"
+				if local {
+					want = "offline"
+				}
+				if status.Status != want || status.MainCommit != added.Commit || !status.Clean {
+					t.Fatalf("MCP document repository status local=%t: %+v", local, status)
+				}
+			}
 			shown, err := st.DocShow(context.Background(), added.Document.ID)
 			if err != nil || !reflect.DeepEqual(shown.Document, added.Document) || !reflect.DeepEqual(shown.Chunks, added.Chunks) {
 				t.Fatalf("MCP render changed document metadata/chunks: %+v, %v", shown, err)

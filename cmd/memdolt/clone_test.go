@@ -58,8 +58,8 @@ func TestCloneCommandJSONHumanAndReopen(t *testing.T) {
 	if progress.Len() != 0 {
 		t.Fatalf("Dolt progress escaped: %q", progress)
 	}
-	var status repoStatusReport
-	if err := json.Unmarshal([]byte(runMemdolt(t, "repo", "status", "--dir", base, "--json")), &status); err != nil || status.MainCommit != result.MainCommit || !status.Clean {
+	var status localdolt.RepoStatusReport
+	if err := json.Unmarshal([]byte(runMemdolt(t, "repo", "status", "--local", "--dir", base, "--json")), &status); err != nil || status.MainCommit != result.MainCommit || !status.Clean {
 		t.Fatalf("reopened status = %+v, %v", status, err)
 	}
 	if out := runMemdolt(t, "task", "list", "--dir", base); !strings.Contains(out, "clone command task") {

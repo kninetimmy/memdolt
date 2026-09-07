@@ -232,7 +232,7 @@ func TestTransferCLIPullPreservesTagsAndStdout(t *testing.T) {
 						t.Errorf("pull = %+v, want main %s", got, wantMain)
 					}
 				}
-				status := decodeJSON[repoStatusReport](t, runMemdolt(t, "repo", "status", "--dir", b, "--json"))
+				status := decodeJSON[localdolt.RepoStatusReport](t, runMemdolt(t, "repo", "status", "--local", "--dir", b, "--json"))
 				if status.MainCommit != wantMain || !status.Clean {
 					t.Errorf("reopened status = %+v, want clean main %s", status, wantMain)
 				}

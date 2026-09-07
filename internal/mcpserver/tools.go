@@ -36,7 +36,7 @@ type Backend interface {
 	ReviewAcceptExpected(context.Context, string, string, store.Actor, bool) (localdolt.AcceptResult, error)
 }
 
-// Toolset owns the shipped tools and their session-scoped state: notes waiting
+// Toolset owns the implemented tools and their session-scoped state: notes waiting
 // for the five-minute or orderly-shutdown flush and single-use elicitation
 // rows waiting for one short-lived response.
 type Toolset struct {
@@ -59,9 +59,8 @@ type noteGroup struct {
 	notes []memory.Note
 }
 
-// RegisterTools originally added only the implemented M3 surface. Document
-// ingestion and rendering add doc_add and render; other deferred names remain
-// absent, never stubs.
+// RegisterTools adds exactly the implemented surface. Later-milestone
+// names are intentionally absent rather than registered as refusing stubs.
 func RegisterTools(server *mcp.Server, baseDir string, st Backend) *Toolset {
 	return registerTools(server, baseDir, st, noteBatchInterval)
 }
@@ -73,6 +72,7 @@ func registerTools(server *mcp.Server, baseDir string, st Backend, interval time
 		elicit: elicit, elicitErr: elicitErr,
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "status", Description: "Return the current schema and committed-memory counts."}, tools.status)
+	mcp.AddTool(server, &mcp.Tool{Name: "repo_status", Description: "Inspect committed local and remote main (default origin) without promotion. local requests offline status; diff includes exact local-to-remote committed row values. Fetch data and the selected tracking ref may remain. Dirty divergence needs clean main for merge assessment."}, tools.repoStatus)
 	mcp.AddTool(server, &mcp.Tool{Name: "recall", Description: "Recall ranked committed facts, decisions, tasks, and document chunks."}, tools.recall)
 	mcp.AddTool(server, &mcp.Tool{Name: "search", Description: "Search committed decision titles and rationales."}, tools.search)
 	mcp.AddTool(server, &mcp.Tool{Name: "list_tasks", Description: "List committed tasks by status, oldest first."}, tools.listTasks)
