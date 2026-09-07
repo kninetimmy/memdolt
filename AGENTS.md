@@ -1211,6 +1211,10 @@ export GOFLAGS=-tags=gms_pure_go
   and all other deny-list semantics remain. It protects this store's known owner
   file and file aliases, not arbitrary copied secrets or every filesystem/SQL
   reader; it changes no existing stored rows, history or IPC token lifecycle.
+  That is the #132 boundary. After #140, selected import-bundle reads and
+  existing export-output reads are additional explicit callers of the same
+  opened-identity guard. DocAdd behavior remains; readers that do not call
+  the guard still inherit no automatic credential-file protection.
   The changed structure is `document_file.go`'s named-path/identity guard,
   `documents.go` passing the existing metadata handle, CLI help and MCP input
   description, new `mcpserver/doc_owner_test.go`, the added CLI/localdolt

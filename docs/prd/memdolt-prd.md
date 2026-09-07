@@ -1636,6 +1636,11 @@ handling, no response/data/commit/config effects, verification failures and
 ordinary external CLI source acceptance. IPC ownership, token generation,
 schema, retrieval, rendering and repository-status contracts remain unchanged.
 
+That scope statement records the #132 boundary. After #140, selected import
+bundles and existing export outputs also reach the same opened-identity guard;
+the document rule remains unchanged. Protection still belongs to its explicit
+callers, not every filesystem/SQL reader or arbitrary copies of secrets.
+
 The first ingestion into an empty documents table enables
 `[retrieval] include_docs_in_default`, with a visible result/notice if changed.
 Removing all documents resets that baseline trigger. Later unchanged/changed
