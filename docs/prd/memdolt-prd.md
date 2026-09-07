@@ -1932,6 +1932,11 @@ handling, no response/data/commit/config effects, verification failures and
 ordinary external CLI source acceptance. IPC ownership, token generation,
 schema, retrieval, rendering and repository-status contracts remain unchanged.
 
+That scope statement records the #132 boundary. After #140, selected import
+bundles and existing export outputs also reach the same opened-identity guard;
+the document rule remains unchanged. Protection still belongs to its explicit
+callers, not every filesystem/SQL reader or arbitrary copies of secrets.
+
 The first ingestion into an empty documents table enables
 `[retrieval] include_docs_in_default`, with a visible result/notice if changed.
 Removing all documents resets that baseline trigger. Later unchanged/changed
@@ -2233,6 +2238,14 @@ alongside the unchanged reviewed agent lane. It does not complete every CRUD
 or parity item: global memory/promotion, top-level history/status/stats and
 the remaining matrix still need their explicit delivery/disposition.
 
+Before #140 the JSON interop and legacy import rows above remained planned.
+After it, native memdolt interop v1 and explicit tagged memhub-v1 import ship
+under §15's supported-payload, fresh-target, file and partial-progress rules.
+Native ULID/null row images are distinct from numeric-ID memhub input; no
+reverse compatibility or JSON sync is claimed. The nullable v0.2.2 note
+metadata import is included; transcript archives and global migration remain
+excluded. This does not complete the remaining parity matrix.
+
 ---
 
 ## 13. Hub deployment & operations
@@ -2320,7 +2333,98 @@ memdolt/
 
 ## 15. Migration from memhub (one-way, optional)
 
+Before issue #140, the following paragraph specified the planned surface,
+which had not yet shipped:
+
 `memdolt import --from-memhub <export.json>`: consume memhub's export v1 JSON (facts, decisions, tasks, commands, session_notes while preserving nullable `session_id`, `agent_id`, `provider_id`, `model_id`, and `variant`, project_state/arch, pending_writes → recreated as proposal branches; writes_log → imported as a single annotated genesis note, not fake history). Docs re-ingested from source files (export excludes them by design). Embeddings and code index rebuild locally. Follow with `eval retrieval` against the ported golden set before trusting recall. The operator's own migration, if ever, follows the r2 §13.1 discipline: converge memhub first, lowest-stakes project first, one week soak, quarantine (`.memhub` renamed, not deleted), old state retained a month.
+
+After #140, `export <bundle.json>`, `import <bundle.json>` and explicit
+`import --from-memhub <export.json>` ship with `--dir`/`--json` through the
+existing direct/authenticated-owner selection. [Migration instructions](../migration.md)
+define the exact formats and operator runbook; AGENTS.md inventories every
+touched element and retained behavior.
+
+Native `memdolt_export_version: 1` carries integer source schema 4, one captured
+main hash, complete fixed memory-table images and captured pending
+head/parent/deltas. Every non-NULL cell is a lossless string (canonical ULIDs,
+decimal INTs and UTC DATETIME seconds included); NULL is explicit. Evidence,
+alternatives, superseded rows, narratives, counters and exact note text/null
+provenance remain. Accepted proposal metadata is committed memory; pending
+payloads remain separate. Dolt reconstructs generated live_key. This differs
+from numeric-ID memhub v1, is not reverse-compatible with it and is not sync.
+Documents/chunks, indexes, config, ownership credentials, transcript archives/
+pointers and repository/host identity are excluded.
+
+Legacy input follows actual tagged v0.2.0 `src/export/v1.rs`, plus only
+v0.2.2's five nullable note fields; declared source schemas 1-24 are supported.
+Older absent optional arrays/fields use original serde defaults. Only
+ID-bearing target tables receive ULIDs; commands map to the actual kind key.
+Supersession references map consistently. Task/note prose stays exact: neither
+v1 task schema has a structured task-link column to translate. Confidence is
+explicitly omitted because §6.1 removed it. Invalid versions, shapes, duplicate
+members/identities, dangling/cyclic links, ambiguous live keys under the
+destination collation and unrepresentable timestamps/widths refuse before
+writes. Opaque source provenance never supplies import or review authority.
+
+Two actual model differences need explicit disposition. memhub commands are
+identified by `(kind, cmdline)`, while §6.1 permits one current command per
+kind. Legacy pending supersede names existing fact/decision `old`/`new`
+identifiers, while staged supersede inserts a fresh fact replacement. #140
+does not change these models or silently select/drop rows: duplicate command
+kinds, pending legacy supersedes, unsupported/global pending targets and
+native proposals whose before-image conflicts with exported main refuse the
+whole bundle. Reconcile them in a retained source copy through human review,
+then export again. Supported pending legacy facts/decisions and native
+ordinary insert/overwrite/fresh-fact-supersede shapes become inspectable
+one-commit proposals under all existing review guards; import never accepts.
+
+Before this replacement, memhub import offered force-wipe and removed target
+writes_log even on its docs-only path. After #140, memdolt has no force/wipe/
+history-rewrite path. It requires current initialized empty durable memory,
+no proposal branches and clean main without merge/conflict state. Existing
+documents/config/derived/render artifacts and prior Dolt history remain.
+Changed main is one real current-human-authored import commit. Legacy
+writes_log and historical accepted/rejected/expired pending rows become counts
+in one annotated digest/count genesis note, not fabricated history. Pending
+raw actor/provenance remain in that annotation. Recreated proposal commits
+also belong to the current importer at the actual import time; their original
+actor/time remain row metadata. No host root becomes durable identity.
+
+ExportMemory/ImportMemory share the existing owning Store mutation mutex;
+foreign Dolt sessions, other reads and migrations retain their prior boundaries.
+Export captures main and proposal heads together and reads immutable hashes
+throughout. New bundle file APIs reuse rooted renderer preparation/sync/
+identity checks and native per-file replacement. They require an existing
+local parent, reject protected plumbing, opened credential aliases,
+symlink/reparse traversal and registered doc source destinations, and preserve
+old output on preparation failure. Existing outputs need a supported native
+header. A separate export lock coordinates cooperating generations; crash
+residue requires inspection with exports stopped. No export backup,
+foreign-writer compare-and-swap or stronger crash guarantee is claimed.
+Renderer configuration, backups and its two-file behavior remain unchanged.
+
+Import reads only the selected bundle, opens no metadata pointers, and
+prevalidates/deny-scans all persisted text/provenance before bound writes.
+Its decoder reuses #137's shared Unicode validator before tokenization,
+including nested legacy pending JSON; valid pairs and opaque case-sensitive
+provenance remain. Exact format-member spelling refuses struct aliases before
+encoding/json can overwrite them. Typed owner paths are checked before
+marshaling and the existing raw operationArgs Unicode guard remains in force.
+Main may commit before proposal creation or finalization fails. Results retain
+its confirmed hash, planned identity map and exact created/remaining proposal
+prefix. Imported staging alone retains/returns a confirmed branch on late
+failure; ordinary staging keeps its prior cleanup/residue policy. The owner
+submits the complete operation once and preserves populated results/errors.
+Lost replies or unconfirmed commits report unknown, not proof of no write:
+inspect main, rows, proposals and files, never auto-replay, and use a fresh
+target for a reviewed new import attempt. No import/export MCP mutation tool,
+dependency or durable migration is added.
+
+Only synthetic migration and real derived-index/recall/golden checks are
+exercised. The user's own migration remains optional and unperformed.
+Converge-first, low-stakes-first, one-week soak, quarantine and one-month
+old-state retention still hold. Full M5, global migration and the physical
+hub acceptance gate remain separate.
 
 ---
 
@@ -2440,6 +2544,13 @@ the parity matrix, global memory/promotion, top-level history/status/stats,
 locate acceptance or the other M5/M6 capabilities. Earlier subset deferrals
 remain the historical record, not a claim that those follow-ups shipped here.
 
+**M5 memory interoperability subset (issue #140):** before this slice, JSON
+interop and import-from-memhub remained planned. After it, §15's bounded
+native/legacy surfaces and synthetic direct/owner round-trip, real index/recall
+and unchanged retrieval golden checks ship. Full parity, global migration,
+physical hub acceptance and the user's optional migration remain separate;
+the existing convergence/soak/old-state-retention runbook still applies.
+
 ## 17. Risk register
 
 | # | Risk | Sev | Mitigation |
@@ -2453,6 +2564,13 @@ remain the historical record, not a claim that those follow-ups shipped here.
 | R7 | Second-system scope creep | Med | §12 matrix is the contract; PRD non-goals enforced in review |
 | R8 | Write-path throughput. **Measured in M0 [V]:** ~300 commits/s on an empty store, unchanged from 6 to 32 concurrent writers, falling to ~126/s once history reaches 48k commits / 800 MB — the ceiling is a function of history size, not of concurrency. The ~4-branch plateau remains **[L]**: this rig used one branch | Low | Memory-scale write volume is orders below this — a whole 10³–10⁴-row corpus is about thirty seconds of it; note-batching helps, and §13.3's retention sweep now has a throughput justification as well as a disk one. Re-measure for topology B. See `docs/spikes/m0-rig1.md` |
 | R9 | Writes routed over the single-owner IPC endpoint are **at-least-once**: an owner that dies after committing and before answering leaves its caller unable to tell whether the write landed. **Measured in M0 [V]** — one such write per unclean-kill run was in the store while its caller had been told nothing | Med | ULID primary keys (§6.1) make a retry idempotent by construction, so M1's IPC write path must carry client-minted ids and must not replace them with server-minted ones; a caller whose answer was lost re-reads rather than re-writes. See `docs/spikes/m0-rig1.md` |
+
+The historical R9 rationale assumes client-minted direct-write IDs. Before
+#140 no import operation existed. ImportMemory instead builds legacy mappings
+inside the owning operation and returns them with progress; it therefore
+inherits no idempotent-replay claim. Its whole-operation one-submit rule,
+fresh-target refusal and explicit inspect-before-retry/unknown-outcome report
+apply. Existing direct-write and other owner paths retain their prior behavior.
 
 ---
 

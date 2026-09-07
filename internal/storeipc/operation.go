@@ -46,6 +46,8 @@ const (
 	opDocRemove        = "doc_remove"
 	opRender           = "render"
 	opRepoStatus       = "repo_status"
+	opExportMemory     = "export_memory"
+	opImportMemory     = "import_memory"
 )
 
 const (
@@ -88,6 +90,8 @@ type Backend interface {
 	DocRemove(context.Context, string, memory.Actor) (localdolt.DocResult, error)
 	Render(context.Context) (render.Result, error)
 	RepoStatus(context.Context, localdolt.RepoStatusOptions) (localdolt.RepoStatusReport, error)
+	ExportMemory(context.Context, localdolt.ExportMemoryOptions) (localdolt.InteropResult, error)
+	ImportMemory(context.Context, localdolt.ImportMemoryOptions) (localdolt.InteropResult, error)
 	FactAdd(context.Context, localdolt.FactAddOptions) (localdolt.HumanMemoryResult, error)
 	FactVerify(context.Context, string, memory.Actor) (localdolt.HumanMemoryResult, error)
 	FactSupersede(context.Context, string, string, memory.Actor) (localdolt.HumanMemoryResult, error)
@@ -224,6 +228,30 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var result any
 	var err error
 	switch req.Operation {
+	case opExportMemory, opImportMemory:
+		// The owner reads/publishes the checked local bundle and performs the
+		// entire import once. A populated failure result preserves durable progress.
+		var completed localdolt.InteropResult
+		var operationErr error
+		if req.Operation == opExportMemory {
+			args, decodeErr := operationArgs[localdolt.ExportMemoryOptions](req.Args)
+			if decodeErr != nil {
+				err = decodeErr
+				break
+			}
+			completed, operationErr = h.store.ExportMemory(ctx, args)
+		} else {
+			args, decodeErr := operationArgs[localdolt.ImportMemoryOptions](req.Args)
+			if decodeErr != nil {
+				err = decodeErr
+				break
+			}
+			completed, operationErr = h.store.ImportMemory(ctx, args)
+		}
+		if operationErr != nil {
+			completed.Error = operationErr.Error()
+		}
+		result = completed
 	case opFactAdd, opFactVerify, opFactSupersede, opDecisionAdd, opDecisionSummary, opDecisionSupersede:
 		changed, changeErr := h.humanMemoryOperation(ctx, req)
 		if changeErr != nil {

@@ -400,6 +400,13 @@ type stagedWrite struct {
 	kind     ProposalKind
 	proposal Proposal
 
+	// Interop reconstructs prevalidated identities and preserves source metadata,
+	// while the actual staging commit is authored by the current importer.
+	// Ordinary proposals leave these fields unset and retain their existing behavior.
+	id           string
+	commitAuthor *store.Actor
+	imported     *InteropProposal
+
 	// rowID is the ULID of the facts or decisions row being proposed.
 	rowID string
 
@@ -464,7 +471,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	// in the same critical section as accept, reject, and expiry.
 	s.proposalMu.Lock()
 	defer s.proposalMu.Unlock()
+	return s.stageLocked(ctx, w)
+}
 
+// stageLocked also serves a complete import already holding proposalMu.
+func (s *Store) stageLocked(ctx context.Context, w stagedWrite) (StagedProposal, error) {
 	db, err := s.handle()
 	if err != nil {
 		return StagedProposal{}, err
@@ -478,7 +489,12 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	// scans them too.
 	w.text = append(slices.Clone(w.text), w.proposal.Rationale, w.proposal.Actor.Name)
 
-	id := newID()
+	id := w.id
+	if id == "" {
+		id = newID()
+	} else if !validInteropID(id) {
+		return StagedProposal{}, errors.New("localdolt: invalid imported proposal ULID")
+	}
 	branch := ProposalBranch(id)
 	statements := append(slices.Clone(w.statements), store.Statement{
 		SQL: "INSERT INTO proposals (id, kind, rationale, actor, created_at, target) VALUES (?, ?, ?, ?, ?, ?)",
@@ -522,6 +538,16 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 	}
 
 	result, stageErr := s.stageOnBranch(ctx, conn, w, statements)
+	if w.id != "" && result.Hash != "" {
+		// Imported proposals retain confirmed commits even on a late error.
+		// Never delete this branch and turn durable partial progress into loss.
+		// Ordinary staging below keeps its established cleanup/residue contract.
+		restoreErr := checkoutBranch(ctx, conn, origin)
+		if restoreErr != nil {
+			discardConn(conn)
+		}
+		return StagedProposal{ID: id, Branch: branch, Kind: w.kind, RowID: w.rowID, Commit: result.Hash}, errors.Join(stageErr, restoreErr)
+	}
 	cleanupRecord := created
 	// A late transaction error used to discard the hash in commitConn, leaving
 	// this failed staged commit as residue after the expected-head refusal.
@@ -556,6 +582,11 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 
 // stageOnBranch writes the proposal on the branch conn is checked out to.
 func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite, statements []store.Statement) (store.CommitResult, error) {
+	if w.imported != nil {
+		if err := validateInteropStage(ctx, conn, *w.imported); err != nil {
+			return store.CommitResult{}, err
+		}
+	}
 	if w.expectedFact != nil {
 		if err := requireExpectedLiveFact(ctx, conn, *w.expectedFact); err != nil {
 			return store.CommitResult{}, err
@@ -571,11 +602,15 @@ func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite
 			return store.CommitResult{}, err
 		}
 	}
+	author := w.proposal.Actor
+	if w.commitAuthor != nil {
+		author = *w.commitAuthor
+	}
 	req := store.CommitRequest{
 		Statements: statements,
 		Text:       w.text,
 		Message:    w.message,
-		Author:     w.proposal.Actor,
+		Author:     author,
 	}
 	if w.finalizeCommit != nil {
 		return s.commitConnFinalize(ctx, conn, req, w.finalizeCommit)

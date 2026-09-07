@@ -19,6 +19,100 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Memory interoperability (issue #140).** Before this delivery, PRD §15
+described import-from-memhub and JSON interop but neither CLI command existed.
+After it, `export <bundle.json>`, `import <bundle.json>` and
+`import --from-memhub <export.json>` ship with `--dir`/`--json`.
+`docs/migration.md` specifies both distinct formats, nullable fields,
+confidence/provenance, model limitations, files, partial progress and retry.
+The user's own migration remains optional and unperformed. Full blast radius:
+
+- New `internal/store/localdolt/interop_format.go` owns native v1 bundle/row/
+  proposal types and strict JSON, version, fixed-field, ULID, null, relationship
+  and ordinary-proposal validation. It selects durable memory columns from
+  existing `transferTables`, excluding generated live_key, meta identity,
+  documents and local data. Every non-NULL cell is a lossless string. Existing
+  schema, evidence/alternatives and command-kind keys remain. This grammar
+  binds interop, not arbitrary SQL or other Store operations.
+  decodeInteropJSON reuses #137's ValidateJSONUnicode before tokenization;
+  invalid UTF-8/lone surrogate escapes cannot become replacement characters.
+  Existing pull/owner Unicode checks remain. Exact member checks apply to
+  format structs, whose case aliases encoding/json otherwise accepts; opaque
+  provenance keeps its case-sensitive JSON keys. Native cells are checked
+  before export marshaling too. No second Unicode scanner is introduced.
+- New `interop_legacy.go` consumes actual memhub v0.2.0 v1 fields plus only
+  v0.2.2's nullable notes. Integer IDs become ULIDs only on ID-bearing target
+  tables; commands map to kind. Supersession references are mapped, exact
+  note/task text and nullable provenance retained, and confidence/host-root
+  identity explicitly omitted. Neither schema has a structured task-link
+  column. Duplicate command kinds, pending legacy existing-row supersede,
+  unsupported payloads and pending global targets refuse before writing.
+  Pending facts/decisions remain proposals; old statuses/writes_log become
+  annotated counts, never replayed actions or fabricated commit history.
+- New `interop.go` owns Store.ExportMemory/ImportMemory, captured main/proposal
+  heads and immutable rows/diffs, destination/schema/collation preflight, full
+  deny-scan, bound writes, source digest/count note and confirmed progress.
+  Both share proposalMu with direct/proposal/review/render/transfer mutations;
+  ordinary ordering remains. Foreign Dolt sessions, other reads and migrations
+  retain their prior boundaries. Export does not flush MCP notes. Import
+  requires current initialized clean empty durable memory and no proposal
+  branches, retaining documents/config/derived/render artifacts and history.
+  Before memhub migration, the legacy importer offered force-wipe and removed
+  target writes_log; after #140 this memdolt surface offers neither. Changed
+  main is one actual human import commit; no model load/index rebuild occurs
+  inside import. These restrictions bind the two named interop methods.
+- `propose.go` extracts private stageLocked while ordinary callers still use
+  the locked stage wrapper. Interop alone supplies a prevalidated proposal ID
+  and current-importer commit author override. Source actor/time stay metadata.
+  Interop rechecks complete before-images on the just-cut proposal branch,
+  catching a foreign main change before that cut without overwriting its row.
+  It retains/returns a confirmed imported branch on late errors; ordinary
+  staging keeps its existing cleanup/residue behavior. Expected-commit review's
+  no-delete policy and other CLI cleanup behavior remain unchanged.
+- New `internal/render/bundle.go` reuses existing rooted file preparation,
+  regular-file/identity/reparse checks, sync, native replacement and owned
+  temporary cleanup. The renderer's configuration, marked Markdown, backups,
+  pair behavior and render lock remain. Bundle APIs require an existing local
+  parent outside protected metadata, check actual opened credential aliases
+  through checkDocumentOwnerFile, refuse registered document sources and use
+  a separate per-output export lock. Existing output needs a supported native
+  header; preparation failure preserves it. No export backup, foreign-writer
+  CAS or stronger directory-entry crash durability is promised. Import reads
+  one selected file and opens no metadata pointers. These file restrictions
+  bind bundle APIs, not every renderer destination or general file operation.
+- `storeipc/operation.go` adds Backend methods and explicit export_memory/
+  import_memory operations; owner_store.go submits each complete operation
+  once and retains populated results/errors. Lost replies report unknown and
+  require inspection. Authentication, verified-owner selection, existing
+  operations and no-fallback/no-replay rules remain. No import/export MCP
+  mutation tool or new render-tool path/query override is added.
+  Interop's typed owner methods check paths before JSON marshaling; the
+  existing operationArgs Unicode guard also precedes raw argument decoding.
+  Other typed owner methods retain their existing validation boundaries.
+  After integrating #138, checkDocumentOwnerFile retains its signature and
+  delegates to layout.CheckOwnerSource; interop inherits that opened-file
+  check unchanged. Locator/tokenizer behavior and all twenty-two MCP tools
+  remain as delivered by #138; import/export adds no MCP registrations.
+- New `cmd/memdolt/interop.go` and additive root.go registrations provide
+  help, existing-store/direct/owner routing and one human/JSON result on
+  reached-operation failures too. Previous commands remain. Main hash/created
+  proposals are confirmed effects; mappings/counts also describe the planned
+  suffix. Close/reporting failure preserves confirmed progress.
+- New localdolt/CLI/storeipc interop_test.go, renderer bundle_test.go, CLI
+  interop_model_test.go and synthetic localdolt/testdata/memhub-v1.json exercise
+  real legacy/native/direct/owner round trips, nulls/text/mapping, history after
+  reopening, CLI review, malformed/refused/denied data, opened credentials,
+  file failures, pinned export, lost replies and late partial progress. The
+  golden-tagged model check rebuilds a synthetic import and uses real CLI
+  hybrid recall. Existing golden data/assertions remain. Tests change no
+  runtime path policy: their temporary roots are canonicalized, as existing
+  renderer fixtures do, so macOS's /var alias is not mistaken for a permitted
+  bundle path. Explicit link/refusal tests still exercise the production guard.
+  New docs/migration.md and PRD §§12/15/16 preserve the
+  matching before/after and optional converge-first/low-stakes/one-week-soak/
+  old-state-retention runbook. No dependency, durable migration, global backend,
+  full M5 or physical hub acceptance is implied.
+
 **Local code-index delivery (issue #138).** Before this delivery, `code`,
 `locate`, `eval locate` and the real MCP `locate` tool were deferred. After
 it, `memdolt code index|status|rm`, `memdolt locate <query>` and `memdolt eval
@@ -1473,6 +1567,10 @@ export GOFLAGS=-tags=gms_pure_go
   and all other deny-list semantics remain. It protects this store's known owner
   file and file aliases, not arbitrary copied secrets or every filesystem/SQL
   reader; it changes no existing stored rows, history or IPC token lifecycle.
+  That is the #132 boundary. After #140, selected import-bundle reads and
+  existing export-output reads are additional explicit callers of the same
+  opened-identity guard. DocAdd behavior remains; readers that do not call
+  the guard still inherit no automatic credential-file protection.
   The changed structure is `document_file.go`'s named-path/identity guard,
   `documents.go` passing the existing metadata handle, CLI help and MCP input
   description, new `mcpserver/doc_owner_test.go`, the added CLI/localdolt

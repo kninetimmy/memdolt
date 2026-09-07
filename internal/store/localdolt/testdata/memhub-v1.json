@@ -1,0 +1,42 @@
+{
+  "memhub_export_version": 1,
+  "exported_at": "2026-08-01 12:00:00",
+  "exported_by": "memhub 0.2.2",
+  "source_schema_version": "24",
+  "project": {"root_path_at_export": "C:/synthetic-old-host/project", "created_at": "2020-01-01 00:00:00"},
+  "facts": [
+    {"id": 11, "key": "build.command", "value": "old build command", "confidence": 0.3, "source": "agent:codex", "verified_at": null, "created_at": "2020-02-01 01:02:03", "superseded_by": 12, "kind": "command"},
+    {"id": 12, "key": "build.command", "value": "go build ./...", "confidence": 0.9, "source": "user", "verified_at": "2026-07-01 01:02:03", "created_at": "2020-03-01 01:02:03", "superseded_by": null, "kind": null}
+  ],
+  "decisions": [
+    {"id": 21, "title": "Old architecture", "rationale": "Original reasoning\n\nkept verbatim.", "status": "superseded", "decided_at": "2020-02-01 00:00:00", "superseded_by": 22, "source": "agent:codex", "summary": ""},
+    {"id": 22, "title": "Use durable local storage", "rationale": "Dolt records actual history.", "status": "active", "decided_at": "2021-01-01 00:00:00", "superseded_by": null, "summary": null}
+  ],
+  "tasks": [
+    {"id": 31, "title": "Build memory importer", "status": "open", "notes": "See task 32; preserve this prose, not a structured foreign key.\n\nKeep spacing.", "created_at": "2020-01-01 00:00:00", "updated_at": "2026-07-01 00:00:00"},
+    {"id": 32, "title": "Retain old state", "status": "done", "notes": null, "created_at": "2020-01-01 00:00:00", "updated_at": "2026-07-02 00:00:00"}
+  ],
+  "commands": [
+    {"id": 41, "kind": "build", "cmdline": "go build ./...", "last_exit_code": null, "last_run_at": null, "success_count": 9, "fail_count": 2}
+  ],
+  "session_notes": [
+    {"id": 51, "actor": "agent:opencode", "actor_raw": "cli", "text": "Exact original note.\r\n\r\nNo invented attribution. ", "created_at": "2026-07-01 03:04:05", "session_id": "ses_synthetic", "agent_id": "build", "provider_id": "synthetic-provider", "model_id": "synthetic-model", "variant": "precise"},
+    {"id": 52, "actor": "agent:codex", "actor_raw": "Codex", "text": "Ordinary note without a host session.", "created_at": "2026-07-02 03:04:05", "session_id": null, "agent_id": "", "provider_id": null, "model_id": null, "variant": null}
+  ],
+  "project_state": [
+    {"id": 61, "body": "Earlier state.", "actor": "user", "actor_raw": "user", "created_at": "2020-01-01 00:00:00"},
+    {"id": 62, "body": "Current state.\n\nPreserve the entire narrative.", "actor": "agent:codex", "actor_raw": "Codex", "created_at": "2026-07-01 00:00:00"}
+  ],
+  "project_arch": [
+    {"id": 71, "body": "Local owner and committed Dolt.", "actor": "user", "actor_raw": "user", "created_at": "2026-07-01 00:00:00"}
+  ],
+  "pending_writes": [
+    {"id": 81, "kind": "fact", "payload_json": "{\"key\":\"convention.pending\",\"value\":\"Pending fact remains unaccepted\",\"kind\":\"convention\"}", "rationale": "Review this proposed fact.", "status": "pending", "actor": "agent:codex", "actor_raw": "Codex", "created_at": "2026-07-01 00:00:00", "provenance_json": "{\"tool\":\"propose_fact\",\"surface\":\"synthetic\"}", "reviewed_at": null},
+    {"id": 82, "kind": "decision", "payload_json": "{\"title\":\"Pending decision remains unaccepted\"}", "rationale": "Original proposed decision reasoning.", "status": "pending", "actor": "agent:opencode", "actor_raw": "cli", "created_at": "2026-07-02 00:00:00", "provenance_json": "{}"},
+    {"id": 83, "kind": "supersede", "payload_json": "{\"target_kind\":\"decision\",\"old\":\"21\",\"new\":\"22\"}", "rationale": "Historical rejected action.", "status": "rejected", "actor": "agent:codex", "actor_raw": "Codex", "created_at": "2026-06-01 00:00:00", "provenance_json": "{}", "reviewed_at": "2026-06-02 00:00:00"}
+  ],
+  "writes_log": [
+    {"id": 91, "actor": "historical:user", "table_name": "tasks", "row_id": 31, "action": "insert", "reason": "Original task addition.", "at": "2020-01-01 00:00:00"},
+    {"id": 92, "actor": "historical:user", "table_name": "documents", "row_id": 999, "action": "delete", "reason": null, "at": "2021-01-01 00:00:00"}
+  ]
+}

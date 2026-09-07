@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kninetimmy/memdolt/internal/layout"
@@ -199,6 +200,31 @@ func (s *OwnerStore) Render(ctx context.Context) (render.Result, error) {
 	var result render.Result
 	if err := s.operation(ctx, opRender, nil, &result); err != nil {
 		return render.Result{Status: "unknown"}, fmt.Errorf("render owner response lost or unavailable; outcome unknown; inspect configured outputs and .memdolt/backups/rendered before retrying: %w", err)
+	}
+	if result.Error != "" {
+		return result, errors.New(result.Error)
+	}
+	return result, nil
+}
+
+func (s *OwnerStore) ExportMemory(ctx context.Context, opts localdolt.ExportMemoryOptions) (localdolt.InteropResult, error) {
+	return s.memoryInterop(ctx, opExportMemory, opts.File, opts)
+}
+
+func (s *OwnerStore) ImportMemory(ctx context.Context, opts localdolt.ImportMemoryOptions) (localdolt.InteropResult, error) {
+	return s.memoryInterop(ctx, opImportMemory, opts.File, opts)
+}
+
+func (s *OwnerStore) memoryInterop(ctx context.Context, operation, file string, opts any) (localdolt.InteropResult, error) {
+	result := localdolt.InteropResult{Operation: strings.TrimSuffix(operation, "_memory"), Status: "refused", File: file}
+	// Check before json.Marshal: encoding/json replaces invalid UTF-8 in Go
+	// strings, which could otherwise select a different file in the owner.
+	if err := render.BundlePath(file); err != nil {
+		return result, err
+	}
+	if err := s.operation(ctx, operation, opts, &result); err != nil {
+		result = localdolt.InteropResult{Operation: strings.TrimSuffix(operation, "_memory"), Status: "unknown", File: file}
+		return result, fmt.Errorf("interop owner response lost or unavailable; outcome unknown; inspect the bundle, committed main and `memdolt review list` before any retry; never replay automatically: %w", err)
 	}
 	if result.Error != "" {
 		return result, errors.New(result.Error)
