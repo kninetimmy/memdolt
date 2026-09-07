@@ -996,6 +996,33 @@ export GOFLAGS=-tags=gms_pure_go
   concurrent config edits refuse; foreign edits in the final read/rename interval
   and stronger cross-platform crash guarantees are not claimed.
 
+  **Before the #132 owner-credential fix,** root confinement and optional
+  deny-list rules allowed `.memdolt/server.pid` when rules were absent or empty.
+  The owner token could enter the immediate `doc_add` chunk response and durable,
+  searchable memory. **After the fix,** both CLI and MCP refuse this store's
+  known owner metadata path before opening it as a source, and
+  `checkDocumentOwnerFile` verifies the opened source's identity against that
+  protected file before `io.ReadAll`. Canonical paths, symlink aliases and hard
+  links cannot bypass it. The already-open metadata directory bounds the check;
+  the owner file is opened only for `Stat`, never content. Missing owner metadata
+  permits ordinary direct use; link/type/open/stat/identity/close failures during
+  required verification refuse without document, commit or config effects.
+  Both compared identities come from opened handles, avoiding a negative Windows
+  `SameFile` answer that could hide a later path-lookup failure.
+
+  This protection binds `readDocumentFile` and thus every `DocAdd`, independently
+  of `DocAddOptions.Confined` and configured regex rules. Ordinary CLI root freedom
+  and all other deny-list semantics remain. It protects this store's known owner
+  file and file aliases, not arbitrary copied secrets or every filesystem/SQL
+  reader; it changes no existing stored rows, history or IPC token lifecycle.
+  The changed structure is `document_file.go`'s named-path/identity guard,
+  `documents.go` passing the existing metadata handle, CLI help and MCP input
+  description, new `mcpserver/doc_owner_test.go`, the added CLI/localdolt
+  regressions, and this AGENTS/PRD record. Synthetic absent/empty-rule fixtures
+  cover CLI and modern/legacy MCP refusals, real symlinks/hard links, no response
+  content or persistence/config effects, protection-check errors and retained
+  ordinary external-file CLI ingestion. No real user token is read by those tests.
+
   The complete structural blast radius for #132 is:
 
   - New `localdolt/documents.go` defines the document/options/result/chunk types

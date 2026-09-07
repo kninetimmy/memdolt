@@ -401,6 +401,12 @@ This exception to proposal staging grants no review authority; all MCP
 identities, including raw `user`, remain agent-class. Global ingestion stays
 deferred.
 
+Before #132's owner-credential fix, item 6's path freedom also admitted the
+repository's `.memdolt/server.pid` with absent/empty deny rules. After the fix,
+CLI root freedom and MCP confinement remain, but both reject that known owner
+file and its aliases before reading content, as bounded in §11.2. Optional
+deny-list configuration cannot disable this credential protection.
+
 **M3 contradiction-guard handoff (2026-08-29, issue #102).** Before this
 change, item 4 was a required but unshipped port and
 `internal/store/localdolt/review.go` explicitly said the accept-time probe was
@@ -1474,6 +1480,33 @@ the read against symlink escape. Missing config uses defaults; an existing
 unreadable/invalid config fails closed, and managed document config rejects
 links. These restrictions bind this document seam, not every filesystem read,
 and neither paths nor document source can grant human review authority.
+
+**Owner metadata protection, #132 before/after.** Before the safety fix,
+`readDocumentFile` relied on root confinement and optional regex rules alone:
+`.memdolt/server.pid` is inside the root, so absent/empty rules let its token
+reach `doc_add`'s returned chunks, a Dolt commit and production recall. After
+the fix, the same shared reader reserves this store's known owner path before
+opening it as a source and invokes `checkDocumentOwnerFile` on the opened
+source's `Stat` identity before `io.ReadAll`. The existing metadata directory
+handle locates the protected file. It is opened for `Stat` only, never content;
+both compared identities come from opened handles, so Windows file-ID lookup
+errors cannot silently mean different files. Canonical, symlink and hard-link
+aliases are refused. Missing owner metadata is normal for a direct store;
+required link/type/open/stat/identity/close checks otherwise fail closed with
+no document, commit, returned credential content or config finalization.
+
+This rule binds every `DocAdd` through `readDocumentFile`, including CLI and
+confined MCP calls; it is independent of `Confined`, allowed directories and
+optional regex patterns. Ordinary CLI source-root freedom and configurable
+deny-list behavior remain. It protects the known store owner file and its file
+aliases, not arbitrary copies of secrets, other filesystem/SQL readers or
+existing stored history. `document_file.go`, `documents.go`'s metadata-handle
+argument, CLI help, MCP input description, the new MCP owner regression file,
+added CLI/localdolt tests and this PRD/AGENTS record are the complete additional
+structure. Synthetic fixtures prove absent/empty-rule refusals, actual alias
+handling, no response/data/commit/config effects, verification failures and
+ordinary external CLI source acceptance. IPC ownership, token generation,
+schema, retrieval, rendering and repository-status contracts remain unchanged.
 
 The first ingestion into an empty documents table enables
 `[retrieval] include_docs_in_default`, with a visible result/notice if changed.

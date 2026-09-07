@@ -9,7 +9,7 @@ import (
 )
 
 type docAddInput struct {
-	File  string `json:"file" jsonschema:"UTF-8 Markdown file under the repository root or configured doc.allowed_dirs; relative paths start at the repository root"`
+	File  string `json:"file" jsonschema:"UTF-8 Markdown file under the repository root or configured doc.allowed_dirs; relative paths start at the repository root; owner metadata and its aliases are refused"`
 	Title string `json:"title,omitempty" jsonschema:"optional title; blank defaults to the first heading or filename"`
 }
 

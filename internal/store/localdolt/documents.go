@@ -84,7 +84,7 @@ func (s *Store) docAdd(ctx context.Context, opts DocAddOptions, finalize func(*o
 	if err != nil {
 		return result, err
 	}
-	path, data, err := s.readDocumentFile(opts, cfg)
+	path, data, err := s.readDocumentFile(opts, cfg, configRoot)
 	if err != nil {
 		return result, err
 	}

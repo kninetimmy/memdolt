@@ -462,3 +462,33 @@ func TestDocumentMetadataScanAndCollationCollision(t *testing.T) {
 		t.Fatalf("colliding source replaced a different file: %+v, %v", shown, err)
 	}
 }
+
+func TestDocumentOwnerProtectionCheckFailsClosed(t *testing.T) {
+	st, file := documentFixture(t)
+	writeDocumentFixture(t, file, "\xff")
+	before := internalCount(t, st, "SELECT COUNT(*) FROM dolt_log")
+	metadata, err := st.documentConfigRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, data, err := st.readDocumentFile(DocAddOptions{File: file, Actor: memory.UserActor}, documentConfig{}, metadata)
+	if !errors.Is(err, os.ErrClosed) || !strings.Contains(err.Error(), "verify protected memdolt owner metadata") || len(data) != 0 {
+		t.Fatalf("closed protection root did not refuse before content validation: %v", err)
+	}
+	if err := os.Mkdir(st.paths.PidFile(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.DocAdd(context.Background(), DocAddOptions{File: file, Actor: memory.UserActor})
+	if err == nil || !strings.Contains(err.Error(), "cannot verify protected memdolt owner metadata") || result.Document != nil || len(result.Chunks) != 0 || result.Commit != "" {
+		t.Fatal("invalid owner metadata did not refuse before content validation")
+	}
+	if internalCount(t, st, "SELECT COUNT(*) FROM dolt_log") != before || internalCount(t, st, "SELECT COUNT(*) FROM documents") != 0 || internalCount(t, st, "SELECT COUNT(*) FROM doc_chunks") != 0 || internalCount(t, st, "SELECT COUNT(*) FROM dolt_status") != 0 {
+		t.Fatal("failed owner protection changed memory")
+	}
+	if _, err := os.Stat(st.paths.ConfigFile()); !os.IsNotExist(err) {
+		t.Fatal("failed owner protection created configuration")
+	}
+}

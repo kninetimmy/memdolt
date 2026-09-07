@@ -229,3 +229,62 @@ func TestDocumentCLIReportsOutputAndCloseAfterCommit(t *testing.T) {
 		})
 	}
 }
+
+func TestDocumentCLIProtectsOwnerMetadataAndPreservesRootFreedom(t *testing.T) {
+	for _, configuration := range []string{"absent", "empty"} {
+		t.Run(configuration, func(t *testing.T) {
+			base := initStore(t)
+			paths := pathsFor(t, base)
+			const synthetic = "syntheticownercliregression"
+			writeTestFile(t, paths.PidFile(), `{"pid":1,"host":"synthetic","id":"probe","detail":{"port":1,"token":"`+synthetic+`"}}`)
+			if configuration == "empty" {
+				writeTestFile(t, paths.ConfigFile(), "[deny_list]\npatterns=[]\n")
+			}
+			before := storeCommitCount(t, base)
+			refused := func(t *testing.T, file string) {
+				t.Helper()
+				for _, asJSON := range []bool{false, true} {
+					args := []string{"doc", "add", file, "--dir", base}
+					if asJSON {
+						args = append(args, "--json")
+					}
+					out, err := runMemdoltResult(t, args...)
+					if err == nil || !strings.Contains(err.Error(), "protected memdolt owner metadata") || strings.Contains(err.Error(), synthetic) || out != "" {
+						t.Fatal("CLI did not refuse owner metadata without returning content")
+					}
+				}
+				if storeCommitCount(t, base) != before || countRows(t, base, "SELECT COUNT(*) FROM documents") != 0 || countRows(t, base, "SELECT COUNT(*) FROM doc_chunks") != 0 || countRows(t, base, "SELECT COUNT(*) FROM dolt_status") != 0 {
+					t.Fatal("CLI owner-metadata refusal changed memory")
+				}
+				config, err := os.ReadFile(paths.ConfigFile())
+				if configuration == "absent" {
+					if !os.IsNotExist(err) {
+						t.Fatal("CLI owner-metadata refusal created configuration")
+					}
+				} else if err != nil || string(config) != "[deny_list]\npatterns=[]\n" {
+					t.Fatal("CLI owner-metadata refusal changed configuration")
+				}
+			}
+			refused(t, paths.PidFile())
+			for _, alias := range []string{"symlink", "hardlink"} {
+				t.Run(alias, func(t *testing.T) {
+					file := filepath.Join(base, alias+".md")
+					link := os.Symlink
+					if alias == "hardlink" {
+						link = os.Link
+					}
+					if err := link(paths.PidFile(), file); err != nil {
+						t.Skipf("platform cannot create fixture alias: %v", err)
+					}
+					refused(t, file)
+				})
+			}
+			outside := filepath.Join(t.TempDir(), "ordinary.md")
+			writeTestFile(t, outside, "# Ordinary external reference\n")
+			allowed := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "add", outside, "--dir", base, "--json"))
+			if allowed.Status != "created" || allowed.Document.Path != outside {
+				t.Fatal("owner credential protection changed ordinary CLI root freedom")
+			}
+		})
+	}
+}

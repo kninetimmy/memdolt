@@ -33,7 +33,9 @@ func newDocCommand() *cobra.Command {
 			"Run index status/rebuild after changed chunks; derived vectors stay local.\n\n" +
 			"CLI source paths are explicitly selected, relative to the caller's working\n" +
 			"directory, and may be outside the repo. MCP doc_add instead confines files\n" +
-			"to the canonical repo root or [doc] allowed_dirs. Paths are local identities,\n" +
+			"to the canonical repo root or [doc] allowed_dirs. Both surfaces refuse this\n" +
+			"store's owner metadata (.memdolt/server.pid) and aliases before content reads,\n" +
+			"independently of deny-list patterns. Paths are local identities,\n" +
 			"not portable cross-machine aliases. Store work uses the authenticated live\n" +
 			"owner when present. Writes submit once: inspect doc ls/show after a lost\n" +
 			"reply before retrying. No global document backend is advertised.",

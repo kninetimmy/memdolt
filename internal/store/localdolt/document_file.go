@@ -138,7 +138,7 @@ func documentPathArgument(path string) error {
 	return nil
 }
 
-func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig) (path string, data []byte, err error) {
+func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig, metadata *os.Root) (path string, data []byte, err error) {
 	if err := documentPathArgument(opts.File); err != nil {
 		return "", nil, err
 	}
@@ -155,6 +155,12 @@ func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig) (path s
 	}
 	if err := documentPathArgument(path); err != nil {
 		return "", nil, err
+	}
+	// Repository confinement alone used to admit the owner's capability file.
+	// Reserve that path for both surfaces even when no deny-list is configured.
+	ownerPath := filepath.Join(metadata.Name(), layout.PidFileName)
+	if rel, err := filepath.Rel(ownerPath, path); err == nil && rel == "." {
+		return "", nil, errors.New("document ingestion refuses protected memdolt owner metadata")
 	}
 	rootPath := filepath.Dir(path)
 	if opts.Confined {
@@ -215,6 +221,9 @@ func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig) (path s
 	if !info.Mode().IsRegular() {
 		return "", nil, errors.New("opened document source must be a regular file")
 	}
+	if err := checkDocumentOwnerFile(metadata, info); err != nil {
+		return "", nil, err
+	}
 	data, err = io.ReadAll(opened)
 	if err != nil {
 		return "", nil, fmt.Errorf("read document file: %w", err)
@@ -223,6 +232,41 @@ func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig) (path s
 		return "", nil, errors.New("document content must be valid UTF-8")
 	}
 	return path, data, nil
+}
+
+// Compare the actual opened source, not only its canonical spelling: a hard
+// link or a source path swapped before Open must not expose the owner token.
+// The protected file is opened for Stat only; its contents are never read.
+func checkDocumentOwnerFile(metadata *os.Root, source os.FileInfo) (err error) {
+	expected, err := metadata.Lstat(layout.PidFileName)
+	if os.IsNotExist(err) {
+		return nil // A short-lived direct owner need not have an IPC endpoint.
+	}
+	if err != nil {
+		return fmt.Errorf("verify protected memdolt owner metadata: %w", err)
+	}
+	if !expected.Mode().IsRegular() {
+		return errors.New("cannot verify protected memdolt owner metadata: expected a regular file")
+	}
+	owner, err := metadata.Open(layout.PidFileName)
+	if err != nil {
+		return fmt.Errorf("open protected memdolt owner metadata for identity verification: %w", err)
+	}
+	defer func() { err = errors.Join(err, owner.Close()) }()
+	actual, err := owner.Stat()
+	if err != nil {
+		return fmt.Errorf("stat protected memdolt owner metadata: %w", err)
+	}
+	if !actual.Mode().IsRegular() || !os.SameFile(expected, actual) {
+		return errors.New("protected memdolt owner metadata identity could not be verified")
+	}
+	// Both identities below come from File.Stat on open handles. In particular,
+	// Windows has already obtained file IDs; SameFile need not perform a later
+	// path lookup whose failure could otherwise be mistaken for different files.
+	if os.SameFile(source, actual) {
+		return errors.New("document ingestion refuses protected memdolt owner metadata")
+	}
+	return nil
 }
 
 // Exact paths still resolve after their source file has been removed. CLI
