@@ -492,3 +492,43 @@ func TestDocumentOwnerProtectionCheckFailsClosed(t *testing.T) {
 		t.Fatal("failed owner protection created configuration")
 	}
 }
+
+func TestDocumentIdentityErrorsPreserveExactPathsAndIDs(t *testing.T) {
+	ctx := context.Background()
+	st, file := documentFixture(t)
+	writeDocumentFixture(t, file, "# Stored identity survives source changes\n")
+	added, err := st.DocAdd(ctx, DocAddOptions{File: file, Actor: memory.UserActor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop := filepath.Join(st.paths.Base(), "cycle")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Skipf("platform cannot create fixture symlink: %v", err)
+	}
+	before := internalCount(t, st, "SELECT COUNT(*) FROM dolt_log")
+	if _, err := st.DocShow(ctx, loop); err == nil || !strings.Contains(err.Error(), "resolve document identity path") {
+		t.Fatalf("show hid a path resolution error: %v", err)
+	}
+	if _, err := st.DocRemove(ctx, loop, memory.UserActor); err == nil || !strings.Contains(err.Error(), "resolve document identity path") {
+		t.Fatalf("remove hid a path resolution error: %v", err)
+	}
+	if internalCount(t, st, "SELECT COUNT(*) FROM dolt_log") != before || internalCount(t, st, "SELECT COUNT(*) FROM dolt_status") != 0 {
+		t.Fatal("path resolution errors changed memory")
+	}
+	if err := os.Remove(added.Document.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(added.Document.Path, added.Document.Path); err != nil {
+		t.Fatal(err)
+	}
+	for _, ident := range []string{added.Document.ID, added.Document.Path} {
+		shown, err := st.DocShow(ctx, ident)
+		if err != nil || shown.Status != "found" || !reflect.DeepEqual(shown.Document, added.Document) || !reflect.DeepEqual(shown.Chunks, added.Chunks) {
+			t.Fatalf("exact identity depended on source resolution: %v", err)
+		}
+	}
+	removed, err := st.DocRemove(ctx, added.Document.Path, memory.UserActor)
+	if err != nil || removed.Status != "removed" || removed.Document.ID != added.Document.ID {
+		t.Fatalf("exact stored path could not be removed: %v", err)
+	}
+}

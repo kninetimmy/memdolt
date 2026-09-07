@@ -68,6 +68,10 @@ func TestDocumentCLIDirectAndOwnerLifecycle(t *testing.T) {
 			if err := os.Remove(file); err != nil {
 				t.Fatal(err)
 			}
+			missingSource := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "show", file, "--dir", base, "--json"))
+			if missingSource.Status != "found" || !reflect.DeepEqual(missingSource.Document, updated.Document) || !reflect.DeepEqual(missingSource.Chunks, updated.Chunks) {
+				t.Fatalf("CLI show after source deletion = %+v", missingSource)
+			}
 			removed := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "rm", file, "--dir", base, "--json"))
 			if removed.Status != "removed" || removed.Document.ID != added.Document.ID || removed.Commit == "" {
 				t.Fatalf("CLI removal = %+v", removed)
@@ -82,6 +86,50 @@ func TestDocumentCLIDirectAndOwnerLifecycle(t *testing.T) {
 				t.Fatalf("list after remove = %s", got)
 			}
 		})
+	}
+}
+
+func TestDocumentDeletedSourceDirectoryAliasDirectAndOwner(t *testing.T) {
+	for _, routed := range []bool{false, true} {
+		for _, removeParent := range []bool{false, true} {
+			t.Run(fmt.Sprintf("owner=%t/missing-parent=%t", routed, removeParent), func(t *testing.T) {
+				base := initStore(t)
+				if routed {
+					serveStore(t, base)
+				}
+				source := t.TempDir()
+				actual := filepath.Join(source, "actual")
+				if err := os.MkdirAll(filepath.Join(actual, "nested"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(actual, filepath.Join(source, "alias")); err != nil {
+					t.Skipf("platform cannot create fixture directory alias: %v", err)
+				}
+				t.Chdir(source)
+				file := filepath.Join("alias", "nested", "reference.md")
+				writeTestFile(t, file, "# Kept after source deletion\n")
+				added := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "add", file, "--dir", base, "--json"))
+				if added.Document.Path == filepath.Join(source, file) {
+					t.Fatal("fixture did not produce a distinct canonical document path")
+				}
+				if err := os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+				if removeParent {
+					if err := os.Remove(filepath.Join(actual, "nested")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				shown := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "show", file, "--dir", base, "--json"))
+				if shown.Status != "found" || !reflect.DeepEqual(shown.Document, added.Document) || !reflect.DeepEqual(shown.Chunks, added.Chunks) {
+					t.Fatalf("show deleted source through original alias = %+v", shown)
+				}
+				removed := decodeJSON[localdolt.DocResult](t, runMemdolt(t, "doc", "rm", file, "--dir", base, "--json"))
+				if removed.Status != "removed" || removed.Document.ID != added.Document.ID || removed.Commit == "" {
+					t.Fatalf("remove deleted source through original alias = %+v", removed)
+				}
+			})
+		}
 	}
 }
 

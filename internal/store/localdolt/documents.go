@@ -328,7 +328,14 @@ FROM ` + database + `.documents AS d`
 }
 
 func (s *Store) resolveDocument(ctx context.Context, conn *sql.Conn, head, ident string) (*Document, error) {
-	docs, err := readDocuments(ctx, conn, head, "d.id = ? OR d.path = ? OR d.path = ?", ident, ident, s.documentIdentityPath(ident))
+	canonical, pathErr := s.documentIdentityPath(ident)
+	if pathErr != nil {
+		// Exact stored paths and IDs do not require a usable source filesystem.
+		// Repeat the supplied value so failed resolution cannot match an empty
+		// path belonging to another document.
+		canonical = ident
+	}
+	docs, err := readDocuments(ctx, conn, head, "d.id = ? OR d.path = ? OR d.path = ?", ident, ident, canonical)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +348,7 @@ func (s *Store) resolveDocument(ctx context.Context, conn *sql.Conn, head, ident
 		return nil, errors.New("document path is ambiguous; use an exact document id from `memdolt doc ls`")
 	}
 	if len(docs) == 0 {
-		return nil, nil
+		return nil, pathErr
 	}
 	return &docs[0], nil
 }

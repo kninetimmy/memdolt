@@ -1440,6 +1440,21 @@ the exact commit for changed operations. Validation, read, output and close
 failures remain visible. A source that no longer exists can still be shown
 or removed by its stored path or ULID.
 
+Before #132's missing-source identity fix, `documentIdentityPath` fell back
+to lexical cleaning when the full source path no longer existed. Existing
+parent aliases then lost their canonical spelling, and the same original
+operand returned not-found from both show and remove. After the fix, this
+helper resolves the nearest existing directory ancestor and appends only the
+missing literal path components. `resolveDocument`, its only caller, preserves
+exact stored-path/ULID matches without requiring source resolution and reports
+unexpected filesystem errors when no exact match exists. `DocShow` and
+`DocRemove` share this behavior through direct and authenticated-owner routes.
+No deleted symlink target is guessed or recorded in an alias registry. The
+changed structure is those two helpers, the original-path CLI lifecycle and
+deterministic directory-alias regression, localdolt identity/error tests and
+this AGENTS/PRD record. Source reading, confinement, owner-file protection,
+schema and mutation contracts remain unchanged.
+
 The chunk/title port follows the original memhub v0.2.0 functions, including
 their edge behavior: first heading leaf or filename title, nonempty ATX
 headings at levels 1–6, retained heading lines, ` > ` hierarchy and optional

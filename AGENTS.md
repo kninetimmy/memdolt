@@ -959,6 +959,19 @@ export GOFLAGS=-tags=gms_pure_go
   normalized caller authors the commit. Source/path/title never grant human
   review authority, and MCP `user` still means `agent:user`.
 
+  Before the #132 missing-source identity fix, full-path canonicalization fell
+  back to lexical cleaning when the source disappeared, losing still-existing
+  directory aliases and making original-path show/remove return not-found.
+  After it, `documentIdentityPath` resolves the nearest existing directory
+  ancestor and reattaches only missing literal components. Its sole caller,
+  `resolveDocument`, serves `DocShow` and `DocRemove` through both CLI and owner
+  routes. Exact stored paths and ULIDs still work without a resolvable source;
+  otherwise unexpected resolution errors remain visible. No alias registry or
+  inference of deleted symlink targets is added. The deterministic CLI regression
+  keeps the original aliased operand after leaf/parent deletion for direct and
+  owner calls, and localdolt checks errors plus exact identities. These lookup
+  changes do not alter ingestion confinement, owner-file protection or writes.
+
   The chunker ports memhub v0.2.0's actual rules: nonempty ATX headings of levels
   1–6, heading lines retained, ancestor breadcrumbs joined by ` > `, and an
   optional preamble chunk. LF/CRLF line endings become LF in chunks while hashes

@@ -269,15 +269,35 @@ func checkDocumentOwnerFile(metadata *os.Root, source os.FileInfo) (err error) {
 	return nil
 }
 
-// Exact paths still resolve after their source file has been removed. CLI
-// callers resolve relative paths in their own process before owner submission.
-func (s *Store) documentIdentityPath(ident string) string {
+// Before missing-source resolution, a failed full-path EvalSymlinks fell back
+// to Clean and lost existing directory aliases. Resolve the nearest existing
+// ancestor and append only the missing literal components; a deleted symlink's
+// former target cannot be recovered this way. CLI paths arrive absolute.
+func (s *Store) documentIdentityPath(ident string) (string, error) {
 	path := ident
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(s.paths.Base(), path)
 	}
-	if canonical, err := filepath.EvalSymlinks(path); err == nil {
-		return canonical
+	missing := ""
+	for {
+		canonical, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			if missing != "" {
+				info, err := os.Stat(canonical)
+				if err != nil {
+					return "", fmt.Errorf("inspect document path ancestor: %w", err)
+				}
+				if !info.IsDir() {
+					return "", errors.New("document path ancestor is not a directory")
+				}
+			}
+			return filepath.Join(canonical, missing), nil
+		}
+		parent := filepath.Dir(path)
+		if !os.IsNotExist(err) || parent == path {
+			return "", fmt.Errorf("resolve document identity path: %w", err)
+		}
+		missing = filepath.Join(filepath.Base(path), missing)
+		path = parent
 	}
-	return filepath.Clean(path)
 }
