@@ -36,7 +36,7 @@ type Backend interface {
 	ReviewAcceptExpected(context.Context, string, string, store.Actor, bool) (localdolt.AcceptResult, error)
 }
 
-// Toolset owns the fixed M3 tools and their session-scoped state: notes waiting
+// Toolset owns the shipped tools and their session-scoped state: notes waiting
 // for the five-minute or orderly-shutdown flush and single-use elicitation
 // rows waiting for one short-lived response.
 type Toolset struct {
@@ -59,8 +59,8 @@ type noteGroup struct {
 	notes []memory.Note
 }
 
-// RegisterTools adds exactly the implemented M3 surface. Later-milestone
-// names are intentionally absent rather than registered as refusing stubs.
+// RegisterTools originally added only the implemented M3 surface. Document
+// ingestion adds doc_add; other deferred names remain absent, never stubs.
 func RegisterTools(server *mcp.Server, baseDir string, st Backend) *Toolset {
 	return registerTools(server, baseDir, st, noteBatchInterval)
 }
@@ -87,6 +87,7 @@ func registerTools(server *mcp.Server, baseDir string, st Backend, interval time
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_decision", Description: "Stage a decision on a single-commit proposal branch without moving main."}, tools.proposeDecision)
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_supersede", Description: "Stage a fact supersession and replacement on a single-commit proposal branch without moving main."}, tools.proposeSupersede)
 	mcp.AddTool(server, &mcp.Tool{Name: "review_pending", Description: "Offer repository proposals for human elicitation review; global proposals remain CLI-only."}, tools.reviewPending)
+	mcp.AddTool(server, &mcp.Tool{Name: "doc_add", Description: "Ingest a confined repository Markdown document in one attributed commit; the first document enables default recall. Unchanged bytes are a no-op."}, tools.docAdd)
 	return tools
 }
 

@@ -163,6 +163,37 @@ func (s *OwnerStore) CheckWriteText(ctx context.Context, text []string) error {
 	return s.operation(ctx, opCheckWriteText, checkWriteTextArgs{Text: text}, &struct{}{})
 }
 
+func (s *OwnerStore) DocAdd(ctx context.Context, opts localdolt.DocAddOptions) (localdolt.DocResult, error) {
+	return s.documentMutation(ctx, opDocAdd, opts)
+}
+
+func (s *OwnerStore) DocList(ctx context.Context) ([]localdolt.Document, error) {
+	var result []localdolt.Document
+	err := s.operation(ctx, opDocList, nil, &result)
+	return result, err
+}
+
+func (s *OwnerStore) DocShow(ctx context.Context, ident string) (localdolt.DocResult, error) {
+	var result localdolt.DocResult
+	err := s.operation(ctx, opDocShow, docIdentityArgs{Ident: ident}, &result)
+	return result, err
+}
+
+func (s *OwnerStore) DocRemove(ctx context.Context, ident string, actor memory.Actor) (localdolt.DocResult, error) {
+	return s.documentMutation(ctx, opDocRemove, docIdentityArgs{Ident: ident, Actor: actor})
+}
+
+func (s *OwnerStore) documentMutation(ctx context.Context, operation string, args any) (localdolt.DocResult, error) {
+	var wire docMutationResult
+	if err := s.operation(ctx, operation, args, &wire); err != nil {
+		return localdolt.DocResult{}, fmt.Errorf("document owner response lost or unavailable; outcome unknown; inspect `memdolt doc ls` and `memdolt doc show <id-or-path>` before retrying: %w", err)
+	}
+	if wire.Error != "" {
+		return wire.Result, errors.New(wire.Error)
+	}
+	return wire.Result, nil
+}
+
 func (s *OwnerStore) ListRemotes(ctx context.Context) ([]localdolt.Remote, error) {
 	var result []localdolt.Remote
 	err := s.operation(ctx, opListRemotes, nil, &result)

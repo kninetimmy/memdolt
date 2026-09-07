@@ -385,6 +385,13 @@ The untrusted-writer invariant is memhub's soul; memdolt keeps it whole.
 5. Never auto-approve on absent elicitation response. Fail closed on missing actor attribution (`agent:unknown` = untrusted).
 6. Doc ingestion stays a direct, user-attributed lane (docs are user-pointed artifacts, not agent claims) with the same path confinement: MCP `doc_add` restricted to repo root ∪ `allowed_dirs`, deny-list on top; CLI unconfined.
 
+Before issue #132, item 6 described a deferred ingestion lane. After it,
+repository ingestion ships as bounded in §11.2: the document's source is
+`user`, but its Dolt commit is authored by the actual normalized caller.
+This exception to proposal staging grants no review authority; all MCP
+identities, including raw `user`, remain agent-class. Global ingestion stays
+deferred.
+
 **M3 contradiction-guard handoff (2026-08-29, issue #102).** Before this
 change, item 4 was a required but unshipped port and
 `internal/store/localdolt/review.go` explicitly said the accept-time probe was
@@ -615,6 +622,11 @@ behavior changes. The structural blast radius is:
   remains unchanged. Global-store merging, MCP, document ingestion, search,
   and code indexing remain later-milestone work exactly as before.
 
+That is the M2 before-state. Issue #132 adds repository document ingestion
+through the already-existing committed source readers and derived index;
+§11.2 records its scope. Retrieval ranking, default-doc rerank requirements,
+explicit `doc_chunk` filters and scoring floors remain unchanged.
+
 ### 8.3 Models & inference
 
 - BGE-small-en-v1.5 fp32 ONNX (384-dim, CLS pooling, ~127MB) + ms-marco-MiniLM-L-6-v2 int8 (~22MB) — memhub's exact pair, same pinned upstream revisions.
@@ -669,6 +681,11 @@ unverified cache entry is never used. MCP exposure remains M3. Actual global
 store merging, document ingestion, the code index, git-ingested file history,
 `locate`, `eval locate`, and their golden corpus remain M5; M2's hermetic
 fixture rows exercise retrieval scoring without claiming those surfaces ship.
+
+Before issue #132, the M5 list above still included all document ingestion.
+After it, repository doc commands and `doc_add` ship; global documents,
+code indexing/git history/locate and full M5 parity remain separate. No
+retrieval golden query, fixture, quality threshold or scoring rule changes.
 
 ---
 
@@ -732,6 +749,12 @@ The later-backed names `locate`, `doc_add`, `render`, `repo_status`,
 `tools/list`, not refusal stubs. This is a registration restriction on the
 first M3 implementation alone, not removal of those tools from the destination
 contract or permission to substitute a stub before its backend lands.
+
+Before issue #132, `doc_add` was still one of those absent names. After it,
+the real repository `doc_add` registration joins the sixteen tools present
+after #106. Its typed input is `file` plus optional `title`, with no global,
+actor, confinement-disable or arbitrary SQL argument. §11.2 records the
+shared document operation and path boundary; other deferred names stay absent.
 
 **Elicited-review handoff (2026-08-30, issue #106).** Before this delivery,
 the approved M3 implementation above advertised exactly those fifteen tools,
@@ -1275,6 +1298,100 @@ They establish no real-hub or two-machine acceptance. No dependency, durable
 schema, MCP tool, remote status/diff, automatic merge/conflict elicitation,
 topology setting, hub operation or full M4 completion is added.
 
+**Repository document ingestion subset (issue #132).** Before this slice,
+the documents/doc_chunks schema, committed retrieval readers and derived
+embedding index existed, while document ingestion was deferred. After it,
+`memdolt doc add <file> [--title <title>]`, `doc ls` (alias `list`),
+`doc show <id-or-path>` and `doc rm <id-or-path>` ship with `--dir`/`--json`;
+add/rm also take the existing `--actor`. They require initialized current
+stores, never implicitly initialize/migrate, and use the verified owner
+when present. They report metadata, ordered chunk breadcrumbs (show also
+returns bodies), created/updated/unchanged/removed/not-found outcomes, and
+the exact commit for changed operations. Validation, read, output and close
+failures remain visible. A source that no longer exists can still be shown
+or removed by its stored path or ULID.
+
+The chunk/title port follows the original memhub v0.2.0 functions, including
+their edge behavior: first heading leaf or filename title, nonempty ATX
+headings at levels 1–6, retained heading lines, ` > ` hierarchy and optional
+preamble. Chunk lines normalize LF/CRLF to LF; SHA-256/byte length use original
+UTF-8 bytes. Three backticks/tildes open fences; any three-or-longer matching
+family closes them. The 2000-character (Unicode scalar) soft target packs
+paragraphs greedily at blank lines outside fences, keeping a single oversized
+paragraph/fence intact. This is not a CommonMark claim. Empty/whitespace
+documents have zero chunks. Existing VARCHAR limits remain 1024/512/1024
+characters for path/title/breadcrumb; each TEXT chunk must fit 65535 bytes.
+Failures refuse before durable replacement. No dependency or migration.
+
+`localdolt.DocAdd` holds `proposalMu` across source preparation, hash/identity
+comparison, one direct-main transaction/commit and optional local config
+finalization. Unchanged bytes keep the actual stored metadata/chunks and add
+no commit, even with a different requested title. Changed bytes retain the
+document ULID and replace every chunk with a fresh ULID. The existing path
+unique index remains; a collation collision between distinct filesystem
+paths refuses. `DocRemove` shares that mutex and deletes chunks then parent
+in one commit. Both opt into `CommitRequest.RequireClean`, preserving dirty
+memory, unrelated rows, proposals and their authorship. This coordination
+binds document mutations plus the already-participating Store methods, not
+foreign Dolt sessions or migrations. `DocList`/`DocShow` instead capture one
+immutable committed-main hash and read that revision; no dirty/proposal row
+enters their snapshot. SQL values are bound, and the unavoidable revision
+database identifier is built only from a validated Dolt hash.
+
+Source is `user` regardless of caller; commit provenance uses the normalized
+caller. Ingestion scans source path, supplied/derived title, fixed source,
+raw/normalized actor, heading breadcrumbs and content through the established
+deny-list before durability. `doc_add` sets `DocAddOptions.Confined=true`:
+file and configured allowed directories must resolve, and the target must
+be within the canonical repo root or a resolved `[doc] allowed_dirs` entry.
+Unresolved entries grant nothing. Relative MCP file/configured paths start
+at the repo root; CLI file paths start at the caller's working directory and
+may be outside those roots. Canonicalization followed by `os.Root` confines
+the read against symlink escape. Missing config uses defaults; an existing
+unreadable/invalid config fails closed, and managed document config rejects
+links. These restrictions bind this document seam, not every filesystem read,
+and neither paths nor document source can grant human review authority.
+
+The first ingestion into an empty documents table enables
+`[retrieval] include_docs_in_default`, with a visible result/notice if changed.
+Removing all documents resets that baseline trigger. Later unchanged/changed
+ingests or second documents do not undo an opt-out. The latest complete TOML
+is reread and unrelated values are preserved semantically (not comments or
+formatting), through temporary-file/sync/rooted-rename replacement. Detected
+concurrent config edits refuse; foreign edits in the final read/rename
+interval and stronger cross-platform crash guarantees are not claimed.
+If this finalization fails after commit, CLI, MCP and owner IPC retain the
+confirmed document/commit with the visible error and a manual config remedy;
+ingestion is never replayed. Lost owner replies require doc ls/show inspection.
+Existing retrieval scoring stays intact: default documents must undergo a
+rerank to survive, while explicit `doc_chunk` queries also work in FTS.
+Index status/rebuild remain the derived-store workflow. Replaced/deleted
+chunk vectors become orphaned, new chunks missing until rebuild; stale vectors
+cannot impersonate current chunks. No eager model work is added to ingestion.
+Config/default flags and the embedding side-store remain machine-local.
+
+The complete changed structure is new `localdolt/documents.go` (typed
+operations, coherent readers, serialized writes/results),
+`document_markdown.go` (tagged parser/title), `document_file.go` (path/width/
+config helpers), CLI `doc.go` (flags, routing, reporting), MCP `doc.go`
+(typed confined handler and result-bearing errors), their four test files,
+root/tool registrations, `storeipc.Backend`/allow-list/wire result and
+`OwnerStore` methods, tool/serve expectation tests, `localdolt.commitConn`'s
+clean-guard diagnostic, and this PRD/AGENTS record. Before, that diagnostic
+named only note batches; after, it says guarded write, with the same opt-in
+semantics. All prior CLI/tools, discovery/cache hints, attribution, note
+batching, elicitation, shutdown, authenticated routing/cancellation and
+single-submit/no-fallback rules remain. The exact tool set binds
+`RegisterTools`, close/report ordering binds `runDoc`, and config finalization
+binds first-document `DocAdd`, not every symbol of those kinds. Existing
+schema/migrations, ULID/manifest/path helpers, review gates, committed recall
+readers and index behavior are reused unchanged. Tests exercise actual local
+CLI/owner/MCP, original tagged cases plus verified edge cases, Unicode/empty
+input, no-op/replacement, rollback/dirty/proposal preservation, path/deny/
+config/width failures, retrieval after indexing and lost/confirmed-late errors.
+They establish no broader cross-machine path/format guarantee, global
+document backend or full M5 acceptance.
+
 ### 11.3 Config
 
 `.memdolt/config.toml` mirrors memhub's structure where semantics survive: `[deny_list]`, `[render]`, `[retrieval]` + `[retrieval.scoring]` (identical knobs/defaults), `[code_index]`, `[doc] allowed_dirs`, `[global]`, `[audit]`, `[wrap_up]`. Replaced: `[sync]` → `[repo] remote_url, topology = "clone" | "live" | "local", auto_pull_on_session_start (bool)`. Machine config `~/.memdolt/config.toml` holds hub defaults + known-projects registry (upgrade enumeration — never a filesystem scan; memhub parity).
@@ -1558,6 +1675,13 @@ the two-machine round-trip/no-conversion gate remains unchanged. Remote
 status/diff, divergence merge/conflict elicitation, hub setup/authentication
 operations and measured version compatibility, topology configuration and
 the optional remote Store remain pending. M5 and M6 are unchanged.
+
+**M5 repository document subset (issue #132):** the earlier milestone records
+left all M5 work deferred. Repository doc add/ls/show/rm and real MCP `doc_add`
+now ship with §11.2's boundaries and existing schema/retrieval/index contracts.
+Global documents, the global backend, code index/locate/golden coverage and
+the remaining M5 parity items remain separate; this delivery does not satisfy
+the full M5 acceptance gate or change M6.
 
 ---
 
