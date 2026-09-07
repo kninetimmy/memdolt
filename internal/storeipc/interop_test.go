@@ -1,8 +1,10 @@
 package storeipc_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -130,5 +132,56 @@ func TestInteropTypedOwnerRejectsLossyPathBeforeSubmission(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatal("invalid typed paths reached the owner")
+	}
+}
+
+func TestInteropRawOwnerUnicodeCannotSelectAnotherBundle(t *testing.T) {
+	base, st, endpoint := startOwner(t)
+	ctx := context.Background()
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := endpoint.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "store", "localdolt", "testdata", "memhub-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"�.json", "😀�.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replacements := []string{"\xff", `\ud800`, `\udc00`, `\ud83d\ude00\ufffd`}
+	var selected, calls atomic.Int32
+	routed := transferEndpoint(t, base, st, st, func(inner http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == storeipc.OperationPath {
+				calls.Add(1)
+				data, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(bytes.Replace(data, []byte("INTEROP_UNICODE_MARKER"), []byte(replacements[selected.Load()]), 1)))
+			}
+			inner.ServeHTTP(w, r)
+		})
+	})
+	before := queryString(t, st, "SELECT CONCAT(DOLT_HASHOF('main'), '/', DOLT_HASHOF_DB('WORKING'), '/', DOLT_HASHOF_DB('STAGED'))")
+	opts := localdolt.ImportMemoryOptions{File: filepath.Join(dir, "INTEROP_UNICODE_MARKER.json"), FromMemhub: true}
+	for i := range len(replacements) - 1 {
+		selected.Store(int32(i))
+		result, err := routed.ImportMemory(ctx, opts)
+		if err == nil || result.MainCommit != "" || calls.Load() != int32(i+1) || queryString(t, st, "SELECT CONCAT(DOLT_HASHOF('main'), '/', DOLT_HASHOF_DB('WORKING'), '/', DOLT_HASHOF_DB('STAGED'))") != before {
+			t.Fatalf("raw Unicode selected a different source bundle: %+v, %v", result, err)
+		}
+	}
+	selected.Store(int32(len(replacements) - 1))
+	result, err := routed.ImportMemory(ctx, opts)
+	if err != nil || result.MainCommit == "" || result.File != filepath.Join(dir, "😀�.json") || calls.Load() != int32(len(replacements)) {
+		t.Fatalf("valid owner Unicode path changed: %+v, %v", result, err)
 	}
 }

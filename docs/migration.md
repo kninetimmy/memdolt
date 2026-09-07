@@ -123,6 +123,13 @@ Its existing mutation mutex serializes participating writes; foreign Dolt
 sessions remain outside it. Format, schema, identity, reference, destination
 collation and persisted text/provenance checks precede writes. SQL values
 stay bound. No import/export MCP mutation tool or new dependency is added.
+Before decoding, the shared Unicode validator rejects invalid UTF-8 and
+unpaired surrogate escapes, including nested legacy pending JSON. Format
+struct members require their exact spelling; case aliases cannot overwrite
+fields. Opaque provenance retains case-sensitive keys. Valid Unicode pairs,
+literal escaped backslashes and replacement-character text remain unchanged.
+Typed owner paths are checked before JSON marshaling can rewrite them, and
+raw owner arguments use the existing shared pre-decode Unicode guard.
 
 Each reached operation emits one JSON result with `--json`. `main_commit`
 proves the main import; `created_proposals` is the exact confirmed prefix and

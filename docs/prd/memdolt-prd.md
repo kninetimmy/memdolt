@@ -2278,6 +2278,11 @@ Renderer configuration, backups and its two-file behavior remain unchanged.
 
 Import reads only the selected bundle, opens no metadata pointers, and
 prevalidates/deny-scans all persisted text/provenance before bound writes.
+Its decoder reuses #137's shared Unicode validator before tokenization,
+including nested legacy pending JSON; valid pairs and opaque case-sensitive
+provenance remain. Exact format-member spelling refuses struct aliases before
+encoding/json can overwrite them. Typed owner paths are checked before
+marshaling and the existing raw operationArgs Unicode guard remains in force.
 Main may commit before proposal creation or finalization fails. Results retain
 its confirmed hash, planned identity map and exact created/remaining proposal
 prefix. Imported staging alone retains/returns a confirmed branch on late

@@ -1,6 +1,7 @@
 package localdolt
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -331,7 +332,7 @@ func TestInteropOlderLegacyDefaultsAndMalformedJSON(t *testing.T) {
 	if err != nil || len(bundle.Tables["session_notes"]) != 0 || len(bundle.Tables["project_state"]) != 0 || interopValue(bundle.Tables["decisions"][0], "source") != "user" || bundle.Tables["decisions"][0]["summary"] != nil {
 		t.Fatalf("older-v1 defaults failed: %+v, %v", bundle, err)
 	}
-	for _, malformed := range [][]byte{[]byte(`{"a":1,"a":2}`), []byte(`{"a":{"b":1,"b":2}}`), []byte(`{} {}`), []byte(`{"a":`), {0xff}} {
+	for _, malformed := range [][]byte{[]byte(`{"a":1,"a":2}`), []byte(`{"a":{"b":1,"b":2}}`), []byte(`{} {}`), []byte(`{"a":`), {0xff}, []byte(`{"text":"\ud800"}`), []byte(`{"text":"\udc00"}`), []byte(`{"text":"\ud800\u0041"}`)} {
 		var value any
 		if err := decodeInteropJSON(malformed, &value); err == nil {
 			t.Fatalf("accepted malformed/ambiguous JSON: %q", malformed)
@@ -346,6 +347,69 @@ func TestInteropOlderLegacyDefaultsAndMalformedJSON(t *testing.T) {
 	invalid["id"], invalid["notes"] = interopString(newID()), interopString(string([]byte{0xff}))
 	if err := validateInteropRow("tasks", invalid); err == nil {
 		t.Fatal("would export malformed native text through lossy json.Marshal")
+	}
+	var opaque map[string]string
+	if err := decodeInteropJSON([]byte(`{"Model":"\ud83d\ude00\ufffd","model":"literal \\ud800"}`), &opaque); err != nil || opaque["Model"] != "😀�" || opaque["model"] != `literal \ud800` {
+		t.Fatalf("rewrote valid Unicode or opaque case-sensitive keys: %+v, %v", opaque, err)
+	}
+}
+
+func TestInteropUnicodeAndCaseAliasesRefuseBeforeWrites(t *testing.T) {
+	ctx := context.Background()
+	legacy := legacyInteropFixture(t)
+	source := renderStore(t)
+	if _, err := source.ImportMemory(ctx, ImportMemoryOptions{File: interopTestFile(t, legacy), FromMemhub: true}); err != nil {
+		t.Fatal(err)
+	}
+	native, err := json.Marshal(interopCaptured(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, old, replacement string
+		legacy                 bool
+	}{
+		{"native raw UTF-8", "Pending fact remains unaccepted", "bad\xfftext", false},
+		{"native pending surrogate", "Pending fact remains unaccepted", `\ud800`, false},
+		{"legacy note surrogate", "Exact original note.", `\udc00`, true},
+		{"legacy pending payload surrogate", "Pending fact remains unaccepted", `\\ud800`, true},
+		{"legacy pending provenance surrogate", `\"synthetic\"`, `\"\\ud800\"`, true},
+		{"native header alias", `"memdolt_export_version":1`, `"memdolt_export_version":1,"MEMDOLT_EXPORT_VERSION":1`, false},
+		{"native proposal alias", `"head":`, `"HEAD":`, false},
+		{"native change alias", `"from":`, `"FROM":`, false},
+		{"legacy header alias", `"memhub_export_version": 1`, `"memhub_export_version": 1,"MEMHUB_EXPORT_VERSION":1`, true},
+		{"legacy project alias", `"root_path_at_export":`, `"ROOT_PATH_AT_EXPORT":`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := native
+			if tc.legacy {
+				data = legacy
+			}
+			changed := bytes.Replace(data, []byte(tc.old), []byte(tc.replacement), 1)
+			if bytes.Equal(data, changed) {
+				t.Fatal("fixture replacement did not reach the intended field")
+			}
+			file := interopTestFile(t, changed)
+			target := renderStore(t)
+			before := transferMain(t, target)
+			result, err := target.ImportMemory(ctx, ImportMemoryOptions{File: file, FromMemhub: tc.legacy})
+			if err == nil || result.Status != "refused" || result.MainCommit != "" || len(result.CreatedProposals) != 0 || transferMain(t, target) != before || internalCount(t, target, "SELECT COUNT(*) FROM dolt_status") != 0 {
+				t.Fatalf("malformed input mutated destination: %+v, %v", result, err)
+			}
+			if after, err := os.ReadFile(file); err != nil || !bytes.Equal(after, changed) {
+				t.Fatal("import rewrote malformed source bytes")
+			}
+		})
+	}
+	valid := bytes.Replace(native, []byte("Pending fact remains unaccepted"), []byte(`\ud83d\ude00\ufffd`), 1)
+	target := renderStore(t)
+	result, err := target.ImportMemory(ctx, ImportMemoryOptions{File: interopTestFile(t, valid)})
+	if err != nil || len(result.CreatedProposals) != 2 {
+		t.Fatalf("valid surrogate pair refused: %+v, %v", result, err)
+	}
+	diff, err := target.ProposalDiff(ctx, result.CreatedProposals[0].ID)
+	if err != nil || !slices.ContainsFunc(diff.Changes, func(change ProposalChange) bool { return change.Table == "facts" && change.To["value"] == "😀�" }) {
+		t.Fatalf("valid proposal Unicode changed: %+v, %v", diff, err)
 	}
 }
 

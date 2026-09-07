@@ -34,6 +34,12 @@ The user's own migration remains optional and unperformed. Full blast radius:
   documents and local data. Every non-NULL cell is a lossless string. Existing
   schema, evidence/alternatives and command-kind keys remain. This grammar
   binds interop, not arbitrary SQL or other Store operations.
+  decodeInteropJSON reuses #137's ValidateJSONUnicode before tokenization;
+  invalid UTF-8/lone surrogate escapes cannot become replacement characters.
+  Existing pull/owner Unicode checks remain. Exact member checks apply to
+  format structs, whose case aliases encoding/json otherwise accepts; opaque
+  provenance keeps its case-sensitive JSON keys. Native cells are checked
+  before export marshaling too. No second Unicode scanner is introduced.
 - New `interop_legacy.go` consumes actual memhub v0.2.0 v1 fields plus only
   v0.2.2's nullable notes. Integer IDs become ULIDs only on ID-bearing target
   tables; commands map to kind. Supersession references are mapped, exact
@@ -80,6 +86,9 @@ The user's own migration remains optional and unperformed. Full blast radius:
   require inspection. Authentication, verified-owner selection, existing
   operations and no-fallback/no-replay rules remain. No import/export MCP
   mutation tool or new render-tool path/query override is added.
+  Interop's typed owner methods check paths before JSON marshaling; the
+  existing operationArgs Unicode guard also precedes raw argument decoding.
+  Other typed owner methods retain their existing validation boundaries.
 - New `cmd/memdolt/interop.go` and additive root.go registrations provide
   help, existing-store/direct/owner routing and one human/JSON result on
   reached-operation failures too. Previous commands remain. Main hash/created

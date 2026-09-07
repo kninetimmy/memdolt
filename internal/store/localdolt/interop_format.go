@@ -96,11 +96,11 @@ func sameInteropRow(a, b InteropRow) bool {
 }
 
 // Reject duplicates before decoding: encoding/json otherwise silently takes
-// the last object member. Unknown fields, invalid UTF-8 and trailing JSON also
-// fail before mapping identities or touching the destination.
+// the last object member. Unknown/case-aliased fields, malformed Unicode and
+// trailing JSON also fail before mapping identities or touching the destination.
 func decodeInteropJSON(data []byte, dest any) error {
-	if !utf8.Valid(data) {
-		return errors.New("bundle must be valid UTF-8")
+	if err := ValidateJSONUnicode(data); err != nil {
+		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -109,6 +109,9 @@ func decodeInteropJSON(data []byte, dest any) error {
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return errors.New("bundle must contain exactly one JSON value")
+	}
+	if err := checkInteropMembers(data, dest); err != nil {
+		return err
 	}
 	decoder = json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -146,6 +149,61 @@ func checkInteropJSONValue(decoder *json.Decoder) error {
 	}
 	_, err = decoder.Token()
 	return err
+}
+
+// encoding/json matches struct tags case-insensitively. Check exact member
+// names at the format's struct boundaries so aliases cannot override fields.
+// Row maps have their own exact-column validation; opaque provenance remains
+// a case-sensitive JSON value and is not interpreted as a format struct.
+func checkInteropMembers(data []byte, dest any) error {
+	switch dest.(type) {
+	case *memhubExport:
+		root, err := interopObject(data, "memhub_export_version exported_at exported_by source_schema_version project facts decisions tasks commands pending_writes writes_log session_notes project_state project_arch")
+		if err != nil {
+			return err
+		}
+		_, err = interopObject(root["project"], "root_path_at_export created_at")
+		return err
+	case *InteropBundle:
+		root, err := interopObject(data, "memdolt_export_version source_schema_version exported_at main_commit tables pending_proposals")
+		if err != nil {
+			return err
+		}
+		var proposals []json.RawMessage
+		if err := json.Unmarshal(root["pending_proposals"], &proposals); err != nil {
+			return err
+		}
+		for _, raw := range proposals {
+			proposal, err := interopObject(raw, "id head parent metadata changes")
+			if err != nil {
+				return err
+			}
+			var changes []json.RawMessage
+			if err := json.Unmarshal(proposal["changes"], &changes); err != nil {
+				return err
+			}
+			for _, change := range changes {
+				if _, err := interopObject(change, "table from to"); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func interopObject(data []byte, names string) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil || object == nil {
+		return nil, errors.New("expected a complete interop format object")
+	}
+	allowed := strings.Fields(names)
+	for name := range object {
+		if !slices.Contains(allowed, name) {
+			return nil, errors.New("unknown or case-aliased interop format member")
+		}
+	}
+	return object, nil
 }
 
 func validateInteropHeader(b InteropBundle) error {
