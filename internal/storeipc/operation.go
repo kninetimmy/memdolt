@@ -436,6 +436,9 @@ func operationArgs[T any](raw json.RawMessage) (T, error) {
 	if len(raw) == 0 {
 		return args, errors.New("store operation arguments are required")
 	}
+	if err := localdolt.ValidateJSONUnicode(raw); err != nil {
+		return args, fmt.Errorf("decode store operation arguments: %w", err)
+	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return args, fmt.Errorf("decode store operation arguments: %w", err)
 	}

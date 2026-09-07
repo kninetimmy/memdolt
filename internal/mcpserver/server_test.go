@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"io"
+	"net"
 	"strings"
 	"testing"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
 func TestInstructionsCarryVersionedPolicy(t *testing.T) {
@@ -211,9 +214,25 @@ func connectWithOptions(
 	options *mcp.ClientOptions,
 	clientMiddleware ...mcp.Middleware,
 ) (*mcp.ClientSession, *mcp.ServerSession) {
+	return connectWithWireWriter(t, server, clientInfo, legacy, options, nil, clientMiddleware...)
+}
+
+func connectWithWireWriter(
+	t *testing.T, server *mcp.Server, clientInfo *mcp.Implementation, legacy bool,
+	options *mcp.ClientOptions, wrap func(io.WriteCloser) io.WriteCloser, clientMiddleware ...mcp.Middleware,
+) (*mcp.ClientSession, *mcp.ServerSession) {
 	t.Helper()
 	ctx := context.Background()
-	clientSide, serverSide := mcp.NewInMemoryTransports()
+	clientPipe, serverPipe := net.Pipe()
+	var writer io.WriteCloser = clientPipe
+	if wrap != nil {
+		writer = wrap(writer)
+	}
+	clientSide := &mcp.IOTransport{Reader: clientPipe, Writer: writer}
+	serverSide := &mcp.IOTransport{Reader: struct {
+		io.Reader
+		io.Closer
+	}{localdolt.JSONUnicodeReader(serverPipe), serverPipe}, Writer: serverPipe}
 	if legacy {
 		server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {

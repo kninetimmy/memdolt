@@ -22,7 +22,7 @@ var m3ToolNames = []string{
 	"doc_add",
 	"get_command", "list_decisions", "list_facts", "list_proposals", "list_tasks",
 	"log_session_note", "propose_decision", "propose_fact", "propose_supersede",
-	"recall", "record_command", "render", "repo_status", "review_pending", "search", "status", "task_add", "task_done",
+	"recall", "record_command", "render", "repo_pull", "repo_push", "repo_status", "review_pending", "search", "status", "task_add", "task_done",
 }
 
 func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
@@ -63,7 +63,7 @@ func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
 	if !slices.Equal(names, m3ToolNames) {
 		t.Fatalf("registered tools = %v, want %v", names, m3ToolNames)
 	}
-	for _, deferred := range []string{"locate", "repo_pull", "repo_push", "history", "archive_transcript"} {
+	for _, deferred := range []string{"locate", "history", "archive_transcript"} {
 		if slices.Contains(names, deferred) {
 			t.Errorf("deferred tool %q was advertised", deferred)
 		}

@@ -72,6 +72,8 @@ func registerTools(server *mcp.Server, baseDir string, st Backend, interval time
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "status", Description: "Return the current schema and committed-memory counts."}, tools.status)
 	mcp.AddTool(server, &mcp.Tool{Name: "repo_status", Description: "Inspect committed local and remote main (default origin) without promotion. local requests offline status; diff includes exact local-to-remote committed row values. Fetch data and the selected tracking ref may remain. Dirty divergence needs clean main for merge assessment."}, tools.repoStatus)
+	mcp.AddTool(server, &mcp.Tool{Name: "repo_pull", Description: "Pull committed remote main; compatible divergence merges as the requesting agent. Actual conflicts require complete human form choices bound to both heads, committed together as user. Nine modern forms return a reachable continuation; legacy clients receive one complete form. Without form support use the CLI remedy."}, tools.repoPull)
+	mcp.AddTool(server, &mcp.Tool{Name: "repo_push", Description: "Publish captured committed main to one configured remote by fast-forward; never force or publish proposals. Password comes only from the executing owner's environment. An uncertain reply requires inspection before retrying."}, tools.repoPush)
 	mcp.AddTool(server, &mcp.Tool{Name: "recall", Description: "Recall ranked committed facts, decisions, tasks, and document chunks."}, tools.recall)
 	mcp.AddTool(server, &mcp.Tool{Name: "search", Description: "Search committed decision titles and rationales."}, tools.search)
 	mcp.AddTool(server, &mcp.Tool{Name: "list_tasks", Description: "List committed tasks by status, oldest first."}, tools.listTasks)
