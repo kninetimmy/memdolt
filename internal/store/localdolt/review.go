@@ -260,20 +260,24 @@ func (s *Store) PendingProposals(ctx context.Context) ([]PendingProposal, error)
 	if err != nil {
 		return nil, err
 	}
-	branches, err := proposalBranches(ctx, db)
+	return pendingProposals(ctx, db)
+}
+
+func pendingProposals(ctx context.Context, q branchQuerier) ([]PendingProposal, error) {
+	branches, err := proposalBranches(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	pending := make([]PendingProposal, 0, len(branches))
 	for _, branch := range branches {
-		merged, err := commitMergedIntoMain(ctx, db, branch.commit)
+		merged, err := commitMergedIntoMain(ctx, q, branch.commit)
 		if err != nil {
 			return nil, err
 		}
 		if merged {
 			continue
 		}
-		proposal, err := hydrate(ctx, db, branch)
+		proposal, err := hydrate(ctx, q, branch)
 		if err != nil {
 			return nil, err
 		}
@@ -1031,7 +1035,12 @@ func reviewViolations(ctx context.Context, tx *sql.Tx, table, base, mainHead, br
 				"(it writes %s); memdolt cannot attribute them",
 			table, strings.Join(sortedReviewedTables(), ", "))
 	}
+	return verifyMergeViolations(ctx, tx, table, key, base, mainHead, branchHead)
+}
 
+// verifyMergeViolations also serves a rolled-back repository preview. Each
+// caller supplies its own table/key allow-list; review's scope is unchanged.
+func verifyMergeViolations(ctx context.Context, tx *sql.Tx, table, key, base, mainHead, branchHead string) (ClearedViolation, error) {
 	rows, err := readViolations(ctx, tx, table, key)
 	if err != nil {
 		return ClearedViolation{}, err
@@ -1166,6 +1175,8 @@ func readViolations(ctx context.Context, tx *sql.Tx, table, key string) ([]viola
 	return records, nil
 }
 
+var errConstraintViolation = errors.New("constraint verification failed")
+
 // requireConstraintHolds re-checks a unique index over the merged rows: it
 // is the constraint verification PRD §6.3 runs before it will clear a
 // violation record, and again before it concludes the merge.
@@ -1224,9 +1235,9 @@ func requireConstraintHolds(ctx context.Context, tx *sql.Tx, table, constraint s
 			pairs = append(pairs, column+"="+values[i].String)
 		}
 		return fmt.Errorf(
-			"constraint verification failed: %s on %s is violated by more than one row at %s, "+
+			"%w: %s on %s is violated by more than one row at %s, "+
 				"so the reported violation is real and the merge stays blocked",
-			constraint, table, strings.Join(pairs, " "))
+			errConstraintViolation, constraint, table, strings.Join(pairs, " "))
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("verify %s on %s: %w", constraint, table, err)

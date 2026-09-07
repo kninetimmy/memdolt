@@ -181,6 +181,17 @@ func (s *OwnerStore) ListRemotes(ctx context.Context) ([]localdolt.Remote, error
 	return result, err
 }
 
+func (s *OwnerStore) RepoStatus(ctx context.Context, opts localdolt.RepoStatusOptions) (localdolt.RepoStatusReport, error) {
+	var report localdolt.RepoStatusReport
+	if err := opts.Validate(); err != nil {
+		return report, err
+	}
+	if err := s.operation(ctx, opRepoStatus, opts, &report); err != nil {
+		return localdolt.RepoStatusReport{}, fmt.Errorf("repository inspection was not confirmed; inspect local main before retrying; fetched objects and the selected tracking ref may remain: %w", err)
+	}
+	return report, nil
+}
+
 func (s *OwnerStore) AddRemote(ctx context.Context, remote localdolt.Remote) (localdolt.Remote, error) {
 	// Reject URL credentials before even constructing the IPC request.
 	if err := localdolt.ValidateRemote(remote); err != nil {
