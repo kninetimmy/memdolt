@@ -49,16 +49,22 @@ func ChunkFile(ctx context.Context, file, content string) ([]Chunk, error) {
 	// Parse normalized bytes too: Go comment nodes can end between CR and LF,
 	// where normalizing only the sliced node would leave a stray CR.
 	src := []byte(strings.ReplaceAll(content, "\r\n", "\n"))
+	// This binding releases its input callback registration, but leaks a
+	// non-nil ParseOptions registration. Keep options nil. Cancellation is
+	// checked at input boundaries, not periodically inside native parsing.
 	tree := parser.ParseWithOptions(func(offset int, _ ts.Point) []byte {
-		if offset >= len(src) {
+		if ctx.Err() != nil || offset >= len(src) {
 			return nil
 		}
 		return src[offset:]
-	}, nil, &ts.ParseOptions{ProgressCallback: func(ts.ParseState) bool { return ctx.Err() != nil }})
+	}, nil, nil)
 	if tree == nil {
 		return nil, errors.Join(errors.New("tree-sitter did not produce a tree"), ctx.Err())
 	}
 	defer tree.Close()
+	if err := ctx.Err(); err != nil {
+		return nil, err // A canceled input callback can still produce a tree.
+	}
 	w := chunkWalker{file: file, src: src, grammar: g}
 	w.moduleDoc(tree.RootNode())
 	w.collect(tree.RootNode(), "")

@@ -60,6 +60,16 @@ TypeScript 0.23.2 (with its TSX dialect), JavaScript 0.25.0 (including JSX),
 Python 0.23.6 and Go 0.23.4. The official Go binding is
 `v0.24.1-0.20251112183152-c9492002f76e`, supporting these ABI-15 grammars.
 Each parser, tree and cursor is closed; the walker allocates no queries.
+Before the review-cycle lifetime fix, a separate progress-options registration
+in the pinned binding still leaked on every parsed file, retaining the callback
+and request context despite those closes. After it, `ChunkFile` supplies nil
+options and uses only the binding's released input-callback registration.
+It checks cancellation at entry, each native input request, immediately after
+native return and after the AST walk; any partial tree is closed on refusal.
+Native processing between input requests is no longer periodically
+interruptible, so cancellation can wait for that work to finish. This change
+binds code chunking and the CLI/MCP/eval refresh paths that call it; it does not
+change fallback helpers, parsing rules, inference or dependency pins.
 Language-load/native parse failures are errors. A successful parse with no
 recognized items falls back to 50-line/4000-byte UTF-8-safe windows. Oversized
 AST symbols stay intact. Top-level items, impl/type methods, nested types,

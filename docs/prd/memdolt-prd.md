@@ -776,6 +776,19 @@ and longest-first pair truncation. This affects every `encodeSingle`/`encodePair
 caller; short inputs, NFD, verified artifact loading and memory scoring/config
 remain unchanged. It never truncates stored source text.
 
+Before the #138 review-cycle lifetime fix, closing parser/tree/cursor resources
+still left the pinned binding's progress-options C registration and captured
+request context unreleased. After it, `ChunkFile` passes nil parse options,
+using only the input callback whose registration and C strings the binding
+releases. Cancellation checks occur at entry, native input requests, immediately
+after native return and after the AST walk. Canceled input can produce a partial
+tree; that tree is closed before returning the error. Native work between input
+requests is no longer periodically interruptible, so cancellation may wait for
+it. This boundary binds code chunking and its CLI/MCP/eval refresh callers, not
+every parser or fallback helper. A lifetime regression and the unchanged
+reviewer probe verify request-context release. Grammar/binding versions,
+chunking/scoring, source protection, corpus pairing and full golden bars remain.
+
 `Locate` returns at most six lines and 400 characters, including an ellipsis,
 per snippet; that bound applies to locator outputs, not internal `ChunkFile`
 bodies. CLI-only no-refresh retains old ranking/line/HEAD metadata and makes

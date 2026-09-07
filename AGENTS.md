@@ -38,6 +38,23 @@ The complete structural blast radius is:
   oversized AST symbols remain whole. LF normalization also precedes parsing
   so a Go comment ending between CR/LF cannot retain a stray CR. These rules
   bind `ChunkFile`, not every document or memory chunker.
+  Before the review-cycle lifetime fix, those closes did not release the
+  pinned binding's separate `ParseOptions` registration: its unmatched
+  `pointer.Save(options)` retained a C allocation, callback and request
+  context for every parsed file. After the fix, `ChunkFile` passes nil options
+  through the existing input-callback API, whose registration and C strings
+  the binding releases; no progress/options registration is created.
+  Cancellation is checked at entry, native input requests, immediately after
+  native return and after the AST walk. A partial tree from canceled input
+  is closed before returning the cancellation error. Native work between
+  input callbacks is no longer periodically interruptible; cancellation can
+  wait for that work. This boundary binds `ChunkFile` and its refresh callers
+  (CLI/MCP/eval), not all parsers or fallback helpers. `chunker_test.go` adds
+  a request-context lifetime regression and canceled-input refusal check.
+  The unchanged 32-call/one-MiB-context reviewer probe reproduced 0/32
+  finalizations and 33,558,664 retained bytes before the fix, then 32/32
+  finalizations and 5,144 retained bytes after it. No binding/grammar pin,
+  chunking/scoring rule, source protection, corpus or golden matcher changes.
 - New `config.go` reads `[code_index]`'s independent 0.5/0.5 fusion weights
   and 0.90 top-level tests/benches/examples penalty. Only `[retrieval]` mode
   (default FTS) and pool size are shared as in the tag; memory scoring,

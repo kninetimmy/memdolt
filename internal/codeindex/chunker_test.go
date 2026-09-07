@@ -2,11 +2,72 @@ package codeindex
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
+
+func TestChunkFileReleasesRequestContexts(t *testing.T) {
+	const parses = 8
+	type contextKey struct{}
+	finalized := make(chan struct{}, parses)
+	for range parses {
+		func() {
+			// Larger than the tiny-object allocator: each finalizer must run.
+			value := new([64 << 10]byte)
+			runtime.SetFinalizer(value, func(*[64 << 10]byte) { finalized <- struct{}{} })
+			ctx := context.WithValue(context.Background(), contextKey{}, value)
+			chunks, err := ChunkFile(ctx, "fixture.go", "package fixture\nfunc Example() {}\n")
+			if err != nil || len(chunks) != 1 {
+				t.Fatalf("parse: chunks=%d error=%v", len(chunks), err)
+			}
+			runtime.KeepAlive(ctx)
+		}()
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for collected := 0; collected < parses; {
+		runtime.GC()
+		select {
+		case <-finalized:
+			collected++
+		case <-poll.C:
+		case <-deadline.C:
+			t.Fatalf("native parsing retained request contexts: finalized %d/%d", collected, parses)
+		}
+	}
+}
+
+type cancelAfterEntryContext struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (c *cancelAfterEntryContext) Err() error {
+	c.checks++
+	if c.checks == 2 {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestChunkFileDiscardsCanceledNativeInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Trigger cancellation after the entry check, without a timing race.
+	ctx = &cancelAfterEntryContext{Context: ctx, cancel: cancel}
+	chunks, err := ChunkFile(ctx, "fixture.go", "package fixture\nfunc Example() {}\n")
+	if !errors.Is(err, context.Canceled) || chunks != nil {
+		t.Fatalf("canceled native input returned chunks: %+v, error=%v", chunks, err)
+	}
+}
 
 func TestAllSevenASTsPreserveContainersReceiversDocumentationAndLF(t *testing.T) {
 	for _, tt := range []struct {
