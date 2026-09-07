@@ -12,8 +12,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
-
 	"github.com/kninetimmy/memdolt/internal/layout"
 )
 
@@ -244,7 +242,7 @@ func configuredTransferRemote(ctx context.Context, conn *sql.Conn, opts Transfer
 	var rawParams sql.NullString
 	err = conn.QueryRowContext(ctx, "SELECT url, params FROM dolt_remotes WHERE name = ?", opts.Remote).Scan(&remoteURL, &rawParams)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", errors.New("no remote: stop the owner and configure the selected remote using Dolt in <repository>/.memdolt/dolt/memory (`dolt remote add <name> <absolute-url>`), or use `memdolt clone` in a fresh --dir")
+		return "", "", errors.New("no remote: configure one with `memdolt repo remote add <name> <absolute-url> --dir <repository>`, or use `memdolt clone` in a fresh --dir")
 	}
 	if err != nil {
 		return "", "", errors.New("cannot read selected remote configuration; inspect it with Dolt while the owner is stopped")
@@ -253,12 +251,11 @@ func configuredTransferRemote(ctx context.Context, conn *sql.Conn, opts Transfer
 	if rawParams.Valid && json.Unmarshal([]byte(rawParams.String), &params) != nil {
 		return "", "", errors.New("invalid remote parameters; configure only an optional SQL username")
 	}
-	for key, value := range params {
-		if key != dbfactory.GRPCUsernameAuthParam || !cloneUser.MatchString(value) || strings.HasPrefix(value, "-") {
-			return "", "", errors.New("unsupported remote parameters; configure only a valid SQL username, never a password or driver option")
-		}
-		user = value
+	remote, err := sanitizedRemote(opts.Remote, remoteURL, params)
+	if err != nil {
+		return "", "", err
 	}
+	remoteURL, user = remote.URL, remote.User
 	if opts.User != "" {
 		user = opts.User
 	}
@@ -270,19 +267,7 @@ func configuredTransferRemote(ctx context.Context, conn *sql.Conn, opts Transfer
 			return "", user, errors.New("set DOLT_REMOTE_PASSWORD in the transfer process; if an owner is running, restart the owner with DOLT_REMOTE_PASSWORD in its environment, then retry")
 		}
 	}
-	// Dolt remote-add serializes Windows file:///C:/ paths as file://C:/.
-	// Restore only that unambiguous native spelling before the clone validator.
-	if filepath.Separator == '\\' && strings.HasPrefix(remoteURL, "file://") && len(remoteURL) > 9 && remoteURL[8:10] == ":/" &&
-		((remoteURL[7] >= 'A' && remoteURL[7] <= 'Z') || (remoteURL[7] >= 'a' && remoteURL[7] <= 'z')) {
-		remoteURL = "file:///" + remoteURL[7:]
-	}
-	// Native remote-add also stores decoded file-path spaces. Re-escape those
-	// without accepting URL credentials, query/fragment, controls or ambiguity:
-	// the unchanged clone validator still checks the canonical URL below.
-	if parsed, parseErr := url.Parse(remoteURL); parseErr == nil && parsed.Scheme == "file" {
-		remoteURL = parsed.String()
-	}
-	if err := validateCloneRemote(remoteURL, user); err != nil {
+	if err := validateRemoteURL(remoteURL, user); err != nil {
 		return "", user, err
 	}
 	return remoteURL, user, nil

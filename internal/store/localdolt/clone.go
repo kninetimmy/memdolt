@@ -145,6 +145,13 @@ func validateCloneRemote(raw, user string) error {
 			return errors.New("set DOLT_REMOTE_PASSWORD in the process environment to use --user")
 		}
 	}
+	return validateRemoteURL(raw, user)
+}
+
+// validateRemoteURL checks the shared clone/transfer URL contract without
+// consulting credentials or contacting the destination. Configuration needs
+// this same contract before a password or even a file target exists.
+func validateRemoteURL(raw, user string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u == nil || u.Opaque != "" || u.User != nil ||
 		strings.ContainsAny(raw, "?#\\") || strings.IndexFunc(raw, unicode.IsSpace) >= 0 ||

@@ -114,7 +114,7 @@ func TestTransferCLIPreflightHelpAndOutputFailures(t *testing.T) {
 			}
 		}
 		initialized := initStore(t)
-		if err := runMemdoltErr(t, operation, "--dir", initialized); !strings.Contains(err, "no remote") || !strings.Contains(err, "dolt remote add") {
+		if err := runMemdoltErr(t, operation, "--dir", initialized); !strings.Contains(err, "no remote") || !strings.Contains(err, "memdolt repo remote add") {
 			t.Fatal(err)
 		}
 		if err := runMemdoltErr(t, operation, "--dir", initialized, "--user", ""); !strings.Contains(err, "must not be empty") {

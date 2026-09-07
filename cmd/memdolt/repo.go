@@ -35,9 +35,9 @@ type repoStatusReport struct {
 func newRepoCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "repo",
-		Short: "Inspect the local memory repository",
+		Short: "Inspect the local memory repository and configure remotes",
 	}
-	cmd.AddCommand(newRepoStatusCommand())
+	cmd.AddCommand(newRepoStatusCommand(), newRepoRemoteCommand())
 	return cmd
 }
 

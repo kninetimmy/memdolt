@@ -163,6 +163,27 @@ func (s *OwnerStore) CheckWriteText(ctx context.Context, text []string) error {
 	return s.operation(ctx, opCheckWriteText, checkWriteTextArgs{Text: text}, &struct{}{})
 }
 
+func (s *OwnerStore) ListRemotes(ctx context.Context) ([]localdolt.Remote, error) {
+	var result []localdolt.Remote
+	err := s.operation(ctx, opListRemotes, nil, &result)
+	return result, err
+}
+
+func (s *OwnerStore) AddRemote(ctx context.Context, remote localdolt.Remote) (localdolt.Remote, error) {
+	// Reject URL credentials before even constructing the IPC request.
+	if err := localdolt.ValidateRemote(remote); err != nil {
+		return localdolt.Remote{}, err
+	}
+	var wire addRemoteResult
+	if err := s.operation(ctx, opAddRemote, remote, &wire); err != nil {
+		return localdolt.Remote{}, fmt.Errorf("remote add owner response lost or unavailable; outcome unknown; inspect `memdolt repo remote list` before retrying: %w", err)
+	}
+	if wire.Error != "" {
+		return wire.Result, errors.New(wire.Error)
+	}
+	return wire.Result, nil
+}
+
 func (s *OwnerStore) Push(ctx context.Context, opts localdolt.TransferOptions) (localdolt.TransferResult, error) {
 	return s.transfer(ctx, opPush, opts)
 }
