@@ -50,6 +50,15 @@ const (
 	opImportMemory     = "import_memory"
 )
 
+const (
+	opFactAdd           = "human_fact_add"
+	opFactVerify        = "human_fact_verify"
+	opFactSupersede     = "human_fact_supersede"
+	opDecisionAdd       = "human_decision_add"
+	opDecisionSummary   = "human_decision_summary"
+	opDecisionSupersede = "human_decision_supersede"
+)
+
 // Backend is the initialized data-store surface the live owner exposes. The
 // application-level review accept gate is supplied separately, so this
 // interface cannot accidentally reduce promotion to a raw storage call. The
@@ -83,6 +92,12 @@ type Backend interface {
 	RepoStatus(context.Context, localdolt.RepoStatusOptions) (localdolt.RepoStatusReport, error)
 	ExportMemory(context.Context, localdolt.ExportMemoryOptions) (localdolt.InteropResult, error)
 	ImportMemory(context.Context, localdolt.ImportMemoryOptions) (localdolt.InteropResult, error)
+	FactAdd(context.Context, localdolt.FactAddOptions) (localdolt.HumanMemoryResult, error)
+	FactVerify(context.Context, string, memory.Actor) (localdolt.HumanMemoryResult, error)
+	FactSupersede(context.Context, string, string, memory.Actor) (localdolt.HumanMemoryResult, error)
+	DecisionAdd(context.Context, localdolt.DecisionAddOptions) (localdolt.HumanMemoryResult, error)
+	DecisionSetSummary(context.Context, string, string, memory.Actor) (localdolt.HumanMemoryResult, error)
+	DecisionSupersede(context.Context, string, string, memory.Actor) (localdolt.HumanMemoryResult, error)
 }
 
 var _ Backend = (*localdolt.Store)(nil)
@@ -237,6 +252,12 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			completed.Error = operationErr.Error()
 		}
 		result = completed
+	case opFactAdd, opFactVerify, opFactSupersede, opDecisionAdd, opDecisionSummary, opDecisionSupersede:
+		changed, changeErr := h.humanMemoryOperation(ctx, req)
+		if changeErr != nil {
+			changed.Error = changeErr.Error()
+		}
+		result = changed
 	case opDocList:
 		result, err = h.store.DocList(ctx)
 	case opDocShow:

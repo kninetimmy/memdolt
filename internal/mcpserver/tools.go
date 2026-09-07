@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -223,22 +222,9 @@ type listDecisionsInput struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-type decisionRecord struct {
-	ID                   string    `json:"id"`
-	Title                string    `json:"title"`
-	Rationale            string    `json:"rationale"`
-	Summary              string    `json:"summary,omitempty"`
-	AlternativesRejected string    `json:"alternativesRejected,omitempty"`
-	Evidence             string    `json:"evidence,omitempty"`
-	Status               string    `json:"status"`
-	Source               string    `json:"source"`
-	DecidedAt            time.Time `json:"decidedAt"`
-	SupersededBy         string    `json:"supersededBy,omitempty"`
-}
-
 type listDecisionsOutput struct {
-	Status    string           `json:"status"`
-	Decisions []decisionRecord `json:"decisions"`
+	Status    string                  `json:"status"`
+	Decisions []memory.DecisionRecord `json:"decisions"`
 }
 
 func (t *Toolset) listDecisions(ctx context.Context, _ *mcp.CallToolRequest, in listDecisionsInput) (*mcp.CallToolResult, listDecisionsOutput, error) {
@@ -246,23 +232,11 @@ func (t *Toolset) listDecisions(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if status == "" {
 		status = "active"
 	}
-	if status != "active" && status != "superseded" && status != "draft" && status != "all" {
-		return nil, listDecisionsOutput{}, fmt.Errorf("unknown decision status %q, want active, superseded, draft, or all", status)
-	}
 	limit, err := listLimit(in.Limit, search.DefaultLimit)
 	if err != nil {
 		return nil, listDecisionsOutput{}, err
 	}
-	query := "SELECT id, title, rationale, summary, alternatives_rejected, evidence, status, source, decided_at, superseded_by " +
-		"FROM decisions AS OF 'main'"
-	args := []any{}
-	if status != "all" {
-		query += " WHERE status = ?"
-		args = append(args, status)
-	}
-	query += " ORDER BY decided_at DESC, id DESC LIMIT ?"
-	args = append(args, limit)
-	decisions, err := queryDecisions(ctx, t.store, query, args...)
+	decisions, err := memory.ListDecisions(ctx, t.store, status, limit)
 	if err != nil {
 		return nil, listDecisionsOutput{}, err
 	}
@@ -274,46 +248,22 @@ type listFactsInput struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-type factRecord struct {
-	ID           string     `json:"id"`
-	Key          string     `json:"key"`
-	Value        string     `json:"value"`
-	Source       string     `json:"source"`
-	Kind         string     `json:"kind,omitempty"`
-	Evidence     string     `json:"evidence,omitempty"`
-	VerifiedAt   *time.Time `json:"verifiedAt,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	Stale        bool       `json:"stale"`
-	SupersededBy string     `json:"supersededBy,omitempty"`
-}
-
 type listFactsOutput struct {
-	Prefix string       `json:"prefix,omitempty"`
-	Facts  []factRecord `json:"facts"`
+	Prefix string              `json:"prefix,omitempty"`
+	Facts  []memory.FactRecord `json:"facts"`
 }
 
 func (t *Toolset) listFacts(ctx context.Context, _ *mcp.CallToolRequest, in listFactsInput) (*mcp.CallToolResult, listFactsOutput, error) {
 	prefix := strings.TrimSpace(in.Prefix)
-	if prefix != "" && !strings.HasSuffix(prefix, ".") {
-		return nil, listFactsOutput{}, fmt.Errorf("fact prefix %q must end in '.'", prefix)
+	paths, err := layout.New(t.baseDir)
+	if err != nil {
+		return nil, listFactsOutput{}, err
 	}
-	if in.Limit < 0 {
-		return nil, listFactsOutput{}, errors.New("fact list limit must not be negative")
+	cfg, err := retrieval.LoadConfig(paths.ConfigFile())
+	if err != nil {
+		return nil, listFactsOutput{}, err
 	}
-	query := "SELECT id, `key`, value, source, kind, evidence, verified_at, created_at, superseded_by " +
-		"FROM facts AS OF 'main'"
-	args := []any{}
-	if prefix != "" {
-		query += " WHERE `key` LIKE ? ESCAPE '!'"
-		pattern := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(prefix) + "%"
-		args = append(args, pattern)
-	}
-	query += " ORDER BY `key`, created_at, id"
-	if in.Limit > 0 {
-		query += " LIMIT ?"
-		args = append(args, in.Limit)
-	}
-	facts, err := t.queryFacts(ctx, query, args...)
+	facts, err := memory.ListFacts(ctx, t.store, prefix, in.Limit, cfg.FactStaleAfterDays)
 	if err != nil {
 		return nil, listFactsOutput{}, err
 	}
@@ -593,81 +543,6 @@ func (t *Toolset) Close() error {
 	t.flushErr = errors.Join(t.flushErr, t.flushLocked(ctx), t.closeElicitationState())
 	t.groups = nil
 	return t.flushErr
-}
-
-func (t *Toolset) queryFacts(ctx context.Context, query string, args ...any) (facts []factRecord, err error) {
-	paths, err := layout.New(t.baseDir)
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := retrieval.LoadConfig(paths.ConfigFile())
-	if err != nil {
-		return nil, err
-	}
-	rows, err := t.store.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list facts: %w", err)
-	}
-	defer func() { err = errors.Join(err, rows.Close()) }()
-	now := time.Now().UTC()
-	for rows.Next() {
-		var fact factRecord
-		var key, value, source, kind, evidence, superseded sql.NullString
-		var verified, created sql.NullTime
-		if err := rows.Scan(&fact.ID, &key, &value, &source, &kind, &evidence, &verified, &created, &superseded); err != nil {
-			return nil, fmt.Errorf("list facts: %w", err)
-		}
-		fact.Key, fact.Value, fact.Source = key.String, value.String, source.String
-		fact.Kind, fact.Evidence, fact.SupersededBy = kind.String, evidence.String, superseded.String
-		if verified.Valid {
-			stamp := verified.Time
-			fact.VerifiedAt = &stamp
-		}
-		if created.Valid {
-			fact.CreatedAt = created.Time
-		}
-		fact.Stale = !verified.Valid || retrieval.FactIsStale(verified.Time, now, cfg.FactStaleAfterDays)
-		facts = append(facts, fact)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list facts: %w", err)
-	}
-	if facts == nil {
-		facts = []factRecord{}
-	}
-	return facts, nil
-}
-
-func queryDecisions(ctx context.Context, st store.Store, query string, args ...any) (decisions []decisionRecord, err error) {
-	rows, err := st.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list decisions: %w", err)
-	}
-	defer func() { err = errors.Join(err, rows.Close()) }()
-	for rows.Next() {
-		var decision decisionRecord
-		var title, rationale, summary, alternatives, evidence, status, source, superseded sql.NullString
-		var decided sql.NullTime
-		if err := rows.Scan(&decision.ID, &title, &rationale, &summary, &alternatives, &evidence,
-			&status, &source, &decided, &superseded); err != nil {
-			return nil, fmt.Errorf("list decisions: %w", err)
-		}
-		decision.Title, decision.Rationale = title.String, rationale.String
-		decision.Summary, decision.AlternativesRejected = summary.String, alternatives.String
-		decision.Evidence, decision.Status, decision.Source = evidence.String, status.String, source.String
-		decision.SupersededBy = superseded.String
-		if decided.Valid {
-			decision.DecidedAt = decided.Time
-		}
-		decisions = append(decisions, decision)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list decisions: %w", err)
-	}
-	if decisions == nil {
-		decisions = []decisionRecord{}
-	}
-	return decisions, nil
 }
 
 func queryCount(ctx context.Context, st store.Store, query string) (count int, err error) {

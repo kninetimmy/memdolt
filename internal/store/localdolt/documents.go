@@ -70,7 +70,7 @@ func (s *Store) docAdd(ctx context.Context, opts DocAddOptions, finalize func(*o
 	// ordinary writes measurably. Foreign Dolt/config writers do not share it.
 	s.proposalMu.Lock()
 	defer s.proposalMu.Unlock()
-	conn, head, err := s.documentConn(ctx)
+	conn, head, err := s.initializedMainConn(ctx, "document")
 	if err != nil {
 		return result, err
 	}
@@ -183,7 +183,7 @@ func (s *Store) docAdd(ctx context.Context, opts DocAddOptions, finalize func(*o
 // DocList and DocShow pin all their table reads to one captured main hash.
 // Dirty/proposal contents remain outside that snapshot.
 func (s *Store) DocList(ctx context.Context) (docs []Document, err error) {
-	conn, head, err := s.documentConn(ctx)
+	conn, head, err := s.initializedMainConn(ctx, "document")
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func (s *Store) DocShow(ctx context.Context, ident string) (result DocResult, er
 	if err := documentPathArgument(ident); err != nil {
 		return result, err
 	}
-	conn, head, err := s.documentConn(ctx)
+	conn, head, err := s.initializedMainConn(ctx, "document")
 	if err != nil {
 		return result, err
 	}
@@ -229,7 +229,7 @@ func (s *Store) DocRemove(ctx context.Context, ident string, actor memory.Actor)
 	}
 	s.proposalMu.Lock()
 	defer s.proposalMu.Unlock()
-	conn, head, err := s.documentConn(ctx)
+	conn, head, err := s.initializedMainConn(ctx, "document")
 	if err != nil {
 		return result, err
 	}
@@ -271,8 +271,8 @@ func documentFinalError(result DocResult, err error) error {
 	return err
 }
 
-func (s *Store) documentConn(ctx context.Context) (*sql.Conn, string, error) {
-	conn, err := s.committedMainConn(ctx, "documents")
+func (s *Store) initializedMainConn(ctx context.Context, purpose string) (*sql.Conn, string, error) {
+	conn, err := s.committedMainConn(ctx, purpose)
 	if err != nil {
 		return nil, "", err
 	}
@@ -284,11 +284,11 @@ func (s *Store) documentConn(ctx context.Context) (*sql.Conn, string, error) {
 		var version string
 		err = conn.QueryRowContext(ctx, "SELECT v FROM "+quoteIdentifier(DatabaseName+"/"+head)+".meta WHERE k = ?", store.SchemaVersionKey).Scan(&version)
 		if err == nil && version != strconv.Itoa(store.LatestSchemaVersion()) {
-			err = errors.New("document operations require the current schema")
+			err = fmt.Errorf("%s operations require the current schema", purpose)
 		}
 	}
 	if err != nil {
-		return nil, "", errors.Join(fmt.Errorf("read initialized document store; use `memdolt init` for an older store or a newer binary for a newer store: %w", err), conn.Close())
+		return nil, "", errors.Join(fmt.Errorf("read initialized %s store; use `memdolt init` for an older store or a newer binary for a newer store: %w", purpose, err), conn.Close())
 	}
 	return conn, head, nil
 }
