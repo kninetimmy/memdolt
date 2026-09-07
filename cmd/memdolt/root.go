@@ -34,6 +34,7 @@ func newRootCommand() *cobra.Command {
 		"emit machine-readable JSON on stdout instead of human-readable text")
 
 	root.AddCommand(newCloneCommand())
+	root.AddCommand(newCodeCommand())
 	root.AddCommand(newDoctorCommand())
 	root.AddCommand(newDocCommand())
 	root.AddCommand(newEvalCommand())
@@ -41,6 +42,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newImportCommand())
 	root.AddCommand(newIndexCommand())
 	root.AddCommand(newInitCommand())
+	root.AddCommand(newLocateCommand())
 	root.AddCommand(newHumanMemoryCommand("fact"))
 	root.AddCommand(newHumanMemoryCommand("decision"))
 	root.AddCommand(newOpenCodeCommand())

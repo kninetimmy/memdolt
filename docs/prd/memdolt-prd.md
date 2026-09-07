@@ -744,6 +744,16 @@ After it, repository doc commands and `doc_add` ship; global documents,
 code indexing/git history/locate and full M5 parity remain separate. No
 retrieval golden query, fixture, quality threshold or scoring rule changes.
 
+Before issue #138, that remaining list still included the local code index,
+locate and its eval gate. After it, §9's implemented subset and the unchanged
+locator golden formats ship. The full Rust match bar is 18/18 on its complete
+corresponding benchmark corpus; polyglot is 17/17. Separate harness floor-0
+rerank checks reject both nonsense probes on each corpus. Default fusion has
+no floor and honestly reports both leaks. [The frozen-reference notice](../../tests/golden/testdata/locate/NOTICE.md)
+documents why the later v0.2.0 tree, whose helper relocation left a stale golden
+path, is a separate 17/18 diagnostic rather than that benchmark's corpus.
+The memory golden, scale sweep and their selected-strategy thresholds remain.
+
 ---
 
 ## 9. Code index & `locate`
@@ -756,6 +766,80 @@ Direct port of memhub's design; storage = local SQLite via `modernc.org/sqlite` 
 - Returns ranked `{path, start_line, end_line, symbol, kind, score, snippet≤6 lines}` — breadcrumbs, never full files.
 - Schema-version-mismatch = drop + rebuild (index is regenerable; `upgrade` is a no-op here).
 - Git-ingest history tables (`commits/files/commit_files` + `search file:<path>`) live here too (§6.1 note).
+
+**Implemented code-only subset (issue #138).** Before this delivery the bullets
+above were a destination contract with no code-index/locate implementation.
+After it, code index/status/rm, locate, eval locate and the typed local MCP
+locator ship; the final Git-history bullet remains a placement design only.
+No history corpus, `search file:` implementation, global store or full-M5
+completion is implied. SQLite remains a pure-Go dependency; the actual seven
+tree-sitter parsers use the already-mandatory cgo build.
+
+`internal/codeindex` never opens/migrates Dolt or routes to its owner. A code
+operation touches only its own SQLite/lock plus tracked source reads; memory
+embeddings, committed/proposed memory, exports and transfers stay separate.
+Status creates nothing. A recognized application ID, safe file identity and
+known derived schema bound rebuild/removal; unknown files or unrelated schema
+are retained. DELETE/FULL journaling intentionally replaces tagged WAL/NORMAL
+here, preventing read-only status from creating WAL/shared-memory sidecars.
+Journal residue refuses pending inspection. An exclusive `code_index.lock`
+serializes cooperating refresh/query/remove calls and fails visibly on
+contention. There is no automatic crash-residue/PID cleanup. Foreign writers
+are outside this lock; checked SQLite pathnames and removal identity checks
+do not eliminate the final check/open or check/remove interval.
+
+Tracked file diffing retains the millisecond mtime/size fast path, then raw-byte
+hash checks. HEAD is only reported. A metadata-preserving edit can remain
+unseen. Changed deny rules force content rescanning. Deleted/renamed, denied,
+linked, unreadable and binary replacements lose stale chunks/vectors; binary
+includes invalid UTF-8 and NUL. Chunk/FTS transactions complete before vector
+backfill; a visible inference failure preserves that complete text index.
+Model/dimension/text/vector hashes, length, finite values and nonzero norm
+gate vector currency. Per-file counts and the committed result distinguish
+skips, exclusions, denials, binary files and completed effects.
+
+The seven ABI-15 grammar pins and official Go binding are recorded in AGENTS.md
+and `go.mod`; no broad language pack is used. The tagged top-level/container/
+method, receiver, documentation/module-doc and fallback rules are retained.
+TSX selects its own grammar. Normalizing before parsing also prevents a Go
+comment boundary between CR/LF from retaining a stray CR. Parser/tree/cursor
+resources are released; native load/parse failures remain errors. Oversized
+AST bodies remain intact. The shared inference tokenizer now enforces the
+previously missing 512-token fastembed limit, including BERT special tokens
+and longest-first pair truncation. This affects every `encodeSingle`/`encodePair`
+caller; short inputs, NFD, verified artifact loading and memory scoring/config
+remain unchanged. It never truncates stored source text.
+
+Before the #138 review-cycle lifetime fix, closing parser/tree/cursor resources
+still left the pinned binding's progress-options C registration and captured
+request context unreleased. After it, `ChunkFile` passes nil parse options,
+using only the input callback whose registration and C strings the binding
+releases. Cancellation checks occur at entry, native input requests, immediately
+after native return and after the AST walk. Canceled input can produce a partial
+tree; that tree is closed before returning the error. Native work between input
+requests is no longer periodically interruptible, so cancellation may wait for
+it. This boundary binds code chunking and its CLI/MCP/eval refresh callers, not
+every parser or fallback helper. A lifetime regression and the unchanged
+reviewer probe verify request-context release. Grammar/binding versions,
+chunking/scoring, source protection, corpus pairing and full golden bars remain.
+
+`Locate` returns at most six lines and 400 characters, including an ellipsis,
+per snippet; that bound applies to locator outputs, not internal `ChunkFile`
+bodies. CLI-only no-refresh retains old ranking/line/HEAD metadata and makes
+no Git command, while snippets read current files through the same root,
+link/reparse, owner-identity and deny checks. MCP and eval always refresh.
+Canonical confinement excludes absolute/traversing/stream paths and protected
+metadata. `layout.CheckOwnerSource`, extracted from document ingestion, checks
+the opened file against known owner credentials before reads; every `DocAdd`
+retains its previous protection, and code/config/header reads now share it.
+This protects that known file and aliases, not arbitrary copies or all readers.
+
+FTS5's quoted AND query, 100-candidate lexical gather, min/max normalization,
+clamped cosine, 0.5/0.5 fusion, 0.90 top-level test penalty and deterministic
+ID ties retain tagged behavior. Runtime reranking remains opt-in and floorless;
+only the eval harness applies its optional floor. The [code locator guide](../code-locator.md)
+records configuration compatibility, freshness limits, lifecycle and every
+surface. AGENTS.md inventories the complete structural blast radius.
 
 ---
 
@@ -816,6 +900,25 @@ Its typed input is `file` plus optional
 `title`, with no global, actor, confinement-disable or arbitrary SQL argument.
 §11.2 records the
 shared document operation and path boundary; other deferred names stay absent.
+
+**Locator phasing (issue #138).** Before this delivery `locate` was still
+absent. After it, the previous nineteen real tools remain and typed `locate`
+adds query/limit/rerank input, bounded breadcrumbs and lazy local refresh.
+There is no repository-path, SQL, no-refresh or score-floor input. It uses
+`Toolset.baseDir` and the independent local index even when the Dolt backend
+is unavailable; it neither routes through owner IPC nor flushes notes. The
+twenty-tool count binds `RegisterTools` at this delivery. Existing discovery,
+attribution, cache hints, review, batching and shutdown behavior remain.
+The existing `serve` command still owns its Dolt startup/shutdown lifecycle;
+the local-only restriction applies to the locator call, not server startup.
+After integrating #137, its twenty-one registered tools including `repo_pull`
+and `repo_push` remain, and `locate` makes twenty-two under `RegisterTools`.
+The transfer/elicitation implementation, immutable provenance, guarded stdio,
+original input closer and legacy negotiation are preserved. Shipped `serve`
+therefore also applies its raw-Unicode input guard to locator requests;
+standalone `New` and arbitrary transports keep their existing boundaries.
+The integration changes combined discovery/template expectations, not locator
+storage, parsing, cancellation, inference, source protection or golden data.
 
 **Render phasing (issue #133).** Before this delivery the later-backed list
 above still included `render`; after it, the existing sixteen tools (M3's
@@ -1063,6 +1166,18 @@ holds a transaction or uncommitted merge on main. Confirmed result-plus-error
 responses remain structured; transport uncertainty never causes replay.
 
 ### 11.2 CLI
+
+**Code-only M5 surfaces (issue #138).** Before this issue there was no `code`,
+`locate` or `eval locate` command. After it, `code index|status|rm`,
+`locate <query> [--limit N] [--rerank] [--no-refresh]` and
+`eval locate [--golden file] [--k N] [--rerank] [--min-rerank-score F]` all
+accept `--dir`/`--json` and implement §9's local-only behavior. Status creates
+nothing; index reports complete chunk effects with later vector errors.
+Eval preserves every outcome and exits nonzero for a missed match or a failed
+explicitly floored rerank safety check. Default no-floor leakage is reported.
+Existing `index` still manages durable-memory vectors, and all other commands
+retain their routing/semantics. The three hosts' core skills remain; real
+locate/eval-locate templates and two OpenCode command entries are additive.
 
 Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
 
@@ -1952,6 +2067,18 @@ not full M5 or real-host acceptance. AGENTS.md records the complete file invento
 
 `.memdolt/config.toml` mirrors memhub's structure where semantics survive: `[deny_list]`, `[render]`, `[retrieval]` + `[retrieval.scoring]` (identical knobs/defaults), `[code_index]`, `[doc] allowed_dirs`, `[global]`, `[audit]`, `[wrap_up]`. Replaced: `[sync]` → `[repo] remote_url, topology = "clone" | "live" | "local", auto_pull_on_session_start (bool)`. Machine config `~/.memdolt/config.toml` holds hub defaults + known-projects registry (upgrade enumeration — never a filesystem scan; memhub parity).
 
+Before #138 `[code_index]` had no reader. Its new independent reader consumes
+only `fts_weight`, `vector_weight` and `test_path_penalty`; it retains the
+tagged shared retrieval mode/pool, not recall's scoring/toggle/floor settings.
+Invalid TOML, unknown code keys, invalid consumed values and invalid deny rules
+fail visibly. Memhub deny patterns were path globs; memdolt's existing regex
+meaning is unchanged and now scans code paths/content. Glob `private/**`
+maps to regex `(^|/)private/.*$`, and `*.generated.go` to
+`(^|/)[^/]*\.generated\.go$`, written as TOML literal strings. The tagged default
+secret paths are fixed code exclusions even with an explicit empty regex list;
+that opt-out behavior differs from memhub. There is no byte-compatible TOML
+claim, second pattern setting, or change to existing memory-write enforcement.
+
 Before issue #133, `[render]` had no implementation. After it,
 `render.output_dir` defaults to `.memdolt/rendered`. Relative paths must stay
 within the canonical repository root; an explicit absolute local path in this
@@ -2396,6 +2523,18 @@ templates updated. Synthetic direct, authenticated-owner and modern/legacy
 MCP checks cover its content and preservation contract. This does not complete
 the parity matrix or the locate golden gate; other M5 capabilities and the
 gated M6 token/transcript workflows retain their prior phasing.
+
+**M5 code-index subset (issue #138):** before this slice, the preceding
+records left code indexing, locate and its golden gate deferred. After it,
+§9's local-only code surfaces and the unchanged golden formats ship. Protected
+Ubuntu CI runs the exact production locator gate with verified model-cache
+reuse alongside the preserved memory retrieval/scale gate. On the complete
+corresponding Rust benchmark corpus the full bar is 18/18; the exact tagged
+polyglot fixture passes 17/17. Both floor-0 harness safety checks reject 2/2
+probes while default fusion reports 2/2 leaks. The separate complete-v0.2.0
+17/18 diagnostic preserves the stale-path evidence and does not lower the
+benchmark bar. Git-ingested history, global memory, public memory commands and
+remaining M5 parity stay separately tracked; this does not satisfy full M5.
 
 **M5 human memory subset (issue #139):** before this slice, the remaining
 CRUD/parity work included the ordinary trusted human fact/decision commands.

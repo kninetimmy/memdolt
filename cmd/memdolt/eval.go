@@ -20,6 +20,7 @@ func newEvalCommand() *cobra.Command {
 		Short: "Evaluate production retrieval against committed golden queries",
 	}
 	cmd.AddCommand(newEvalRetrievalCommand())
+	cmd.AddCommand(newEvalLocateCommand())
 	return cmd
 }
 

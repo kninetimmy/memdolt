@@ -106,6 +106,160 @@ The user's own migration remains optional and unperformed. Full blast radius:
   old-state-retention runbook. No dependency, durable migration, global backend,
   full M5 or physical hub acceptance is implied.
 
+**Local code-index delivery (issue #138).** Before this delivery, `code`,
+`locate`, `eval locate` and the real MCP `locate` tool were deferred. After
+it, `memdolt code index|status|rm`, `memdolt locate <query>` and `memdolt eval
+locate` accept `--dir`/`--json` and operate only on local tracked source plus
+`.memdolt/code_index.sqlite`. No Dolt open, migration, owner routing, memory
+write, proposal change, export or sync occurs. Existing `index status/rebuild`
+still manages committed-memory vectors in `.memdolt/embeddings.sqlite`.
+The complete structural blast radius is:
+
+- New `internal/codeindex/grammar.go` pins the seven real grammar role sets;
+  `chunker.go` ports top-level items, impl/type methods, nested containers,
+  excised member bodies, Go pointer/generic receivers, JS declarators,
+  Python decorators/docstrings and each language's module docs. TSX uses its
+  actual dialect. Parser, tree and cursor resources are closed; no query
+  resource is allocated. Native failures are visible. A successful parse
+  without recognized items uses the tagged 50-line/4000-byte fallback, while
+  oversized AST symbols remain whole. LF normalization also precedes parsing
+  so a Go comment ending between CR/LF cannot retain a stray CR. These rules
+  bind `ChunkFile`, not every document or memory chunker.
+  Before the review-cycle lifetime fix, those closes did not release the
+  pinned binding's separate `ParseOptions` registration: its unmatched
+  `pointer.Save(options)` retained a C allocation, callback and request
+  context for every parsed file. After the fix, `ChunkFile` passes nil options
+  through the existing input-callback API, whose registration and C strings
+  the binding releases; no progress/options registration is created.
+  Cancellation is checked at entry, native input requests, immediately after
+  native return and after the AST walk. A partial tree from canceled input
+  is closed before returning the cancellation error. Native work between
+  input callbacks is no longer periodically interruptible; cancellation can
+  wait for that work. This boundary binds `ChunkFile` and its refresh callers
+  (CLI/MCP/eval), not all parsers or fallback helpers. `chunker_test.go` adds
+  a request-context lifetime regression and canceled-input refusal check.
+  The unchanged 32-call/one-MiB-context reviewer probe reproduced 0/32
+  finalizations and 33,558,664 retained bytes before the fix, then 32/32
+  finalizations and 5,144 retained bytes after it. No binding/grammar pin,
+  chunking/scoring rule, source protection, corpus or golden matcher changes.
+- New `config.go` reads `[code_index]`'s independent 0.5/0.5 fusion weights
+  and 0.90 top-level tests/benches/examples penalty. Only `[retrieval]` mode
+  (default FTS) and pool size are shared as in the tag; memory scoring,
+  rerank toggles/floors and stale/superseded behavior remain independent.
+  Memhub's same-named deny setting used globs; memdolt retains its existing
+  regex contract and scans code path/content through `denylist.Compile`.
+  The tagged default secret paths are fixed code exclusions, even with
+  `patterns = []`; their opt-out behavior differs from memhub. A custom glob
+  `private/**` becomes regex `(^|/)private/.*$`; `*.generated.go` becomes
+  `(^|/)[^/]*\.generated\.go$` in a TOML literal string. No second setting,
+  glob dependency or byte-compatible-TOML claim is introduced. Existing
+  `denylist.Load` and memory-write enforcement are unchanged.
+- New `files.go` and `path_windows.go`/`path_other.go` own canonical root
+  discovery, argument-based `git ls-files -z`, sorted tracked paths,
+  source exclusions, rooted reads and link/reparse checks. Paths/rows cannot
+  select absolute, traversing, stream or protected metadata sources. Every
+  source read through `openSource`, including no-refresh snippets, checks
+  opened identity before content. Unreadable/denied/deleted/binary replacements
+  lose stale chunks/vectors; binary is invalid UTF-8 or NUL. Counter meanings,
+  the tagged millisecond mtime/size fast path, content hashes and HEAD-only
+  reporting are documented in [the code locator guide](docs/code-locator.md).
+  Metadata-preserving edits can remain unseen. These restrictions bind code
+  indexing/locating, not every filesystem reader.
+- New `schema.go`/`index.go` own the separate SQLite schema, refresh,
+  read-only status, vector validation/backfill and bounded removal. An
+  application ID, regular/single-link file and known schema are required
+  before an existing index is disposable. Incompatible derived schema resets
+  safely; unknown occupants, unrelated schema and journal residue refuse.
+  No recursive deletion is used. DELETE/FULL journaling replaces the tagged
+  WAL/NORMAL choice here so status creates no WAL/shared-memory sidecars.
+  Chunk/FTS changes commit together before vectors; failed inference preserves
+  that complete text index and reports failure. Hash/model/dimension/length,
+  finite/nonzero vector and vector-hash checks prevent stale/corrupt vectors
+  from counting as current. Missing/invalid vectors backfill on refresh.
+  A separate exclusively created `code_index.lock` covers cooperating
+  refresh/query/remove operations; contention refuses. Crash residue needs
+  inspection with operations stopped, without automatic PID/stale cleanup.
+  SQLite uses checked pathnames; foreign filesystem writers are not locked,
+  and final check/open or check/remove intervals are not compare-and-swap.
+  Existing Dolt-owner, renderer and embedding-side-store locks are unchanged.
+- New `locate.go` owns FTS5/vector union, exact tagged score normalization,
+  deterministic ties, optional reranking and bounded disk snippets. `Locate`
+  returns at most six lines/400 characters per hit, including an ellipsis;
+  this bound does not restrict internal `ChunkFile` bodies. Fusion and runtime
+  reranking have no floor. CLI-only no-refresh skips Git/refresh and retains
+  old ranks/line metadata; all read guards remain and snippets are current
+  disk text. New `eval.go` preserves the version-1 golden format, substring
+  matchers, post-floor rank semantics and Recall@1/@K. Its optional floor is
+  harness-only; default nonsense leakage is reported, not silently filtered.
+- New `internal/layout/source.go` extracts the existing opened-file owner
+  check as `CheckOwnerSource`. `localdolt/document_file.go`'s existing
+  `checkDocumentOwnerFile` delegates to it, retaining every `DocAdd`'s
+  unconditional credential-alias refusal. Code source/config/header reads
+  now share the check without opening Dolt. Only known repository `server.pid`
+  identity is protected, not arbitrary copied secrets or every reader.
+  Missing metadata still permits ordinary direct use; verification failures
+  still refuse. The owner file is opened only for identity, never content.
+- `internal/embedding/tokenizer.go` adds the model's missing 512-token limit.
+  Before it, oversized source/memory input could reach ONNX with more than
+  512 positions and fail; afterward `encodeSingle` and `encodePair` implement
+  fastembed's right-side LongestFirst truncation including two/three BERT
+  special tokens. Sugarme's pair-truncation loop decrements both lengths,
+  so the fix trims its already-encoded arrays instead. All four callers,
+  `Engine.Embed`, `EmbeddingTokenIDs`, `RerankerTokenIDs` and `Engine.Rerank`,
+  share that boundary; short-input tokenization, NFD compensation, model
+  verification, native lifecycle and recall scoring/config remain intact.
+  Stored source/chunks/snippets are not truncated to the model limit.
+- New `cmd/memdolt/code.go` wires these local operations, flags/help and
+  human/JSON reports through `root.go` and `eval.go`; no existing command's
+  store routing or output contract changes. New `mcpserver/locate.go` accepts
+  typed query/limit/rerank input, always refreshes, and uses no Dolt backend.
+  `tools.go` adds it to the previous nineteen real registrations. The exact
+  twenty-tool count binds `RegisterTools` at this delivery, not arbitrary SDK
+  servers. Attribution, cache hints, notes, review and shutdown remain.
+  After integrating #137, its twenty-one landed tools, including `repo_pull`
+  and `repo_push`, remain and `locate` makes twenty-two. That combined count
+  still binds `RegisterTools` alone. The approved transfer/elicitation logic,
+  provenance restrictions, `JSONUnicodeReader`, original stdin closer and
+  legacy negotiation remain unchanged. The shipped `serve` input guard now
+  also precedes locator requests; standalone `New` or arbitrary transports
+  retain their previously documented boundaries. The existing tools/serve/
+  host-template tests preserve both sets of assertions with combined names
+  and counts. No locator, inference, corpus, credential or callback-lifetime
+  behavior changes in this integration.
+  `instructions.md` now names an implemented locator while preserving routing
+  and durable-write rules.
+- Six new locate/eval-locate templates across Claude/Codex/OpenCode plus two
+  `opencode.json` command entries expose those real workflows. The three core
+  skills, coexisting registrations, review gates and provenance behavior stay.
+  `host_templates_test.go`, `tools_test.go` and `serve_test.go` retain their
+  prior assertions with the applicable real-name/count additions. New code,
+  CLI/MCP and tokenizer tests cover AST behavior, lifecycle, safety, independent
+  config, failure/concurrency preservation and native input limits; platform
+  tests exercise actual unreadable-source handling. Tests add no runtime rules.
+- `go.mod`/`go.sum` add only official go-tree-sitter
+  `v0.24.1-0.20251112183152-c9492002f76e`, C# 0.23.5, Go 0.23.4, Java 0.23.5,
+  JavaScript 0.25.0, Python 0.23.6, Rust 0.24.2, TypeScript 0.23.2 and
+  required `mattn/go-pointer` 0.0.1. Existing selected versions are unchanged;
+  tidy also records upstream binding-test grammar sums, not additional shipped
+  grammars. The two existing mandatory build settings remain necessary.
+- New `tests/golden/locate_test.go`, unchanged copied golden JSON and frozen
+  JSON corpora/license/notice artifacts retain the real benchmark provenance.
+  Rust full Recall@3 is 18/18 on corresponding commit `4606934`; the original
+  query bytes are identical there and at v0.2.0. Later `8f25568` moved cosine
+  helpers but left a stale expected path, so the complete tagged corpus
+  honestly measures 17/18 in a separate diagnostic, also preserved. Polyglot
+  is the exact tagged six-file fixture and passes 17/17. Both no-floor runs
+  leak two probes; separate harness rerank floor 0 rejects both on each corpus
+  while losing true matches (15/18 Rust, 11/17 polyglot). The full OIDs,
+  hashes and reproduction commands are in the [fixture notice](tests/golden/testdata/locate/NOTICE.md).
+  `.github/workflows/ci.yml` adds the exact required `TestLocateGolden`
+  command to protected Ubuntu CI beside the unchanged retrieval/scale gate,
+  reusing only checksum-verified model cache entries.
+
+This record, the guide and PRD §§8.4/9/11/16 preserve the before/after scope.
+Git-ingested history/`search file:`, global memory, public memory commands and
+remaining M5 parity stay separately tracked; no full-M5 claim is made.
+
 **Trusted human repository memory (issue #139).** Before this delivery,
 facts and decisions had schema, reviewed agent proposals and committed readers,
 but their ordinary human CLI commands remained in the unshipped CRUD/parity

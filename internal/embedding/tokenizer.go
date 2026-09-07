@@ -3,6 +3,7 @@ package embedding
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	sgtokenizer "github.com/sugarme/tokenizer"
 	sgmodel "github.com/sugarme/tokenizer/model"
@@ -79,11 +80,11 @@ func encodeSingle(tok *sgtokenizer.Tokenizer, text string) (encodedInput, error)
 	if err != nil {
 		return encodedInput{}, fmt.Errorf("encode single: %w", err)
 	}
-	return encodedInput{
+	return truncateBERT(encodedInput{
 		IDs:          enc.GetIds(),
 		AttentionIDs: enc.GetAttentionMask(),
 		TypeIDs:      enc.GetTypeIds(),
-	}, nil
+	}, false), nil
 }
 
 func encodePair(tok *sgtokenizer.Tokenizer, query, passage string) (encodedInput, error) {
@@ -91,9 +92,46 @@ func encodePair(tok *sgtokenizer.Tokenizer, query, passage string) (encodedInput
 	if err != nil {
 		return encodedInput{}, fmt.Errorf("encode pair: %w", err)
 	}
-	return encodedInput{
+	return truncateBERT(encodedInput{
 		IDs:          enc.GetIds(),
 		AttentionIDs: enc.GetAttentionMask(),
 		TypeIDs:      enc.GetTypeIds(),
-	}, nil
+	}, true), nil
+}
+
+// Both pinned models use fastembed's 512-token, right-truncated LongestFirst
+// policy, including BERT's two/three special tokens. Before code indexing,
+// long inputs could exceed the model's positions and fail native inference.
+// sugarme v0.3.0's TruncateEncodings decrements both pair lengths in its
+// LongestFirst loop; trim the already-encoded sequences here instead.
+func truncateBERT(enc encodedInput, pair bool) encodedInput {
+	const maxTokens = 512
+	if len(enc.IDs) <= maxTokens {
+		return enc
+	}
+	boundary := len(enc.IDs)
+	if pair {
+		boundary = slices.Index(enc.TypeIDs, 1)
+	}
+	first, second, special := boundary-2, 0, 2
+	if pair {
+		second, special = len(enc.IDs)-boundary-1, 3
+	}
+	for first+second > maxTokens-special {
+		if first > second {
+			first--
+		} else {
+			second--
+		}
+	}
+	clip := func(values []int) []int {
+		out := slices.Clone(values[:first+1]) // CLS and retained first sequence.
+		out = append(out, values[boundary-1]) // First SEP.
+		if pair {
+			out = append(out, values[boundary:boundary+second]...)
+			out = append(out, values[len(values)-1]) // Final SEP.
+		}
+		return out
+	}
+	return encodedInput{IDs: clip(enc.IDs), AttentionIDs: clip(enc.AttentionIDs), TypeIDs: clip(enc.TypeIDs)}
 }
