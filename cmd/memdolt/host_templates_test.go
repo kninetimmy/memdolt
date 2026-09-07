@@ -68,8 +68,8 @@ func TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools(t *testing.T) 
 		}
 		text := string(body)
 		for _, deferredTool := range []string{
-			"`doc_add`", "`repo_status`", "`repo_pull`",
-			"`repo_push`", "`history`", "`archive_transcript`",
+			"`doc_add`", "`repo_status`",
+			"`history`", "`archive_transcript`",
 		} {
 			if strings.Contains(text, deferredTool) {
 				t.Errorf("%s invokes deferred tool %s", path, deferredTool)
@@ -90,6 +90,11 @@ func TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools(t *testing.T) 
 		for _, required := range []string{"explicit per-item approval", "propose_fact", "propose_decision", "Never promote", "`render`", "committed main", "backups before retrying"} {
 			if !strings.Contains(text, required) {
 				t.Errorf("%s is missing proposal/review boundary phrase %q", path, required)
+			}
+		}
+		for _, required := range []string{"`repo_pull`", "`repo_push`", "Never synthesize confirmation", "nextCursor", "pending/global proposals remain excluded"} {
+			if !strings.Contains(text, required) {
+				t.Errorf("%s is missing transfer boundary %q", path, required)
 			}
 		}
 	}

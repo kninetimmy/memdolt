@@ -49,6 +49,11 @@ owner-file and deny checks still run; a missing source gives an empty snippet
 and warning, and other unsafe/unreadable sources refuse visibly. MCP and eval
 always use lazy refresh. The existing `serve` command still owns its usual
 Dolt startup/shutdown lifecycle; only the locator call bypasses that backend.
+After integration with #137, the combined server exposes twenty-two tools,
+including locate and both repository transfers. Its existing guarded stdin
+reader also validates locator request bytes before SDK decoding, retaining
+the original input closer and legacy negotiation. Standalone server builders
+and arbitrary transports do not acquire that wire guard automatically.
 A locate response returns ranked path, start/end line,
 nullable symbol, kind, fusion components, optional rerank score and at most six
 lines/400 characters of snippet, including any ellipsis. It never returns the

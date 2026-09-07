@@ -212,12 +212,12 @@ func TestTransferOwnerRefusalsPreserveLocalAndProposalWork(t *testing.T) {
 		} else {
 			got, err = routed.Pull(ctx, localdolt.TransferOptions{})
 		}
-		if err == nil || got.Changed {
+		if operation == "push" && (err == nil || got.Changed) || operation == "pull" && (err != nil || !got.Changed) {
 			t.Fatalf("divergent routed %s = %+v, %v", operation, got, err)
 		}
 	}
-	if queryInt(t, destination, "SELECT COUNT(*) FROM tasks") != 2 || queryInt(t, destination, "SELECT COUNT(*) FROM facts") != 0 {
-		t.Fatal("routed refusal changed durable work")
+	if queryInt(t, destination, "SELECT COUNT(*) FROM tasks") != 3 || queryInt(t, destination, "SELECT COUNT(*) FROM facts") != 0 {
+		t.Fatal("routed independent merge lost work or included a proposal")
 	}
 	pending, err := routed.PendingProposals(ctx)
 	if err != nil || len(pending) != 1 || pending[0].Commit != proposal.Commit {

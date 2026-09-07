@@ -34,3 +34,16 @@ the reported outputs/backups before retrying. Before issue #133, M3 had no
 wrap-up render, sync, transcript, metrics, visualization, document, global,
 locate, or repository-operation step. After it, step 6 adds only render;
 the other operations remain outside this template.
+
+Before issue #137, the repository-transfer step was absent. After it, when
+the user's request includes a repository transfer, use `repo_push` to publish
+committed main. If reconciliation is needed, `repo_pull` merges compatible
+committed history; actual conflicts require explicit human form choices over
+every displayed row and blame. Never synthesize confirmation. All choices
+remain pending until the complete validated merge commits as user. Follow
+nextCursor after nine modern forms; a genuine legacy client receives one
+complete form. Expiry, cancel, restart or changed heads requires fresh review;
+without form support use `memdolt pull --json` and `memdolt pull --resolve <file>`.
+Inspect local and remote main after an unknown reply before any retry. Queued
+notes and pending/global proposals remain excluded. Existing per-item approval
+and render boundaries still hold; transfers do not flush notes or refresh views.

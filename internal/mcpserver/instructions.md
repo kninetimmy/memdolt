@@ -25,3 +25,25 @@
   `convention.*`, `env.*`, or `gotcha.*` instead of inventing an ad hoc key.
 - Facts state what is true. Decisions record what was chosen and why. If the
   claim has a “because,” file it as a decision.
+- For repository transfers requested by the operator, use `repo_pull` and
+  `repo_push` over the configured remote. Before issue #137 these tools were
+  absent; now compatible divergence merges committed history as the requesting
+  agent. Actual conflicts need explicit human form choices over the displayed
+  rows and blame; never synthesize a confirmation or choose by timestamp.
+  Every choice stays pending until the complete merge validates and commits as
+  user. Preserve done tasks unless the human explicitly reopens them; fact
+  losers are superseded and retained. Follow nextCursor after nine modern
+  forms to reach remaining conflicts within two minutes; legacy clients receive
+  one complete form. Expiry, cancellation, restart or changed heads needs fresh
+  review. Without form support, report `memdolt pull --json` and
+  `memdolt pull --resolve <file>`. Inspect local/remote main after an unknown
+  reply; never replay automatically. Transfer does not flush queued notes,
+  promote pending/global proposals or refresh derived/rendered files.
+  Before issue #137's cycle-1 correction, malformed Unicode could be replaced
+  during JSON decoding and manual note choices could rewrite five provenance
+  fields. Both now refuse: retain session/agent/provider/model/variant metadata
+  as well as actor identity. Unchanged nullable fields and choosing an existing
+  complete side remain valid. Absent row images are omitted; nullable cells in
+  present rows remain explicit. The shipped stdio reader checks raw Unicode
+  before SDK conversion; valid U+FFFD is allowed, and text a client already
+  replaced before transmission cannot be reconstructed.

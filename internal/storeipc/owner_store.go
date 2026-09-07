@@ -247,6 +247,9 @@ func (s *OwnerStore) Pull(ctx context.Context, opts localdolt.TransferOptions) (
 }
 
 func (s *OwnerStore) transfer(ctx context.Context, operation string, opts localdolt.TransferOptions) (localdolt.TransferResult, error) {
+	if err := opts.ValidateText(); err != nil {
+		return localdolt.TransferResult{Operation: operation, Remote: opts.Remote, Status: "refused"}, err
+	}
 	var wire transferResult
 	if err := s.operation(ctx, operation, opts, &wire); err != nil {
 		return localdolt.TransferResult{Operation: operation, Remote: opts.Remote, Status: "unknown"},

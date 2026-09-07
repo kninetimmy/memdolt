@@ -322,7 +322,7 @@ func TestRepoStatusSnapshotSerializesParticipatingWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := <-transferDone; err == nil || !strings.Contains(err.Error(), "divergent") {
+	if err := <-transferDone; err != nil {
 		t.Fatalf("waiting pull = %v", err)
 	}
 	if countInternal(t, b, "SELECT COUNT(*) FROM tasks WHERE id = 'waiting'") != 1 || transferMain(t, b) == local {
