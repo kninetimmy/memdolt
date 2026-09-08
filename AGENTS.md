@@ -428,6 +428,17 @@ The user's own migration remains optional and unperformed. Full blast radius:
   old-state-retention runbook. No dependency, durable migration, global backend,
   full M5 or physical hub acceptance is implied.
 
+Before #153, the #140 round-trip contract above had a cold-process exception:
+re-exporting an imported pending decision could fail at column 12 with
+`context canceled`; in-process tests shared Dolt's warmed node cache. After
+#153, `repoDiffRows` materializes its CAST cells with CONCAT under the caller's
+query context, preserving exact NULLs and SQL ordering after the diff iterator
+closes. This correction binds that shared export/status helper, not all SQL
+readers. Existing immutable snapshots, schema/path/review guards, cancellation,
+and import/proposal semantics remain. The [migration guide](docs/migration.md#re-export-after-reopening-issue-153)
+records the proven cause, complete touched-element inventory and fresh-process
+direct/owner regression; no dependency, migration or frozen golden changes.
+
 **Local code-index delivery (issue #138).** Before this delivery, `code`,
 `locate`, `eval locate` and the real MCP `locate` tool were deferred. After
 it, `memdolt code index|status|rm`, `memdolt locate <query>` and `memdolt eval

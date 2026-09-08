@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/kninetimmy/memdolt/internal/retrieval"
+	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
@@ -181,4 +183,184 @@ func TestInteropCLILegacyAndFailuresEmitOneResult(t *testing.T) {
 			t.Fatalf("failure is not one honest JSON result: %s, %v", out.String(), err)
 		}
 	}
+}
+
+func TestInteropCLIReexportPendingDecision(t *testing.T) {
+	for _, tc := range []struct{ owner, pending bool }{{false, true}, {true, true}, {false, false}, {true, false}} {
+		t.Run(fmt.Sprintf("owner=%t/pending=%t", tc.owner, tc.pending), func(t *testing.T) {
+			source, target := initStore(t), initStore(t)
+			ctx := context.Background()
+			st, err := openCommandStore(ctx, source, cliActor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			// The smoke shape has no committed decisions. Keep complete rows in
+			// every other memory table, including accepted proposal metadata,
+			// empty strings, NULLs, counters and exact multiline provenance.
+			if _, err := st.Commit(ctx, store.CommitRequest{
+				Author: cliActor, Message: "synthetic native memory", Text: []string{"synthetic fixture"},
+				Statements: []store.Statement{
+					{SQL: "INSERT INTO facts (id, `key`, value, source, evidence) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5F01', 'fixture.command', 'python -m unittest', 'user', '')"},
+					{SQL: "INSERT INTO tasks (id, title, status, notes) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5F02', 'completed task', 'done', NULL)"},
+					{SQL: "INSERT INTO session_notes (id, text, actor, actor_raw, session_id, agent_id) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5F03', ?, 'agent:codex', 'Codex', 'ses_fixture', '')", Args: []any{"Synthetic note.\r\n\r\nSpacing and Unicode: café → 🌳. "}},
+					{SQL: "INSERT INTO session_notes (id, text, actor) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5F04', '', 'user')"},
+					{SQL: "INSERT INTO commands (kind, cmdline, last_exit_code, success_count, fail_count) VALUES ('test', 'python -m unittest', -1, 2147483647, 0)"},
+					{SQL: "INSERT INTO project_state (id, body, actor) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5F05', 'Synthetic current state', 'user')"},
+					{SQL: "INSERT INTO project_arch (id, body, actor, actor_raw) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5F06', 'Python standard library', 'user', '')"},
+					{SQL: "INSERT INTO proposals (id, kind, rationale, actor, target) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5F07', 'fact', 'Synthetic accepted metadata', 'agent:codex', 'repo')"},
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.pending {
+				if _, err := st.ProposeDecision(ctx, localdolt.Proposal{
+					Actor: store.Actor{Name: "agent:codex", Email: "codex@memdolt.invalid"}, Target: localdolt.TargetRepo, Rationale: "Fixture decision.",
+				}, localdolt.Decision{
+					Title:     "Synthetic Orchard fixture uses Counter",
+					Rationale: "The Python standard library provides deterministic counting without dependencies.",
+					Evidence:  "docs/design.md, Fixture decision.",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := st.Commit(ctx, store.CommitRequest{
+				Author: cliActor, Message: "synthetic memory after proposal", Text: []string{"completed task"},
+				Statements: []store.Statement{{SQL: "UPDATE tasks SET updated_at = '2026-09-08 16:29:40'"}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(interopTempDir(t), "source.json")
+			sourceBefore := interopRepoSnapshot(t, source)
+			runMemdolt(t, "export", file, "--dir", source, "--json")
+			original, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := decodeJSON[localdolt.InteropBundle](t, string(original))
+			for table, count := range map[string]int{"facts": 1, "decisions": 0, "tasks": 1, "commands": 1, "session_notes": 2, "project_state": 1, "project_arch": 1, "proposals": 1} {
+				if len(want.Tables[table]) != count {
+					t.Fatalf("source lost %s rows", table)
+				}
+			}
+			pendingCount := 0
+			if tc.pending {
+				pendingCount = 1
+			}
+			if len(want.Proposals) != pendingCount {
+				t.Fatal("source lost pending decision")
+			}
+			if tc.pending {
+				proposal := want.Proposals[0]
+				if proposal.Parent == want.MainCommit || len(proposal.Changes) != 1 || proposal.Changes[0].Table != "decisions" || proposal.Changes[0].From != nil {
+					t.Fatal("fixture lost the older-parent pending decision insert")
+				}
+				row := proposal.Changes[0].To
+				if len(row) != 10 || row["rationale"] == nil || *row["rationale"] != "The Python standard library provides deterministic counting without dependencies." ||
+					row["summary"] != nil || row["alternatives_rejected"] != nil || row["superseded_by"] != nil {
+					t.Fatal("source changed pending TEXT or NULLs")
+				}
+			}
+			imported := decodeJSON[localdolt.InteropResult](t, runMemdolt(t, "import", file, "--dir", target, "--json"))
+			// Reopening in this process still shares Dolt's warmed global chunk
+			// cache and masked the bug. Both routes need a fresh owning process.
+			if tc.owner {
+				defer serveTransferProcess(t, target)()
+			}
+			before := interopRepoSnapshot(t, target)
+			reexport := filepath.Join(interopTempDir(t), "reexport.json")
+			out, err := interopProcess(t, "export", reexport, "--dir", target, "--json")
+			if err != nil {
+				t.Fatalf("reexport: %s, %v", out, err)
+			}
+			result := decodeJSON[localdolt.InteropResult](t, out)
+			if !result.Written || result.Status != "exported" || result.SourceCommit != imported.MainCommit || result.Error != "" {
+				t.Fatalf("reexport result=%+v", result)
+			}
+			interopAssertBundle(t, reexport, want, imported)
+			if after := interopRepoSnapshot(t, target); after != before {
+				t.Fatal("export changed main, proposal heads, pending status or working roots")
+			}
+			fresh := initStore(t)
+			reimported := decodeJSON[localdolt.InteropResult](t, runMemdolt(t, "import", reexport, "--dir", fresh, "--json"))
+			final := filepath.Join(interopTempDir(t), "final.json")
+			if out, err := interopProcess(t, "export", final, "--dir", fresh, "--json"); err != nil {
+				t.Fatalf("export after further import: %s, %v", out, err)
+			}
+			interopAssertBundle(t, final, want, reimported)
+			if after := interopRepoSnapshot(t, source); after != sourceBefore {
+				t.Fatal("round trip changed source state")
+			}
+			if data, err := os.ReadFile(file); err != nil || !bytes.Equal(data, original) {
+				t.Fatal("round trip changed original bundle")
+			}
+			foreign := filepath.Join(interopTempDir(t), "keep.txt")
+			writeTestFile(t, foreign, "keep existing content")
+			for _, invalid := range []string{foreign, filepath.Join(target, ".memdolt", "server.pid"), filepath.Join(interopTempDir(t), "missing", "bundle.json")} {
+				out, err := interopProcess(t, "export", invalid, "--dir", target, "--json")
+				failed := decodeJSON[localdolt.InteropResult](t, out)
+				if err == nil || failed.Written || failed.Status != "refused" || failed.Error == "" {
+					t.Fatalf("destination refusal=%+v, %v", failed, err)
+				}
+			}
+			if data, err := os.ReadFile(foreign); err != nil || string(data) != "keep existing content" || interopRepoSnapshot(t, target) != before {
+				t.Fatal("refused export changed file or repository")
+			}
+		})
+	}
+}
+
+func interopRepoSnapshot(t *testing.T, base string) string {
+	t.Helper()
+	return runMemdolt(t, "repo", "status", "--local", "--dir", base, "--json") +
+		strings.Join(interopQueryStrings(t, base, "SELECT CONCAT(name, ':', hash) FROM dolt_branches ORDER BY name"), "\n") +
+		strings.Join(interopQueryStrings(t, base, "SELECT CONCAT(DOLT_HASHOF_DB('WORKING'), ':', DOLT_HASHOF_DB('STAGED'))"), "\n")
+}
+
+func interopAssertBundle(t *testing.T, file string, want localdolt.InteropBundle, imported localdolt.InteropResult) {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeJSON[localdolt.InteropBundle](t, string(data))
+	if imported.Status != "imported" || got.MainCommit != imported.MainCommit || !reflect.DeepEqual(got.Tables, want.Tables) || len(got.Proposals) != len(want.Proposals) || len(got.Proposals) != len(imported.CreatedProposals) {
+		t.Fatal("native round trip changed committed rows, exact NULLs or pending count")
+	}
+	for i, proposal := range got.Proposals {
+		original, created := want.Proposals[i], imported.CreatedProposals[i]
+		if proposal.ID != original.ID || proposal.ID != created.ID || proposal.Head != created.Commit || proposal.Parent != imported.MainCommit ||
+			!reflect.DeepEqual(proposal.Metadata, original.Metadata) || !reflect.DeepEqual(proposal.Changes, original.Changes) {
+			t.Fatal("native round trip changed pending identity, payload or nullable values")
+		}
+	}
+}
+
+func interopProcess(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), os.Args[0], append([]string{"-test.run=^TestInteropHelperProcess$", "--"}, args...)...)
+	cmd.Env = append(os.Environ(), "MEMDOLT_INTEROP_HELPER=1")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if err != nil {
+		err = fmt.Errorf("%w: %s", err, &stderr)
+	}
+	return stdout.String(), err
+}
+
+func TestInteropHelperProcess(t *testing.T) {
+	if os.Getenv("MEMDOLT_INTEROP_HELPER") != "1" {
+		return
+	}
+	root := newRootCommand()
+	root.SetArgs(os.Args[3:])
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(0)
 }

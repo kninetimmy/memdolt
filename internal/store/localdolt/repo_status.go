@@ -453,7 +453,11 @@ func repoDiffRows(ctx context.Context, conn *sql.Conn, table, from, to string) (
 	}
 	for _, side := range []string{"from_", "to_"} {
 		for _, column := range columns {
-			projected = append(projected, "CAST("+quoteIdentifier(side+column)+" AS CHAR)")
+			// CAST alone retains Dolt's lazy TextStorage. ORDER BY drains and
+			// closes the diff iterator, canceling its context before the driver
+			// loads uncached text. CONCAT materializes with the query context
+			// while preserving NULLs and the CAST's NULL ENUM protection.
+			projected = append(projected, "CONCAT(CAST("+quoteIdentifier(side+column)+" AS CHAR), '')")
 		}
 	}
 	projected = append(projected, "diff_type")
