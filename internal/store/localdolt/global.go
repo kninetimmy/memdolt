@@ -36,6 +36,9 @@ func GlobalPaths() (layout.Paths, error) {
 	if err != nil {
 		return layout.Paths{}, fmt.Errorf("resolve global memory home: %w", err)
 	}
+	if !filepath.IsAbs(home) || strings.HasPrefix(home, `\\`) || strings.HasPrefix(home, "//") || strings.ContainsAny(home, "?%\x00\r\n") {
+		return layout.Paths{}, errors.New("resolved global memory home must remain an unambiguous absolute local directory")
+	}
 	paths, err := layout.New(filepath.Join(home, layout.DirName, "global"))
 	if err != nil {
 		return layout.Paths{}, err

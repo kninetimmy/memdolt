@@ -116,6 +116,21 @@ func TestGlobalManagedPathsAndInvalidStores(t *testing.T) {
 			t.Fatal("linked global directory accepted")
 		}
 	})
+	t.Run("home-alias-to-ambiguous-path", func(t *testing.T) {
+		root := interopTempDir(t)
+		target, alias := filepath.Join(root, "percent%home"), filepath.Join(root, "home-alias")
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, alias); err != nil {
+			t.Skipf("host does not permit symlink fixture: %v", err)
+		}
+		t.Setenv("HOME", alias)
+		t.Setenv("USERPROFILE", alias)
+		if _, err := GlobalPaths(); err == nil {
+			t.Fatal("home alias bypassed canonical path validation")
+		}
+	})
 	for _, version := range []int{store.LatestSchemaVersion() - 1, store.LatestSchemaVersion() + 1} {
 		t.Run(fmt.Sprintf("schema-%d", version), func(t *testing.T) {
 			repo, global := globalStoreFixture(t)
