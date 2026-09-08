@@ -12,6 +12,7 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
+	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/retrieval"
 	"github.com/kninetimmy/memdolt/internal/search"
 	"github.com/kninetimmy/memdolt/internal/store"
@@ -523,7 +524,8 @@ func (t *Toolset) startTimer() {
 			return
 		}
 		t.timer = nil
-		if err := t.flushLocked(ctx); err != nil {
+		if notes, err := t.flushLocked(ctx); err != nil {
+			err = (render.Result{NoteCommits: notes}).NoteCommitError(err)
 			t.flushErr = errors.Join(t.flushErr, err)
 			t.renderFlushErr = errors.Join(t.renderFlushErr, err)
 		}
@@ -531,9 +533,9 @@ func (t *Toolset) startTimer() {
 	t.timer = timer
 }
 
-func (t *Toolset) flushLocked(ctx context.Context) error {
+func (t *Toolset) flushLocked(ctx context.Context) (map[string]string, error) {
 	var errs []error
-	var confirmed []string
+	confirmed := make(map[string]string)
 	for i := 0; i < len(t.groups); {
 		group := t.groups[i]
 		if group.unknown != nil {
@@ -543,7 +545,9 @@ func (t *Toolset) flushLocked(ctx context.Context) error {
 		}
 		commit, err := memory.New(t.store, group.actor).CommitNotes(ctx, group.notes)
 		if commit != "" {
-			confirmed = append(confirmed, group.actor.Name+"="+commit)
+			for _, note := range group.notes {
+				confirmed[note.ID] = commit
+			}
 		}
 		if err != nil {
 			err = fmt.Errorf("flush session-note batch for %s: %w", group.actor.Name, err)
@@ -561,11 +565,7 @@ func (t *Toolset) flushLocked(ctx context.Context) error {
 		// rows before the next group, so no timer/render/shutdown retries them.
 		t.groups = append(t.groups[:i], t.groups[i+1:]...)
 	}
-	err := errors.Join(errs...)
-	if err != nil && len(confirmed) != 0 {
-		return fmt.Errorf("confirmed note batches %s; %w", strings.Join(confirmed, ", "), err)
-	}
-	return err
+	return confirmed, errors.Join(errs...)
 }
 
 // Close retries known uncommitted groups before the owner store closes.
@@ -586,7 +586,8 @@ func (t *Toolset) Close() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), noteFlushTimeout)
 	defer cancel()
-	t.flushErr = errors.Join(t.flushErr, t.flushLocked(ctx), t.closeElicitationState())
+	notes, err := t.flushLocked(ctx)
+	t.flushErr = errors.Join(t.flushErr, (render.Result{NoteCommits: notes}).NoteCommitError(err), t.closeElicitationState())
 	t.groups = nil
 	return t.flushErr
 }

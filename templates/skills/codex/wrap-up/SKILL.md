@@ -31,6 +31,10 @@ compatibility: codex
    excluded until its deadline/shutdown flush. Now MCP render and its live-owner
    CLI route flush that owner's notes before the snapshot. Failed flushing
    prevents publication; proposals remain excluded.
+   Before #145's review correction, later render failures could omit its flushed
+   note effects. Now retain `noteCommits` (note ID to commit hash) on success or
+   failure and inspect those notes and Dolt history before retrying; an empty
+   SourceCommit does not negate the confirmed flush.
 
 Before #145 late commit errors could discard confirmed results and retain a
 committed note group for retry. Now retain each returned row id and commit hash

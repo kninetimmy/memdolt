@@ -9,6 +9,10 @@
   snapshot; authenticated `memdolt render` reaches the same queue. A flush error
   prevents publication. Proposals remain excluded. Inspect reported outputs and
   backups before retrying any partial failure or unknown response.
+  Before #145's review correction, a later render failure could hide notes just
+  committed by its flush. Now `noteCommits` maps those note IDs to their confirmed
+  hashes even when configuration, snapshot or file work fails. Inspect these notes
+  and Dolt history as well as files; SourceCommit may still be unavailable.
 - A nonempty commit hash confirms a durable write even with a late error.
   Inspect the returned row identity and Dolt history; never automatically replay
   it. A lost result means outcome unknown, not rollback. MCP removes confirmed

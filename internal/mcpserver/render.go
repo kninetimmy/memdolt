@@ -12,9 +12,15 @@ import (
 
 // Render is the session render boundary shared by the MCP tool and runServe's
 // authenticated CLI route. Standalone Store.Render has no session queue.
-func (t *Toolset) Render(ctx context.Context) (render.Result, error) {
+func (t *Toolset) Render(ctx context.Context) (result render.Result, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	defer func() {
+		err = result.NoteCommitError(err)
+		if err != nil {
+			result.Error = err.Error()
+		}
+	}()
 	if t.closed {
 		return render.Result{Status: "notes-failed"}, errors.New("mcpserver: session-note batch is closed; render was not published")
 	}
@@ -24,14 +30,16 @@ func (t *Toolset) Render(ctx context.Context) (render.Result, error) {
 	}
 	flushCtx, cancel := context.WithTimeout(ctx, noteFlushTimeout)
 	defer cancel()
-	err := t.flushLocked(flushCtx)
-	t.flushErr = errors.Join(t.flushErr, err)
+	notes, err := t.flushLocked(flushCtx)
+	t.flushErr = errors.Join(t.flushErr, (render.Result{NoteCommits: notes}).NoteCommitError(err))
 	err = errors.Join(t.renderFlushErr, err)
 	t.renderFlushErr = nil
 	if err != nil {
-		return render.Result{Status: "notes-failed"}, fmt.Errorf("session notes failed; render was not published; inspect `memdolt note list` and Dolt history before retrying: %w", err)
+		return render.Result{Status: "notes-failed", NoteCommits: notes}, fmt.Errorf("session notes failed; render was not published; inspect `memdolt note list` and Dolt history before retrying: %w", err)
 	}
-	return t.store.Render(ctx)
+	result, err = t.store.Render(ctx)
+	result.NoteCommits = notes
+	return result, err
 }
 
 func (t *Toolset) render(ctx context.Context, _ *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, render.Result, error) {

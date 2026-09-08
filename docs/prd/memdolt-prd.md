@@ -122,6 +122,20 @@ Proposal exclusion, per-file publication, actor attribution, deny-list checks,
 clean-working-set guards, serialization and global exclusion remain unchanged.
 No new batching service, schema, dependency or full M5/M6 claim is introduced.
 
+Before #145's review-cycle correction, successful flushes discarded their note
+IDs/hashes before calling Store.Render. A later config/snapshot/file error could
+report only file effects although notes committed. After the correction, the
+existing flush loop returns those effects and Toolset.Render retains them in
+optional `render.Result.NoteCommits` (`noteCommits`: note ID to commit hash).
+The map describes this invocation's confirmed flush only; it is independent of
+SourceCommit, which stays empty if snapshot capture fails. `NoteCommitError`
+adds note/history inspection evidence through later render, CLI close and output
+failures. Existing MCP/owner result envelopes carry the map without resubmission;
+a lost reply names possible note effects but claims no identities or hashes.
+Timer/shutdown errors reuse the same formatter. Queue policy, pure Store.Render,
+per-file publication and every prior guard remain unchanged. The AGENTS #145
+record inventories the reached methods, workflow updates and real-store tests.
+
 The complete symbol/file consumer inventory is in AGENTS.md's #145 record:
 `Store.Commit`/`commitConnFinalize`/`commitTx`/`nativeCommitResult`, every direct
 `Lanes.write` and `CommitNotes` caller, document mutations, existing human/interop/

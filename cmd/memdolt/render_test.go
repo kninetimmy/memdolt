@@ -58,7 +58,7 @@ func TestRenderCLICommittedMemoryDirectAndOwner(t *testing.T) {
 			head := seedRender(t, base)
 			before := runMemdolt(t, "repo", "status", "--dir", base, "--json")
 			first := decodeJSON[render.Result](t, runMemdolt(t, "render", "--dir", base, "--json"))
-			if first.Status != "written" || first.SourceCommit != head || first.SchemaVersion != store.LatestSchemaVersion() || len(first.WrittenFiles) != 2 || len(first.BackupFiles) != 0 {
+			if first.Status != "written" || first.SourceCommit != head || first.SchemaVersion != store.LatestSchemaVersion() || len(first.WrittenFiles) != 2 || len(first.BackupFiles) != 0 || len(first.NoteCommits) != 0 {
 				t.Fatalf("render result = %+v", first)
 			}
 			files := make(map[string][]byte)

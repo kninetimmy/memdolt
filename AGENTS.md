@@ -110,6 +110,28 @@ application, CLI and authenticated owner paths. Full structural blast radius:
   No dependency, durable schema, new CRUD/global operation, polling service,
   separate batch implementation or full M5/M6 completion is introduced.
 
+Before #145's review-cycle correction, a successful `flushLocked` removed its
+groups but discarded their IDs/hashes; a later render config/snapshot/file error
+could therefore report only file effects despite committed notes. After the
+correction, the same loop returns a note-ID-to-hash map alongside its error.
+`Toolset.Render` preserves that map as optional `render.Result.NoteCommits`
+(`noteCommits` in JSON) through every later failure. It describes only notes
+committed by this invocation, not a cumulative session log or SourceCommit.
+`render.Result.NoteCommitError` adds note/history inspection evidence only when
+that map is populated. Timer/shutdown error reporting reuses the same helper;
+their removal, retry, unknown-group and discard rules remain unchanged.
+`cmd/memdolt/render.go` reports the map in human/JSON output and retains its
+evidence on close/output failure. Existing MCP and authenticated operation
+envelopes carry it unchanged; `OwnerStore.Render`'s lost-reply remedy now also
+names note/history inspection without claiming unobserved effects. The pure
+renderer still writes no memory and retains all snapshot/file guarantees.
+New `cmd/memdolt/render_notes_test.go` reproduces production MCP and live-owner
+CLI refusal after successful flush, verifies close/output errors and reopened
+rows/history, and proves repeated render adds no note effects. Existing MCP
+render tests now cover snapshot and post-render errors with actual committed
+notes; CLI/owner render tests retain standalone and lost-reply assertions.
+Help, server instructions, wrap-up templates and PRD record the same boundary.
+
 **Memory interoperability (issue #140).** Before this delivery, PRD §15
 described import-from-memhub and JSON interop but neither CLI command existed.
 After it, `export <bundle.json>`, `import <bundle.json>` and

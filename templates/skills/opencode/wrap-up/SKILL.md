@@ -57,6 +57,10 @@ would succeed.
    owner's notes before the snapshot; failed flushing prevents publication.
    Proposals remain excluded. The verified CLI summary in step 3 is already
    committed and is not queued or replayed by render.
+   Before #145's review correction, later render failures could omit its flushed
+   note effects. Now retain `noteCommits` (note ID to commit hash) on success or
+   failure and inspect those notes and Dolt history before retrying; an empty
+   SourceCommit does not negate the confirmed flush.
 
 Before #145 late commit errors could discard confirmed results and retain a
 committed note group for retry. Now retain each returned row id and commit hash

@@ -196,7 +196,7 @@ func (s *OwnerStore) documentMutation(ctx context.Context, operation string, arg
 func (s *OwnerStore) Render(ctx context.Context) (render.Result, error) {
 	var result render.Result
 	if err := s.operation(ctx, opRender, nil, &result); err != nil {
-		return render.Result{Status: "unknown"}, fmt.Errorf("render owner response lost or unavailable; outcome unknown; inspect configured outputs and .memdolt/backups/rendered before retrying: %w", err)
+		return render.Result{Status: "unknown"}, fmt.Errorf("render owner response lost or unavailable; outcome unknown; inspect configured outputs, .memdolt/backups/rendered, `memdolt note list` and Dolt history before retrying: %w", err)
 	}
 	if result.Error != "" {
 		return result, errors.New(result.Error)

@@ -26,6 +26,8 @@ func newRenderCommand() *cobra.Command {
 			"renders and inspect outputs/backups before removing that residue.\n" +
 			"A live MCP owner flushes its pending notes before capturing committed main.\n" +
 			"Flush errors prevent publication; confirmed groups are never replayed.\n" +
+			"noteCommits maps each note id flushed by this call to its confirmed hash,\n" +
+			"including when later configuration, snapshot, file or reporting work fails.\n" +
 			"Inspect note list/history on confirmed or unknown errors as well as outputs.\n" +
 			"Without a session queue, render reads committed main without a Dolt commit.\n" +
 			"Proposals remain excluded. No initialization, migration, transcript archive\n" +
@@ -47,7 +49,7 @@ func newRenderCommand() *cobra.Command {
 
 func runRender(cmd *cobra.Command, st commandStore) error {
 	result, err := st.Render(cmd.Context())
-	err = errors.Join(err, st.Close())
+	err = errors.Join(err, result.NoteCommitError(st.Close()))
 	if err != nil {
 		result.Error = err.Error()
 	}
@@ -59,12 +61,15 @@ func runRender(cmd *cobra.Command, st commandStore) error {
 	for _, path := range result.BackupFiles {
 		lines = append(lines, "recoverable backup: "+path)
 	}
+	if len(result.NoteCommits) != 0 {
+		lines = append(lines, fmt.Sprintf("confirmed note commits (id:hash): %v", result.NoteCommits))
+	}
 	if result.Error != "" {
 		lines = append(lines, "error: "+result.Error)
 	}
 	if outputErr := emit(cmd, result, lines); outputErr != nil {
-		err = errors.Join(err, fmt.Errorf("render output reporting failed after status %s, written %v, backups %v; inspect before retrying: %w",
-			result.Status, result.WrittenFiles, result.BackupFiles, outputErr))
+		err = errors.Join(err, result.NoteCommitError(fmt.Errorf("render output reporting failed after status %s, written %v, backups %v; inspect before retrying: %w",
+			result.Status, result.WrittenFiles, result.BackupFiles, outputErr)))
 	}
 	return err
 }
