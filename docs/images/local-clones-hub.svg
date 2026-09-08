@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="734" viewBox="0 0 480 734" role="img" aria-labelledby="title desc">
+  <title id="title">Local clones, shared history</title>
+  <desc id="desc">Machine A and machine B each keep a complete local Dolt memory clone and their own models and derived indexes. Explicit push and pull exchange committed main and its history through a private Linux Dolt remotesapi hub. Each client can work offline. Pending proposal branches, queued notes, models, and local indexes are not transferred. Static diagram with no motion.</desc>
+  <rect x="1" y="1" width="478" height="732" rx="20" fill="#f6f8fc" stroke="#cbd5e1"/>
+  <g fill="#172a40">
+    <text font-family="sans-serif" x="32" y="42" font-size="16" font-weight="700" fill="#0e7490" letter-spacing="2">02 / SYNC</text>
+    <text font-family="sans-serif" x="32" y="79" font-size="27" font-weight="700">Local clones, shared history</text>
+    <rect x="32" y="109" width="416" height="130" rx="12" fill="#ffffff" stroke="#b7c6d8"/>
+    <text font-family="sans-serif" x="240" y="145" text-anchor="middle" font-size="25" font-weight="700">Machine A</text>
+    <text font-family="sans-serif" x="240" y="180" text-anchor="middle" font-size="21">Complete local memory clone</text>
+    <text font-family="sans-serif" x="240" y="214" text-anchor="middle" font-size="20" fill="#45576d">Own models + derived indexes</text>
+    <path d="M212 241 V314 M208 309 L212 314 L216 309 M268 314 V241 M264 246 L268 241 L272 246" fill="none" stroke="#52647a" stroke-width="2"/>
+    <text font-family="sans-serif" x="194" y="285" text-anchor="end" font-size="20" fill="#45576d">push</text>
+    <text font-family="sans-serif" x="286" y="285" font-size="20" fill="#45576d">pull</text>
+    <rect x="32" y="316" width="416" height="134" rx="12" fill="#eeedff" stroke="#aaa3df"/>
+    <text font-family="sans-serif" x="240" y="353" text-anchor="middle" font-size="25" font-weight="700">Private Linux hub</text>
+    <text font-family="sans-serif" x="240" y="388" text-anchor="middle" font-size="21">Native Dolt · remotesapi</text>
+    <text font-family="sans-serif" x="240" y="423" text-anchor="middle" font-size="20">Committed main + history</text>
+    <path d="M212 452 V525 M208 520 L212 525 L216 520 M268 525 V452 M264 457 L268 452 L272 457" fill="none" stroke="#52647a" stroke-width="2"/>
+    <text font-family="sans-serif" x="194" y="496" text-anchor="end" font-size="20" fill="#45576d">pull</text>
+    <text font-family="sans-serif" x="286" y="496" font-size="20" fill="#45576d">push</text>
+    <rect x="32" y="527" width="416" height="130" rx="12" fill="#ffffff" stroke="#b7c6d8"/>
+    <text font-family="sans-serif" x="240" y="563" text-anchor="middle" font-size="25" font-weight="700">Machine B</text>
+    <text font-family="sans-serif" x="240" y="598" text-anchor="middle" font-size="21">Complete local memory clone</text>
+    <text font-family="sans-serif" x="240" y="632" text-anchor="middle" font-size="20" fill="#45576d">Own models + derived indexes</text>
+    <text font-family="sans-serif" x="240" y="695" text-anchor="middle" font-size="21" font-weight="700" fill="#0e7490">Work offline. Reconcile on request.</text>
+    <text font-family="sans-serif" x="240" y="720" text-anchor="middle" font-size="18" fill="#45576d">Compatible changes merge; conflicts need review.</text>
+  </g>
+</svg>
