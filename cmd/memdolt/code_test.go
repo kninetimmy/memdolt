@@ -83,9 +83,9 @@ func TestCodeCLIWorksWithoutDoltOrOwnerRouting(t *testing.T) {
 func TestLocatorSkillTemplatesAndProtectedGoldenCommand(t *testing.T) {
 	for _, host := range []string{"claude", "codex", "opencode"} {
 		for _, name := range []string{"locate", "eval-locate"} {
-			path := repoFile("templates", "skills", host, name, "SKILL.md")
+			path := repoFile("templates", "skills", host, "memdolt-"+name, "SKILL.md")
 			if host == "claude" {
-				path = repoFile("templates", "skills", host, name+".md")
+				path = repoFile("templates", "skills", host, "memdolt-"+name+".md")
 			}
 			raw, err := os.ReadFile(path)
 			if err != nil {
