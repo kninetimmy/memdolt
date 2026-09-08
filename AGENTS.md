@@ -19,6 +19,75 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Private native Linux hub (issue #147).** Before this delivery, `hub
+init|status` and managed startup were planned; PRD §13.1's SQL-bind-only
+example did not constrain Dolt's independently wildcard remotesapi listener.
+After it, the explicit hub CLI generates six reviewable nonsecret artifacts
+and inspects a selected deployment. Managed startup requires Linux, systemd,
+nftables, both private interface addresses and native Dolt exactly 1.88.1.
+The complete before/after, native credential/bootstrap instructions, measured
+limits and structural inventory are in [the hub runbook](docs/hub-deployment.md).
+This does not install or change the user's hub. Complete structural blast radius:
+
+- New `internal/hub/config.go` owns the independent manifest, literal input
+  validation and generated YAML/systemd/nftables/SETUP artifacts. All generated
+  interpolations pass `Config.Validate`; this restriction binds these artifacts,
+  not general shell/SQL/unit code. Repository configuration/topology stays.
+- New `files.go` and `path_windows.go`/`path_other.go` own rooted hub reads and
+  create-only output. Exact existing bundles are unchanged; foreign, modified,
+  partial, linked/reparse/hard-linked and protected destinations refuse without
+  replacement. A failed new write reports complete files and may leave a partial
+  directory for inspection. There is no overwrite or automatic cleanup mode.
+  Privileged deployment additionally requires root-owned non-writable ancestry
+  and exact bundle bytes. Foreign filesystem writers and the final check/open
+  interval are not coordinated. Existing renderer/code-index/owner checks stay.
+- New `boundary.go` verifies only the actual generated `inet memdolt_hub` table,
+  hook and four ordered rules from numeric nftables JSON. IPv4 and IPv6 ingress
+  to both TCP ports is restricted to loopback or the selected private interface,
+  allowed source prefix and destination. Unknown/extra/dormant/missing semantics
+  fail closed. Other tables/traffic remain; no ruleset/table flush occurs.
+  New `check.go` owns status, read-only preflight, native release and bounded
+  address checks. Executable release is distinct from remotes wire metadata.
+  Probe errors withhold native output; no password is accepted or diagnosed.
+  The native version probe uses an owned temporary home/cwd with native metrics
+  and update checks disabled, preserving strict full-line version parsing and
+  the operator's configuration. Native 1.88.1 still constructs its event emitter
+  before selecting NullEmitter; the probe owns its exact eventsData/dolt.lock
+  artifacts too. Known temporary files are removed; unexpected
+  residue and cleanup failures are reported. Nft probes use no temporary home.
+- The generated root boundary oneshot validates files, applies only its newly
+  created table with CAP_NET_ADMIN and checks the applied result. The server
+  binds to it and the chosen private-network service. Every start runs full
+  privileged read-only preflight, then unprivileged version/credential-file/
+  bounded address readiness, then one dedicated-user native Dolt process with
+  no capabilities. `ready` also verifies the effective UID/GID match the configured
+  nonroot account/group; root aliases refuse. This check binds `ready`, not status
+  or privileged preflight. Generated units/probes disable native event flushing.
+  The files-only pre-application check never asserts enforced protection.
+  Protection remains on stop. The guard is a startup snapshot, not a monitor
+  against later privileged firewall changes; direct Dolt invocations do not
+  inherit it. Distribution nftables.service with flush-ruleset config is not used.
+- New `cmd/memdolt/hub.go` provides `init`, `status`, `preflight` and `ready`
+  with explicit paths/options and human/JSON results. `root.go` adds that family;
+  all prior CLI/store/clone/transfer/merge/authentication/code-index behavior and
+  22 MCP registrations remain. Status checks local TCP reachability, not process
+  identity, credential correctness or physical off-network denial. Non-Linux
+  startup/live inspection explicitly fails with unknown unobserved checks.
+- New hub/CLI tests validate native YAML using the existing pinned parser and
+  cover hostile inputs, preservation, links, nft policy weakening, versions,
+  bounded readiness and honest platform reports. `tests/hub/verify_linux.py`
+  and its Dockerfile add isolated real-Linux enforcement/native-startup evidence
+  with a published-checksum-verified Dolt 1.88.1, disposable container and three
+  namespaces. No runner-host firewall/account/service is changed. Unit grammar
+  and actual ordered commands are tested; installation under PID 1 is not claimed.
+  `.github/workflows/ci.yml` adds `Test (hub ingress)` without renaming protected
+  contexts or removing ordinary/golden gates. No Go dependency or schema changes.
+- Help, the new runbook and PRD §§11/13/16 retain the old SQL-bind-only example
+  and correct its perimeter claim. Native users/grants remain the credential
+  boundary: remote read needs global CLONE_ADMIN; write needs broad SUPER, not
+  database-scoped remote isolation. Topology/project identity, backup/retention
+  and physical two-client/off-network acceptance remain separately tracked.
+
 **Memory interoperability (issue #140).** Before this delivery, PRD §15
 described import-from-memhub and JSON interop but neither CLI command existed.
 After it, `export <bundle.json>`, `import <bundle.json>` and
