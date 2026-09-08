@@ -170,6 +170,9 @@ func TestGlobalManagedPathsAndInvalidStores(t *testing.T) {
 }
 
 func TestGlobalPromotionRefusesPendingSupersededAndDirtyDestination(t *testing.T) {
+	if _, err := (&Store{}).CapturePromotion(context.Background(), "fact", ""); err == nil || !strings.Contains(err.Error(), "must not be empty") {
+		t.Fatalf("blank promotion operand was not refused before store access: %v", err)
+	}
 	repo, global := globalStoreFixture(t)
 	ctx := context.Background()
 	agent, err := memory.NormalizeActor("codex")

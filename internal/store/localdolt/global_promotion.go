@@ -37,6 +37,9 @@ func (s *Store) CapturePromotion(ctx context.Context, kind, ident string) (resul
 	if err != nil {
 		return result, err
 	}
+	if ident == "" {
+		return result, errors.New("promotion identifier must not be empty; select an exact committed id or key")
+	}
 	if err := humanText("promotion identifier", ident, 255); err != nil {
 		return result, err
 	}
