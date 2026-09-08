@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="760" viewBox="0 0 480 760" role="img" aria-labelledby="title desc">
+  <title id="title">From session to memory</title>
+  <desc id="desc">Agents call memdolt through CLI or MCP. Tasks, notes, commands, and documents use defined direct lanes. Facts and decisions are staged on proposal branches. A human reviews and accepts a proposal before it enters committed main. Recall, rendered project views, and history read committed memory. Static diagram with no motion.</desc>
+  <rect x="1" y="1" width="478" height="758" rx="20" fill="#f6f8fc" stroke="#cbd5e1"/>
+  <g fill="#172a40">
+    <text font-family="sans-serif" x="32" y="42" font-size="16" font-weight="700" fill="#0e7490" letter-spacing="2">01 / SYSTEM</text>
+    <text font-family="sans-serif" x="32" y="79" font-size="27" font-weight="700">From session to memory</text>
+    <rect x="32" y="109" width="416" height="91" rx="12" fill="#ffffff" stroke="#b7c6d8"/>
+    <text font-family="sans-serif" x="240" y="143" text-anchor="middle" font-size="23" font-weight="700">Your coding agent</text>
+    <text font-family="sans-serif" x="240" y="175" text-anchor="middle" font-size="20">Claude Code · Codex · OpenCode</text>
+    <path d="M240 201 V235 M236 230 L240 235 L244 230" fill="none" stroke="#52647a" stroke-width="2"/>
+    <rect x="32" y="236" width="416" height="86" rx="12" fill="#e6f5fa" stroke="#7bb8cd"/>
+    <text font-family="sans-serif" x="240" y="271" text-anchor="middle" font-size="26" font-weight="700">memdolt</text>
+    <text font-family="sans-serif" x="240" y="302" text-anchor="middle" font-size="20">CLI + MCP · local store owner</text>
+    <path d="M240 323 V344 M128 365 V344 H352 V365" fill="none" stroke="#52647a" stroke-width="2"/>
+    <path d="M128 345 V365 M124 360 L128 365 L132 360 M352 345 V365 M348 360 L352 365 L356 360" fill="none" stroke="#52647a" stroke-width="2"/>
+    <rect x="32" y="367" width="192" height="122" rx="12" fill="#ffffff" stroke="#b7c6d8"/>
+    <text font-family="sans-serif" x="128" y="399" text-anchor="middle" font-size="21" font-weight="700">Direct lanes</text>
+    <text font-family="sans-serif" x="128" y="432" text-anchor="middle" font-size="20">Tasks, notes,</text>
+    <text font-family="sans-serif" x="128" y="461" text-anchor="middle" font-size="20">commands, docs</text>
+    <rect x="256" y="367" width="192" height="122" rx="12" fill="#eeedff" stroke="#aaa3df"/>
+    <text font-family="sans-serif" x="352" y="399" text-anchor="middle" font-size="21" font-weight="700">Proposed claims</text>
+    <text font-family="sans-serif" x="352" y="432" text-anchor="middle" font-size="20">Facts + decisions</text>
+    <text font-family="sans-serif" x="352" y="461" text-anchor="middle" font-size="20">Separate branch</text>
+    <path d="M128 490 V617 M124 612 L128 617 L132 612 M352 490 V521 M348 516 L352 521 L356 516" fill="none" stroke="#52647a" stroke-width="2"/>
+    <rect x="256" y="523" width="192" height="69" rx="12" fill="#fff1d6" stroke="#b68731"/>
+    <text font-family="sans-serif" x="352" y="551" text-anchor="middle" font-size="21" font-weight="700">Human review</text>
+    <text font-family="sans-serif" x="352" y="578" text-anchor="middle" font-size="20">Accept or reject</text>
+    <path d="M352 593 V617 M348 612 L352 617 L356 612" fill="none" stroke="#52647a" stroke-width="2"/>
+    <text font-family="sans-serif" x="366" y="611" font-size="18" fill="#45576d">accept</text>
+    <rect x="32" y="619" width="416" height="90" rx="12" fill="#e4f4ed" stroke="#7fb69f"/>
+    <text font-family="sans-serif" x="240" y="654" text-anchor="middle" font-size="25" font-weight="700">Committed Dolt main</text>
+    <text font-family="sans-serif" x="240" y="685" text-anchor="middle" font-size="20">Recall · project views · history</text>
+    <text font-family="sans-serif" x="240" y="739" text-anchor="middle" font-size="19" fill="#45576d">Pending claims stay out of ordinary recall.</text>
+  </g>
+</svg>

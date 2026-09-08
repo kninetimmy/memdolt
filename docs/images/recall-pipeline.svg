@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="874" viewBox="0 0 480 874" role="img" aria-labelledby="title desc">
+  <title id="title">From question to evidence</title>
+  <desc id="desc">Recall reads committed facts, decisions, tasks, and eligible document chunks. FTS mode gathers lexical candidates using Dolt FULLTEXT. Hybrid mode embeds the query once and gathers current vectors by cosine similarity, with lexical fallback and a warning for missing or stale vectors. Enabled repository and global sources share a candidate pool, filters, penalties, and one rerank pass. Hybrid reranking is enabled by default and applies score floors. Results retain source IDs and optional commit provenance. Static diagram with no motion.</desc>
+  <rect x="1" y="1" width="478" height="872" rx="20" fill="#f6f8fc" stroke="#cbd5e1"/>
+  <g fill="#172a40">
+    <text font-family="sans-serif" x="32" y="42" font-size="16" font-weight="700" fill="#0e7490" letter-spacing="2">03 / RECALL</text>
+    <text font-family="sans-serif" x="32" y="79" font-size="27" font-weight="700">From question to evidence</text>
+    <rect x="32" y="109" width="416" height="84" rx="12" fill="#ffffff" stroke="#b7c6d8"/>
+    <text font-family="sans-serif" x="240" y="143" text-anchor="middle" font-size="24" font-weight="700">Your question</text>
+    <text font-family="sans-serif" x="240" y="175" text-anchor="middle" font-size="20">Search committed memory</text>
+    <path d="M240 194 V227 M236 222 L240 227 L244 222" fill="none" stroke="#52647a" stroke-width="2"/>
+    <rect x="32" y="229" width="416" height="145" rx="12" fill="#e6f5fa" stroke="#7bb8cd"/>
+    <text font-family="sans-serif" x="56" y="263" font-size="23" font-weight="700">Choose the candidate path</text>
+    <text font-family="sans-serif" x="56" y="300" font-size="20">FTS: Dolt FULLTEXT matches</text>
+    <text font-family="sans-serif" x="56" y="333" font-size="20">Hybrid: embed the query once</text>
+    <text font-family="sans-serif" x="56" y="360" font-size="20">→ current vectors, ranked by cosine</text>
+    <path d="M240 375 V408 M236 403 L240 408 L244 403" fill="none" stroke="#52647a" stroke-width="2"/>
+    <rect x="32" y="410" width="416" height="94" rx="12" fill="#fff1d6" stroke="#b68731"/>
+    <text font-family="sans-serif" x="56" y="444" font-size="22" font-weight="700">Hybrid: missing or stale vectors?</text>
+    <text font-family="sans-serif" x="56" y="478" font-size="20">Lexical fallback + rebuild warning</text>
+    <path d="M240 505 V538 M236 533 L240 538 L244 533" fill="none" stroke="#52647a" stroke-width="2"/>
+    <rect x="32" y="540" width="416" height="94" rx="12" fill="#ffffff" stroke="#b7c6d8"/>
+    <text font-family="sans-serif" x="56" y="574" font-size="23" font-weight="700">One candidate pool</text>
+    <text font-family="sans-serif" x="56" y="609" font-size="20">Scopes · filters · age/stale penalties</text>
+    <path d="M240 635 V668 M236 663 L240 668 L244 663" fill="none" stroke="#52647a" stroke-width="2"/>
+    <rect x="32" y="670" width="416" height="94" rx="12" fill="#eeedff" stroke="#aaa3df"/>
+    <text font-family="sans-serif" x="56" y="704" font-size="23" font-weight="700">Hybrid rerank, on by default</text>
+    <text font-family="sans-serif" x="56" y="738" font-size="20">Local cross-encoder + score floors</text>
+    <path d="M240 765 V798 M236 793 L240 798 L244 793" fill="none" stroke="#52647a" stroke-width="2"/>
+    <rect x="32" y="800" width="416" height="52" rx="12" fill="#e4f4ed" stroke="#7fb69f"/>
+    <text font-family="sans-serif" x="240" y="833" text-anchor="middle" font-size="23" font-weight="700">A small, sourced result bundle</text>
+  </g>
+</svg>
