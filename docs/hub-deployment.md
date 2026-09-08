@@ -120,6 +120,11 @@ privilege database; it does not reset credentials in an existing one. No credent
 is placed in the generated YAML/unit/manifest. The generated unit and native
 version probes disable native event flushing; they add no telemetry. The operator
 can also set Dolt's existing `metrics.disabled=true` for the dedicated account.
+Native version probes use an owned temporary home/cwd containing only native
+`metrics.disabled=true` and `versioncheck.disabled=true` settings, then remove
+their known temporary files. This prevents native update warnings/network checks
+and avoids reading or changing the operator's global/repository configuration.
+Cleanup failures are reported; unexpected files are retained for inspection.
 
 In a second trusted terminal, use a native MySQL-protocol SQL client with history
 disabled, for example `MYSQL_HISTFILE=/dev/null mysql --histignore='*' --socket
@@ -260,7 +265,8 @@ not been installed, changed or accepted by this delivery.
   source protections retain their prior independent contracts.
 - New `boundary.go` validates the single observed generated nftables table;
   `check.go` owns hub status/preflight/readiness and bounded, argument-based native
-  probes. These checks neither apply policy nor start a server. Existing doctor,
+  probes, with isolated temporary native configuration for the version probe.
+  These checks neither apply policy nor start a server. Existing doctor,
   native transfer/authentication and all local CLI/MCP owner behavior remain.
 - New `cmd/memdolt/hub.go` supplies the four hub verbs with explicit paths/options
   and human/JSON reports. `root.go` adds one command family; all existing children,

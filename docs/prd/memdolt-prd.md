@@ -2309,6 +2309,10 @@ unit orders/binds after the boundary and selected private-network service and
 uses bounded visible failures/retries. No implicit install/firewall/account or
 database mutation occurs from the hub CLI. Native event flushing is disabled in
 generated server/probe environments. Ordinary data schema/history stays intact.
+The native version probe uses a temporary home/cwd and native metrics/update-check
+disable settings, retaining strict parsing without contacting GitHub or changing
+the operator's configuration; cleanup failures are visible. Nft probes retain
+their read-only applied-table behavior without temporary configuration.
 
 Only applied protection passes full preflight; `--files-only` validates artifacts
 before application and is not a server startup authorization. Stop leaves the

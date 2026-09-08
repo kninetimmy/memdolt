@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,6 +269,16 @@ func TestVersionAndBoundedReadiness(t *testing.T) {
 	cancel()
 	if err := waitReady(ctx, c, func(Config) error { return errors.New("absent") }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("readiness ignored cancellation: %v", err)
+	}
+}
+
+func TestHubProbeOutputBound(t *testing.T) {
+	var out boundedOutput
+	// A Reader-only source makes io.Copy test the destination's optimized
+	// ReaderFrom path too: embedding bytes.Buffer would bypass the Write bound.
+	_, err := io.Copy(&out, io.LimitReader(strings.NewReader(strings.Repeat("x", 1<<20+1)), 1<<20+1))
+	if err == nil || out.buf.Len() > 1<<20 {
+		t.Fatalf("probe output exceeded its bound: %d %v", out.buf.Len(), err)
 	}
 }
 

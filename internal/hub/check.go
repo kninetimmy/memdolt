@@ -201,26 +201,51 @@ func privileges(c Config) (err error) {
 	return nil
 }
 
-func commandOutput(ctx context.Context, binary string, args ...string) ([]byte, error) {
+func commandOutput(ctx context.Context, binary string, args ...string) (_ []byte, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "DOLT_DISABLE_EVENT_FLUSH=1"}
+	if len(args) == 1 && args[0] == "version" {
+		// Native VersionCmd otherwise queries GitHub and mixes update warnings
+		// into stdout. Isolate its global config and cwd instead of weakening the
+		// version grammar or reading/changing the operator's native configuration.
+		dir, createErr := os.MkdirTemp("", "memdolt-hub-version-")
+		if createErr != nil {
+			return nil, createErr
+		}
+		defer func() { err = errors.Join(err, os.Remove(dir)) }()
+		root, openErr := os.OpenRoot(dir)
+		if openErr != nil {
+			return nil, openErr
+		}
+		defer func() { err = errors.Join(err, root.Close()) }()
+		if err := root.Mkdir(".dolt", 0o700); err != nil {
+			return nil, err
+		}
+		defer func() { err = errors.Join(err, root.Remove(".dolt")) }()
+		if err := root.WriteFile(".dolt/config_global.json", []byte(`{"metrics.disabled":"true","versioncheck.disabled":"true"}`), 0o600); err != nil {
+			return nil, err
+		}
+		defer func() { err = errors.Join(err, root.Remove(".dolt/config_global.json")) }()
+		cmd.Dir = dir
+		cmd.Env = append(cmd.Env, "HOME="+dir, "DOLT_ROOT_PATH="+dir)
+	}
 	var out boundedOutput
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("%s probe failed (output withheld): %w", filepath.Base(binary), err)
 	}
-	return out.Bytes(), nil
+	return out.buf.Bytes(), nil
 }
 
-type boundedOutput struct{ bytes.Buffer }
+type boundedOutput struct{ buf bytes.Buffer }
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
-	if len(p)+b.Len() > 1<<20 {
+	if len(p)+b.buf.Len() > 1<<20 {
 		return 0, errors.New("hub probe exceeded one MiB")
 	}
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
 }
 
 func privateReady(c Config) error {

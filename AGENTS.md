@@ -49,6 +49,10 @@ This does not install or change the user's hub. Complete structural blast radius
   New `check.go` owns status, read-only preflight, native release and bounded
   address checks. Executable release is distinct from remotes wire metadata.
   Probe errors withhold native output; no password is accepted or diagnosed.
+  The native version probe uses an owned temporary home/cwd with native metrics
+  and update checks disabled, preserving strict full-line version parsing and
+  the operator's configuration. Known temporary files are removed; unexpected
+  residue and cleanup failures are reported. Nft probes use no temporary home.
 - The generated root boundary oneshot validates files, applies only its newly
   created table with CAP_NET_ADMIN and checks the applied result. The server
   binds to it and the chosen private-network service. Every start runs full
