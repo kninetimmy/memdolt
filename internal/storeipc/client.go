@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/kninetimmy/memdolt/internal/ipc"
+	"github.com/kninetimmy/memdolt/internal/store"
 )
 
 // Client submits store operations to the process that owns a repository's
@@ -38,13 +39,13 @@ func NewClient(conn *ipc.Client) *Client {
 
 // Commit asks the owner to apply a write and record it as one Dolt commit.
 //
-// An error that matches *ipc.StatusError means the owner received the
-// request and the write did not happen. Any other error means the outcome
-// is unknown: the owner may have committed and the answer been lost. A
-// caller that must not report a write it cannot vouch for has to keep
-// those apart. IsOwnerRefusal is that test.
+// Before #145, every error discarded the response. Now a confirmed hash and
+// late error travel together. Without a hash, ErrCommitUnknown identifies an
+// unobserved native result or lost reply. *ipc.StatusError is an owner verdict,
+// not proof that Dolt could not persist before an unconfirmed native failure.
+// Neither permits an automatic replay. IsOwnerRefusal tests the HTTP verdict.
 //
-// An error of the second kind that also matches ipc.ErrNoLiveOwner says
+// An unknown-outcome error that also matches ipc.ErrNoLiveOwner says
 // something further: no live owner holds the store any more, so the caller
 // may open it directly rather than dial again. The write's own outcome is
 // still unknown — that is what makes it a separate question from the
@@ -52,7 +53,16 @@ func NewClient(conn *ipc.Client) *Client {
 func (c *Client) Commit(ctx context.Context, req CommitRequest) (CommitResponse, error) {
 	var resp CommitResponse
 	if err := c.ipc.PostJSON(ctx, CommitPath, req, &resp); err != nil {
+		if !IsOwnerRefusal(err) {
+			return CommitResponse{}, errors.Join(fmt.Errorf("storeipc: commit response lost or unavailable: %w", err), store.ErrCommitUnknown)
+		}
 		return CommitResponse{}, fmt.Errorf("storeipc: commit: %w", err)
+	}
+	if resp.Error != "" {
+		if resp.Hash == "" && resp.Unknown {
+			return resp, errors.Join(errors.New(resp.Error), store.ErrCommitUnknown)
+		}
+		return resp, errors.New(resp.Error)
 	}
 	return resp, nil
 }

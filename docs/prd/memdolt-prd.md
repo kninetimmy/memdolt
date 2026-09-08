@@ -83,6 +83,69 @@ Each project's memory is a Dolt database. The commit graph is the write-ahead lo
 - Commit metadata is load-bearing: author = normalized actor (`agent:claude-code`, `agent:codex`, `user`), message = structured one-liner (`propose fact msrv=1.24`, `note batch (3)`, `review accept #42`). `dolt_log` + `dolt_blame` then answer provenance queries with zero app code. **[V]** (system tables exist as documented.)
 - Agents never `ALTER TABLE`. Schema changes ship only in migrations run by the binary on `main` (§6.4). This keeps Dolt schema-conflict machinery **[V]** out of the daily path entirely.
 
+**Confirmed outcomes (issue #145).** Before this delivery, the #104 accumulator
+above retained every failed group for retry, while #139's native hash correction
+had not reached the older direct-lane/document/raw-owner consumers. After it,
+task add/done/block, notes/batches, command recording, narratives and document
+add/remove retain confirmed identity/hash with late native, read-back, config,
+close or output errors. A nonempty hash confirms durability; an unobserved native
+result or owner reply means unknown outcome, not rollback. Inspect the named row
+and Dolt history before any retry. Successful output fields remain compatible;
+CLI JSON adds an optional error. Failed command read-back returns only the certain
+kind plus hash/error; zero-value command totals in that failed result are unknown.
+Pre-commit validation, deny/config, clean-guard and statement refusals claim no
+durable effect and preserve their prior boundaries.
+
+`Toolset.flushLocked` attempts every actor group. It removes confirmed groups
+immediately even with a late error and reports confirmed hashes if any group
+fails. Only known uncommitted groups retain the orderly-shutdown retry; explicit
+render may also retry them. Unknown groups remain inspection-only and are never
+submitted again at timer, render or close; end that session and inspect the named
+notes before starting a fresh one. Unknown groups prevent session publication.
+New notes still refuse after a flush error. Timer failures are shown by the next
+render and retained for shutdown; errors from an explicit render are returned
+there and also retained for shutdown. A later render may succeed once eligible
+groups commit, without repeating any already-confirmed group. `Close` retains
+earlier/final failures, makes its existing bounded final attempt on eligible
+groups and discards every remaining group, including unknown groups. The existing
+five-minute timer, one-minute flush/close limit and crash-loss boundary remain.
+These rules bind Toolset's process-local accumulator alone, not all note writers.
+
+`Toolset.Render` holds the queue mutex through flush and the committed-main
+snapshot/file operation. A flush error produces `notes-failed` without publishing
+files, preserving committed effects and the remaining groups. Stale timer callbacks
+cannot consume a new timer or replay a flushed group. The production `runServe`
+owner installs this same render callback on authenticated IPC before listening;
+MCP render and live-owner CLI render therefore flush the same queue. Standalone
+`Store.Render` has no session queue and retains its existing read/file behavior.
+Proposal exclusion, per-file publication, actor attribution, deny-list checks,
+clean-working-set guards, serialization and global exclusion remain unchanged.
+No new batching service, schema, dependency or full M5/M6 claim is introduced.
+
+Before #145's review-cycle correction, successful flushes discarded their note
+IDs/hashes before calling Store.Render. A later config/snapshot/file error could
+report only file effects although notes committed. After the correction, the
+existing flush loop returns those effects and Toolset.Render retains them in
+optional `render.Result.NoteCommits` (`noteCommits`: note ID to commit hash).
+The map describes this invocation's confirmed flush only; it is independent of
+SourceCommit, which stays empty if snapshot capture fails. `NoteCommitError`
+adds note/history inspection evidence through later render, CLI close and output
+failures. Existing MCP/owner result envelopes carry the map without resubmission;
+a lost reply names possible note effects but claims no identities or hashes.
+Timer/shutdown errors reuse the same formatter. Queue policy, pure Store.Render,
+per-file publication and every prior guard remain unchanged. The AGENTS #145
+record inventories the reached methods, workflow updates and real-store tests.
+
+The complete symbol/file consumer inventory is in AGENTS.md's #145 record:
+`Store.Commit`/`commitConnFinalize`/`commitTx`/`nativeCommitResult`, every direct
+`Lanes.write` and `CommitNotes` caller, document mutations, existing human/interop/
+proposal/migration consumers, raw and typed owner handlers/clients, CLI direct/
+OpenCode/document/render paths, Toolset handlers/queue/render and `runServe`,
+soak result classifiers, matching tests and host workflows. In particular,
+ordinary failed staging retains its earlier residue/cleanup rules; a populated
+late hash does not authorize branch deletion. Migration/tag recovery still needs
+inspection and `memdolt init` rather than a claim that a late commit rolled back.
+
 Before issue #139, those direct lanes and reviewed proposals were the shipped
 writers; ordinary trusted human fact/decision commands remained deferred. After
 it, the repository CLI in §11.2 also lets humans assert, verify, edit summaries
@@ -195,6 +258,9 @@ same method once; authenticated IPC carries the operation and confirmed
 result-plus-error, with no caller-selected destination. Unknown replies require
 inspection before retry. Its committed-read and file boundaries are detailed
 in §11.2; the existing query and owner contracts above remain unchanged.
+Before #145 these entry points had no note flush. After it, `runServe` supplies
+the optional session render callback to the existing owner operation, while
+owners without a queue default to Store.Render. Submission remains single-shot.
 
 Review acceptance crosses that typed route as the complete application gate,
 not as a raw storage merge. The first version of this routing pass called the
@@ -928,8 +994,9 @@ It preserves structured written-file/backup evidence on tool errors and never
 replays file replacement after a lost response. Modern/legacy attribution,
 static `tools/list` cache hints and every prior handler remain unchanged.
 This registration rule binds `RegisterTools`, not arbitrary SDK servers.
-Render includes only committed notes; it does not flush the accumulator or
-change its five-minute/orderly-shutdown behavior. No other deferred tool is
+Before #145 render included only already-committed notes and did not flush the
+accumulator. After #145 its session wrapper flushes first under §3.1's result,
+retry and inspection rules; standalone Store.Render is unchanged. No other deferred tool is
 introduced by this render delivery, and it does not complete M5.
 
 **Elicited-review handoff (2026-08-30, issue #106).** Before this delivery,
@@ -1271,8 +1338,10 @@ and its comment claimed all failures rolled back. The pinned DOLT_COMMIT
 procedure persists before database/sql finalization. After this fix, that
 helper retains the real hash with a finalization error naming it; earlier
 failures still invoke rollback. The new human seam preserves the structured result.
-Older lane/document/raw owner wrappers still discard structured results on
-error, and note-batch retry bookkeeping remains follow-up work. Staging keeps
+Before #145 older lane/document/raw owner wrappers still discarded structured
+results on error, and note-batch retry bookkeeping remained follow-up work.
+After #145 those consumers retain confirmed effects and distinguish unknown
+outcomes under §3.1. Staging keeps
 its prior late-error expected-head refusal and inspectable proposal residue;
 it does not gain automatic deletion from the newly available hash.
 
@@ -2038,6 +2107,10 @@ and the current working set, refs and history remain unchanged. This boundary
 binds `Store.Render`, not every store read or generated-text helper.
 Issue #131 subsequently adds repository status to the same mutex without
 changing render's snapshot/file ordering or preservation behavior.
+Before #145 this described the complete session render too. After it,
+Toolset.Render first commits eligible pending notes under its separate queue
+mutex, then calls this unchanged Store.Render. Failed flushing publishes no
+files. Both the MCP tool and `runServe`'s authenticated CLI route use that wrapper.
 
 `internal/render.writeFiles` uses directory handles, refuses symlink/reparse
 traversal and unmarked same-name user files, and prepares both complete sibling
@@ -2194,9 +2267,11 @@ it when writing the approved summary; a failure stops later steps. Facts and
 decisions remain proposals for human review. Before issue #133, no template
 added render, sync, transcript capture, wrapper installation, or the other
 deferred backends. After it, the three wrap-up templates add only render after
-approved writes and report its committed source and file effects. Claude/Codex
-notes remain queued until their existing deadline/shutdown flush, so that
-summary is absent from a render made before the flush; render never forces it.
+approved writes and report its committed source and file effects. Before #145,
+Claude/Codex notes remained queued until their deadline/shutdown flush, so the
+summary was absent from earlier renders. After #145 step 6 flushes that owner's
+pending notes through either MCP or authenticated CLI before the snapshot;
+flush errors stop publication and confirmed/unknown outcomes require inspection.
 OpenCode's verified CLI summary is already committed. Their review, approval
 and identity pre-flight gates remain unchanged; a partial/unknown render stops
 the workflow for inspection before retry. Other deferred operations remain
@@ -2601,6 +2676,8 @@ the full M5 acceptance gate or change M6.
 ---
 
 **M5 render subset (issue #133):** the earlier records left all M5 deferred.
+Issue #145 subsequently preserves direct-lane late results and adds session-note
+flush before explicit rendering (§3.1); it does not complete M5 or M6.
 After this delivery, committed-memory rendering through CLI and MCP ships
 within §§11.1–11.3's read/file/owner boundaries, with the three core workflow
 templates updated. Synthetic direct, authenticated-owner and modern/legacy

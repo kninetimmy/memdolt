@@ -48,6 +48,7 @@
 package storeipc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,6 +58,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/store"
 )
 
@@ -113,6 +115,8 @@ type CommitRequest struct {
 type CommitResponse struct {
 	Hash         string `json:"hash"`
 	RowsAffected int64  `json:"rowsAffected"`
+	Error        string `json:"error,omitempty"`
+	Unknown      bool   `json:"unknown,omitempty"`
 }
 
 // QueryRequest is exactly one read-only SELECT or SHOW statement. The owner
@@ -145,6 +149,10 @@ type Config struct {
 	// exposing a raw storage accept would bypass contradiction policy.
 	ReviewAccept ReviewAcceptFunc
 
+	// Render optionally supplies the session's flush-before-snapshot boundary.
+	// Owners without a session queue default to Store.Render.
+	Render func(context.Context) (render.Result, error)
+
 	// MaxRows bounds a result set. Zero means DefaultMaxRows.
 	MaxRows int
 
@@ -159,6 +167,7 @@ type Config struct {
 type handler struct {
 	store           Backend
 	reviewAccept    ReviewAcceptFunc
+	render          func(context.Context) (render.Result, error)
 	maxRows         int
 	maxRequestBytes int64
 	logger          *slog.Logger
@@ -177,9 +186,13 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	h := &handler{
 		store:           cfg.Store,
 		reviewAccept:    cfg.ReviewAccept,
+		render:          cfg.Render,
 		maxRows:         cfg.MaxRows,
 		maxRequestBytes: cfg.MaxRequestBytes,
 		logger:          cfg.Logger,
+	}
+	if h.render == nil {
+		h.render = h.store.Render
 	}
 	if h.maxRows <= 0 {
 		h.maxRows = DefaultMaxRows
@@ -222,11 +235,15 @@ func (h *handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 		Message:      req.Message,
 		Author:       store.Actor{Name: req.Author.Name, Email: req.Author.Email},
 	})
-	if err != nil {
+	if err != nil && result.Hash == "" && !errors.Is(err, store.ErrCommitUnknown) {
 		h.fail(w, http.StatusInternalServerError, err)
 		return
 	}
-	h.respond(w, CommitResponse{Hash: result.Hash, RowsAffected: result.RowsAffected})
+	response := CommitResponse{Hash: result.Hash, RowsAffected: result.RowsAffected, Unknown: result.Hash == "" && errors.Is(err, store.ErrCommitUnknown)}
+	if err != nil {
+		response.Error = err.Error()
+	}
+	h.respond(w, response)
 }
 
 func (h *handler) handleQuery(w http.ResponseWriter, r *http.Request) {

@@ -245,11 +245,13 @@ func (e *directExecutor) commit(ctx context.Context, rec Record) (string, Outcom
 		Message: "soak write " + rec.Key,
 		Author:  e.actor,
 	})
+	if result.Hash != "" {
+		return result.Hash, OutcomeCommitted, err
+	}
 	if err != nil {
-		// In process there is no answer to lose, so a failure is a failure
-		// — except a cancelled context, which can cut the call off with the
-		// transaction's fate genuinely unknown.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// Before #145 this classified even confirmed late failures as refused
+		// or unknown. Only an unconfirmed failure reaches this branch now.
+		if errors.Is(err, store.ErrCommitUnknown) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return "", OutcomeIndeterminate, err
 		}
 		return "", OutcomeRefused, err
@@ -306,6 +308,9 @@ func (e *ipcExecutor) commit(ctx context.Context, rec Record) (string, Outcome, 
 		Message: "soak write " + rec.Key,
 		Author:  storeipc.Actor{Name: e.actor.Name, Email: e.actor.Email},
 	})
+	if resp.Hash != "" {
+		return resp.Hash, OutcomeCommitted, err
+	}
 	if err != nil {
 		if storeipc.IsOwnerRefusal(err) {
 			return "", OutcomeRefused, err

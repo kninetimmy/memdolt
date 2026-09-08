@@ -58,6 +58,10 @@ type Store interface {
 	// Commit applies a write and records it as one Dolt commit, returning
 	// the commit hash. Everything in the request lands in a single commit
 	// or none of it does.
+	// Before #145, several callers treated any error as no commit. A nonempty
+	// result hash confirms durability even with a late error; every caller must
+	// retain it and must not automatically replay that write. An empty hash
+	// confirms nothing: a lost owner response still requires inspection.
 	//
 	// Before any of it is applied, the request's Text is matched against
 	// the repository's configured deny-list (PRD §11.3). A write that
@@ -163,6 +167,10 @@ var ErrDenied = denylist.ErrDenied
 
 // ErrNotOpen reports an operation on a store that is not open.
 var ErrNotOpen = errors.New("store is not open")
+
+// ErrCommitUnknown marks an attempted native commit or owner submission whose
+// result was not observed. It is not proof of rollback and forbids automatic replay.
+var ErrCommitUnknown = errors.New("commit outcome unknown; inspect committed rows and Dolt history before retrying")
 
 // Actor is the normalized identity a commit is attributed to (PRD §3.1):
 // agent:claude-code, agent:codex, user. Commit metadata is load-bearing —

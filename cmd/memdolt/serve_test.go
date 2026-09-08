@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +19,80 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/ipc"
 	"github.com/kninetimmy/memdolt/internal/mcpserver"
+	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
+
+func TestConfirmedServeRenderFlushesThroughMCPAndCLIOwner(t *testing.T) {
+	base := initStore(t)
+	server := mcpserver.New("test")
+	clientPipe, serverPipe := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runServe(ctx, base, server, &mcp.IOTransport{Reader: serverPipe, Writer: serverPipe}, nil)
+	}()
+	client := mcp.NewClient(&mcp.Implementation{Name: "render-fixture", Version: "1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.IOTransport{Reader: clientPipe, Writer: clientPipe}, nil)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	expectFlushError := false
+	t.Cleanup(func() {
+		_ = session.Close()
+		cancel()
+		select {
+		case err := <-done:
+			if expectFlushError && (err == nil || !strings.Contains(err.Error(), "deny-list")) {
+				t.Errorf("shutdown hid the render flush failure: %v", err)
+			} else if !expectFlushError && err != nil {
+				t.Error(err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("serve did not finish")
+		}
+	})
+	queue := func(text string) {
+		t.Helper()
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "log_session_note", Arguments: map[string]any{"text": text}})
+		if err != nil || result.IsError {
+			t.Fatalf("queue note: %+v %v", result, err)
+		}
+	}
+	queue("first note captured through CLI owner render")
+	first := decodeJSON[render.Result](t, runMemdolt(t, "render", "--dir", base, "--json"))
+	project := filepath.Join(base, ".memdolt", "rendered", "PROJECT.md")
+	before, err := os.ReadFile(project)
+	if err != nil || first.SourceCommit == "" || !strings.Contains(string(before), "first note captured") {
+		t.Fatalf("live CLI owner render missed its queue: %+v %s %v", first, before, err)
+	}
+	queue("BLOCKED second note")
+	writeTestFile(t, pathsFor(t, base).ConfigFile(), "[deny_list]\npatterns=['BLOCKED']\n")
+	out, err := runMemdoltResult(t, "render", "--dir", base, "--json")
+	failed := decodeJSON[render.Result](t, out)
+	if err == nil || failed.Status != "notes-failed" || len(failed.WrittenFiles) != 0 || !strings.Contains(failed.Error, "deny-list") {
+		t.Fatalf("owner flush failure published output: %+v %v", failed, err)
+	}
+	expectFlushError = true
+	after, err := os.ReadFile(project)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("failed owner flush changed the published project")
+	}
+	writeTestFile(t, pathsFor(t, base).ConfigFile(), "[deny_list]\npatterns=[]\n")
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "render", Arguments: map[string]any{}})
+	if err != nil || result.IsError {
+		t.Fatalf("MCP render retry failed: %+v %v", result, err)
+	}
+	after, err = os.ReadFile(project)
+	if err != nil || !strings.Contains(string(after), "BLOCKED second note") {
+		t.Fatal("MCP render missed the surviving group")
+	}
+	notes := decodeJSON[noteList](t, runMemdolt(t, "note", "list", "--dir", base, "--json"))
+	if len(notes.Notes) != 2 {
+		t.Fatal("owner/MCP render replayed a committed note")
+	}
+}
 
 func TestServeCancellationClosesProtocolPendingWorkIPCAndStore(t *testing.T) {
 	base := initStore(t)

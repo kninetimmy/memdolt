@@ -87,10 +87,7 @@ func (s *OwnerStore) Commit(ctx context.Context, req store.CommitRequest) (store
 		Message:      req.Message,
 		Author:       Actor{Name: req.Author.Name, Email: req.Author.Email},
 	})
-	if err != nil {
-		return store.CommitResult{}, err
-	}
-	return store.CommitResult{Hash: result.Hash, RowsAffected: result.RowsAffected}, nil
+	return store.CommitResult{Hash: result.Hash, RowsAffected: result.RowsAffected}, err
 }
 
 func wireArgs(args []any) []any {
@@ -199,7 +196,7 @@ func (s *OwnerStore) documentMutation(ctx context.Context, operation string, arg
 func (s *OwnerStore) Render(ctx context.Context) (render.Result, error) {
 	var result render.Result
 	if err := s.operation(ctx, opRender, nil, &result); err != nil {
-		return render.Result{Status: "unknown"}, fmt.Errorf("render owner response lost or unavailable; outcome unknown; inspect configured outputs and .memdolt/backups/rendered before retrying: %w", err)
+		return render.Result{Status: "unknown"}, fmt.Errorf("render owner response lost or unavailable; outcome unknown; inspect configured outputs, .memdolt/backups/rendered, `memdolt note list` and Dolt history before retrying: %w", err)
 	}
 	if result.Error != "" {
 		return result, errors.New(result.Error)
@@ -300,6 +297,12 @@ func (s *OwnerStore) RecordCommand(
 	err := s.operation(ctx, opRecordCommand, recordCommandArgs{
 		Actor: actor, Kind: kind, Cmdline: cmdline, ExitCode: exitCode,
 	}, &result)
+	if err != nil && !IsOwnerRefusal(err) {
+		return memory.Command{}, "", fmt.Errorf("command owner response lost or unavailable; outcome unknown; inspect `memdolt command get %s` and Dolt history before retrying: %w", kind, err)
+	}
+	if result.Error != "" {
+		err = errors.New(result.Error)
+	}
 	return result.Command, result.Commit, err
 }
 
