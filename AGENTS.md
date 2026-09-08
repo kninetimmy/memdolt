@@ -121,6 +121,206 @@ The complete structural blast radius is:
   instructions, this record, PRD §10 and the new guide retain matching
   before/after scope; no dependency or durable migration is introduced.
 
+Before integration with #145, the #146 branch still inherited the older native
+document result handling, which could discard an observed commit on a late
+error. After the normal merge of landed #145/#147, global DocAdd/DocRemove reuse
+the same docAddFinalize/docRemove and nativeCommitResult seams: observed hashes
+and document/chunk identities survive native finalization or cancellation;
+unobserved results retain ErrCommitUnknown and never imply rollback or replay.
+Global add reports an unfinalized `[global]` default-doc setting even when other
+repositories already populated the document table. Its manual remedy names the
+calling repository; a failed native operation never attempts config finalization.
+The repository first-document behavior remains. New global_documents_test.go
+exercises real native add/remove commits, cancellation before versus after hash
+observation, reopened rows/history and independent three-repository config-only
+progress. Existing CLI config-only close/output evidence and the global corpus
+tests remain. The merge preserves #145's NoteCommits/session-render/unknown-group
+behavior, raw/typed owner results, all wrap-up templates and #147's hub code,
+runbook and CI lane. Root registers both global and hub; no hub/runtime/credential
+policy, dependency, schema or frozen golden assertion changes in this integration.
+
+**Confirmed outcomes and session rendering (issue #145).** Before this delivery,
+#139 preserved native finalization hashes but the older direct/document/raw-owner
+consumers could discard them, and MCP could retry a committed note batch. After
+it, confirmed row identities and hashes survive late failures through the reached
+application, CLI and authenticated owner paths. Full structural blast radius:
+
+- `internal/store/store.go` makes the result-plus-error obligation explicit for
+  every `Store.Commit` consumer and adds `ErrCommitUnknown`. A nonempty hash
+  confirms durability; an unobserved native/owner result does not prove rollback.
+  `localdolt/localdolt.go` retains hashes assigned before result-close failure,
+  preserves populated results through outer rollback/finalization, and reports
+  commit-connection close errors. `nativeCommitResult` classifies errors after
+  attempted DOLT_COMMIT without an observed hash as unknown; earlier validation,
+  deny/config, clean-guard and statement failures retain their prior refusal
+  behavior. This classification binds `commitTx`'s native result seam, not every
+  SQL error or independent merge procedure. SQL values remain bound and the
+  existing `proposalMu` serialization is unchanged.
+- `memory/memory.go` preserves results through `Lanes.write`, `AddTask`,
+  `CompleteTask`/`BlockTask` via `setTaskStatus`, `LogNote` via
+  `LogNoteWithProvenance`, `CommitNotes`, `RecordCommand` and `SetNarrative`.
+  `ConfirmedWriteError` names confirmed hashes and inspection remedies only when
+  a hash exists; it does not classify arbitrary errors. Command read-back failure
+  returns only its certain kind plus the commit/error; zero-value totals are not
+  authoritative on that failed response. Command upsert/read-back ordering,
+  normalization, raw/canonical attribution, note provenance, deny declarations,
+  batch RequireClean and committed readers remain unchanged.
+- `localdolt/documents.go` retains add/remove identity, chunks and hash before
+  testing the commit error. A first-document late commit error leaves default
+  recall config unfinalized and names the manual config remedy; do not replay
+  ingestion to repair it. Existing `documentFinalError` also retains connection
+  errors. The private `docAddFinalize`/`docRemove` finalizer seams default to the
+  same native transaction finalizer; exported arguments, pinned reads, file
+  protection, chunking, hash no-ops/replacement and configuration policy remain.
+- Other native-result consumers are inventoried rather than given new policy:
+  `humanMemoryWrite` and interop main/staging already retained confirmed effects;
+  ordinary `stage`/`stageOnBranch` still use a result hash for cleanup only with
+  no staging error, so late failure cannot broaden branch deletion. Migration
+  `applyMigration` still discards only uncommitted residue on failure, preserves
+  committed history, and uses inspection/re-init plus `ensureMigrationTag` for
+  missing tags. A late migration is not relabeled rolled back. Review/pull's
+  independent native merge procedures retain their existing boundaries.
+- `storeipc/{storeipc,client,owner_store}.go` carries raw Commit's optional error
+  and unknown fields, preserving confirmed hash/RowsAffected with an error.
+  Unknown native outcomes retain the marker over an authenticated reply; a lost
+  reply is unknown too. Pre-commit owner refusals keep HTTP status errors.
+  `operation.go` preserves typed command-record results on late errors and uses
+  the optional `Config.Render` callback for owners with a session queue, defaulting
+  to `Store.Render` otherwise. Existing document result envelopes, authentication,
+  argument decoding, explicit operation allow-list, one-submit/no-fallback and
+  no-replay rules remain. No new IPC operation or caller-selected render path.
+- `cmd/memdolt/lanes.go` retains direct results until its selected store closes,
+  then emits compatible success fields or confirmed fields with an optional JSON
+  error and nonzero result. Output failure names the commit and inspection remedy.
+  Its lane-specific help changes only task/note/command/narrative writers;
+  `opencode.go` retains verified note results through close/output failures while
+  preserving verify-before-open and exact provenance. `doc.go` updates help;
+  its existing result/close/output reporting remains. `render.go` updates help;
+  result and per-file reporting remain. Reads/review/global exclusion are unchanged.
+- `mcpserver/tools.go` retains task/command typed results on protocol tool errors;
+  a Go handler error still refuses an unconfirmed write. It attempts every actor
+  group, removes each confirmed group before the next, and reports its hash even
+  if another group fails. Known uncommitted groups retain explicit-render and
+  orderly-shutdown retry. Unknown groups retain IDs/errors for inspection only,
+  block session render and are never resubmitted; end that session and inspect
+  before starting a fresh one. New notes still refuse after any flush error.
+  Timer errors reach the next render once and remain in the shutdown error;
+  stale timer callbacks cannot consume another timer or replay a flushed group.
+  `Close` retains prior/final failures, attempts eligible groups with the existing
+  one-minute limit and discards all remaining groups, including unknown groups.
+  A crash still loses process memory. These queue rules bind Toolset alone.
+- `mcpserver/render.go` adds `Toolset.Render`: under its queue mutex, stop the
+  timer, flush with the existing one-minute bound, and call `Store.Render` only
+  after a successful flush. A flush failure reports `notes-failed` with no file
+  publication. `cmd/memdolt/serve.go` wires the same callback before publishing
+  IPC, preserving protocol/pending-work/toolset/IPC/store shutdown ordering.
+  Standalone `localdolt.Store.Render` still captures committed main without a
+  queue or memory commit; safe per-file publication and proposal exclusion remain.
+  Session render's queue mutex is separate from the unchanged store mutex.
+- The server instructions, three wrap-up templates and PRD §§3.1/5.2/11/16
+  preserve matching before/after records, approval and identity gates. New
+  localdolt/MCP/CLI confirmed-result tests plus updated MCP render and production
+  serve tests and `storeipc/confirmed_result_test.go` exercise actual native
+  finalization/cancellation, refused roots,
+  read-back/close/output errors, authenticated results, render ordering and
+  reopened rows/history. `tests/soak/roles.go` now records a confirmed hash as
+  committed even with an error; its ledger already records both. An explicit
+  unknown marker is indeterminate as cancellation already was. Its workload
+  and crash-audit policy remain.
+  No dependency, durable schema, new CRUD/global operation, polling service,
+  separate batch implementation or full M5/M6 completion is introduced.
+
+Before #145's review-cycle correction, a successful `flushLocked` removed its
+groups but discarded their IDs/hashes; a later render config/snapshot/file error
+could therefore report only file effects despite committed notes. After the
+correction, the same loop returns a note-ID-to-hash map alongside its error.
+`Toolset.Render` preserves that map as optional `render.Result.NoteCommits`
+(`noteCommits` in JSON) through every later failure. It describes only notes
+committed by this invocation, not a cumulative session log or SourceCommit.
+`render.Result.NoteCommitError` adds note/history inspection evidence only when
+that map is populated. Timer/shutdown error reporting reuses the same helper;
+their removal, retry, unknown-group and discard rules remain unchanged.
+`cmd/memdolt/render.go` reports the map in human/JSON output and retains its
+evidence on close/output failure. Existing MCP and authenticated operation
+envelopes carry it unchanged; `OwnerStore.Render`'s lost-reply remedy now also
+names note/history inspection without claiming unobserved effects. The pure
+renderer still writes no memory and retains all snapshot/file guarantees.
+New `cmd/memdolt/render_notes_test.go` reproduces production MCP and live-owner
+CLI refusal after successful flush, verifies close/output errors and reopened
+rows/history, and proves repeated render adds no note effects. Existing MCP
+render tests now cover snapshot and post-render errors with actual committed
+notes; CLI/owner render tests retain standalone and lost-reply assertions.
+Help, server instructions, wrap-up templates and PRD record the same boundary.
+
+**Private native Linux hub (issue #147).** Before this delivery, `hub
+init|status` and managed startup were planned; PRD §13.1's SQL-bind-only
+example did not constrain Dolt's independently wildcard remotesapi listener.
+After it, the explicit hub CLI generates six reviewable nonsecret artifacts
+and inspects a selected deployment. Managed startup requires Linux, systemd,
+nftables, both private interface addresses and native Dolt exactly 1.88.1.
+The complete before/after, native credential/bootstrap instructions, measured
+limits and structural inventory are in [the hub runbook](docs/hub-deployment.md).
+This does not install or change the user's hub. Complete structural blast radius:
+
+- New `internal/hub/config.go` owns the independent manifest, literal input
+  validation and generated YAML/systemd/nftables/SETUP artifacts. All generated
+  interpolations pass `Config.Validate`; this restriction binds these artifacts,
+  not general shell/SQL/unit code. Repository configuration/topology stays.
+- New `files.go` and `path_windows.go`/`path_other.go` own rooted hub reads and
+  create-only output. Exact existing bundles are unchanged; foreign, modified,
+  partial, linked/reparse/hard-linked and protected destinations refuse without
+  replacement. A failed new write reports complete files and may leave a partial
+  directory for inspection. There is no overwrite or automatic cleanup mode.
+  Privileged deployment additionally requires root-owned non-writable ancestry
+  and exact bundle bytes. Foreign filesystem writers and the final check/open
+  interval are not coordinated. Existing renderer/code-index/owner checks stay.
+- New `boundary.go` verifies only the actual generated `inet memdolt_hub` table,
+  hook and four ordered rules from numeric nftables JSON. IPv4 and IPv6 ingress
+  to both TCP ports is restricted to loopback or the selected private interface,
+  allowed source prefix and destination. Unknown/extra/dormant/missing semantics
+  fail closed. Other tables/traffic remain; no ruleset/table flush occurs.
+  New `check.go` owns status, read-only preflight, native release and bounded
+  address checks. Executable release is distinct from remotes wire metadata.
+  Probe errors withhold native output; no password is accepted or diagnosed.
+  The native version probe uses an owned temporary home/cwd with native metrics
+  and update checks disabled, preserving strict full-line version parsing and
+  the operator's configuration. Native 1.88.1 still constructs its event emitter
+  before selecting NullEmitter; the probe owns its exact eventsData/dolt.lock
+  artifacts too. Known temporary files are removed; unexpected
+  residue and cleanup failures are reported. Nft probes use no temporary home.
+- The generated root boundary oneshot validates files, applies only its newly
+  created table with CAP_NET_ADMIN and checks the applied result. The server
+  binds to it and the chosen private-network service. Every start runs full
+  privileged read-only preflight, then unprivileged version/credential-file/
+  bounded address readiness, then one dedicated-user native Dolt process with
+  no capabilities. `ready` also verifies the effective UID/GID match the configured
+  nonroot account/group; root aliases refuse. This check binds `ready`, not status
+  or privileged preflight. Generated units/probes disable native event flushing.
+  The files-only pre-application check never asserts enforced protection.
+  Protection remains on stop. The guard is a startup snapshot, not a monitor
+  against later privileged firewall changes; direct Dolt invocations do not
+  inherit it. Distribution nftables.service with flush-ruleset config is not used.
+- New `cmd/memdolt/hub.go` provides `init`, `status`, `preflight` and `ready`
+  with explicit paths/options and human/JSON results. `root.go` adds that family;
+  all prior CLI/store/clone/transfer/merge/authentication/code-index behavior and
+  22 MCP registrations remain. Status checks local TCP reachability, not process
+  identity, credential correctness or physical off-network denial. Non-Linux
+  startup/live inspection explicitly fails with unknown unobserved checks.
+- New hub/CLI tests validate native YAML using the existing pinned parser and
+  cover hostile inputs, preservation, links, nft policy weakening, versions,
+  bounded readiness and honest platform reports. `tests/hub/verify_linux.py`
+  and its Dockerfile add isolated real-Linux enforcement/native-startup evidence
+  with a published-checksum-verified Dolt 1.88.1, disposable container and three
+  namespaces. No runner-host firewall/account/service is changed. Unit grammar
+  and actual ordered commands are tested; installation under PID 1 is not claimed.
+  `.github/workflows/ci.yml` adds `Test (hub ingress)` without renaming protected
+  contexts or removing ordinary/golden gates. No Go dependency or schema changes.
+- Help, the new runbook and PRD §§11/13/16 retain the old SQL-bind-only example
+  and correct its perimeter claim. Native users/grants remain the credential
+  boundary: remote read needs global CLONE_ADMIN; write needs broad SUPER, not
+  database-scoped remote isolation. Topology/project identity, backup/retention
+  and physical two-client/off-network acceptance remain separately tracked.
+
 **Memory interoperability (issue #140).** Before this delivery, PRD §15
 described import-from-memhub and JSON interop but neither CLI command existed.
 After it, `export <bundle.json>`, `import <bundle.json>` and
@@ -436,9 +636,10 @@ The complete structural blast radius is:
   the real DOLT_COMMIT result plus an error naming its hash: the pinned Dolt
   procedure has already persisted before `sql.Tx.Commit`. Earlier failures
   still invoke rollback. This result contract binds `commitConn`/`Store.Commit`;
-  older document/lane/raw owner wrappers still discard the structured result
-  on error, though their error now carries the hash. `CommitNotes`/`Toolset`
-  retry bookkeeping is unchanged and remains separate follow-up work.
+  before #145 older document/lane/raw owner wrappers still discarded structured
+  results on error, and `CommitNotes`/`Toolset` retry bookkeeping was deferred.
+  After #145 the confirmed-outcome record above completes those consumers and
+  queue rules; the original human-only mutation boundary remains.
 - `localdolt/propose.go` keeps `ProposeSupersede` fact-only; before #139 its
   comment said no decision lane requested supersession, after it the new human
   lane does. `stage` uses a returned hash for automatic cleanup only without a
@@ -535,7 +736,9 @@ above or invoke memhub. The complete structural blast radius is:
   render operation participates. Other reads, migrations and foreign Dolt
   sessions retain their prior boundaries. Pinned reads still identify one
   snapshot if a nonparticipating writer moves main. No memory, refs, dirty
-  rows, note batches or history are changed by rendering.
+  rows, note batches or history are changed by `Store.Render` itself. Before
+  #145 this also described the MCP/owner entry points; afterward their session
+  wrapper flushes notes first, as recorded above.
   Issue #131 subsequently adds repository status to the same mutex; render's
   snapshot/file ordering and preservation behavior remain unchanged.
 - `storeipc/operation.go` adds `Backend.Render` and one explicit `render`
@@ -554,8 +757,9 @@ above or invoke memhub. The complete structural blast radius is:
   new `mcpserver/render.go` uses an empty typed input and a typed result, retaining
   structured file effects even on a visible tool error. `New`'s modern/legacy
   agent attribution, static cache hints, review behavior and note lifecycle
-  remain. Render does not flush queued notes; only the existing deadline or
-  orderly shutdown does. `instructions.md` adds that same committed-view rule.
+  remain. Before #145 render did not flush queued notes; only the deadline or
+  orderly shutdown did. After #145 the session entry points flush first, while
+  standalone Store.Render retains this original committed-view rule.
 - New `render/files_test.go`, `localdolt/render_test.go`, `cmd/memdolt/render_test.go`,
   `mcpserver/render_test.go`, `storeipc/render_test.go`, and the shared synthetic
   `render/testdata/memory.sql` exercise content, committed/dirty/proposal
@@ -566,8 +770,9 @@ above or invoke memhub. The complete structural blast radius is:
   its workflow boundaries; no test changes production behavior.
 - The three core wrap-up templates add render after approved writes, retaining
   their before/after deferral record and approval/provenance gates. Claude/Codex
-  explicitly report that their queued summary is absent until its existing
-  flush point. OpenCode's verified CLI summary is already committed. PRD
+  before #145 explicitly reported the queued summary absent until its deadline
+  or shutdown flush. After #145 explicit session render flushes it first.
+  OpenCode's verified CLI summary is already committed. PRD
   §§5.2/11.1/11.2/11.3/11.4/12/16 record the same read/file/owner boundaries.
   Existing `.gitignore` already keeps default output and backups local; custom
   destinations need an operator-managed ignore rule. No dependency, durable
@@ -677,6 +882,9 @@ export GOFLAGS=-tags=gms_pure_go
     failures, then discards any still-failed in-memory rows because a closed
     session cannot retry them. This retry/discard rule binds the MCP `Toolset`
     accumulator alone, not every batch loop or direct-lane write.
+    Before #145 "failures" here included committed and unknown groups. After
+    #145 confirmed groups are removed and unknown groups are inspection-only;
+    only known uncommitted groups retry, as specified in the #145 record above.
   - `cmd/memdolt/serve.go` registers that toolset on the already-open owner and
     closes it after protocol serving but before IPC and the store. The issue
     #103 lifecycle ordering, schema gate and authenticated owner endpoint still

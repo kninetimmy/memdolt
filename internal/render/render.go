@@ -16,17 +16,30 @@ import (
 
 const Marker = "<!-- memdolt:rendered -->"
 
-// Result reports confirmed file effects even when a later step fails. Written
-// means both replacements completed, not that the pair was atomically replaced.
+// Result reports confirmed effects even when a later step fails. Before #145's
+// review correction it carried only file effects; the session wrapper now also
+// supplies note-ID to commit-hash mappings for this call's flush. Run itself
+// still writes no memory. Written means both replacements completed, not that
+// the pair was atomically replaced.
 type Result struct {
-	SourceCommit  string    `json:"sourceCommit"`
-	SchemaVersion int       `json:"schemaVersion"`
-	GeneratedAt   time.Time `json:"generatedAt"`
-	OutputDir     string    `json:"outputDir"`
-	WrittenFiles  []string  `json:"writtenFiles"`
-	BackupFiles   []string  `json:"backupFiles"`
-	Status        string    `json:"status"`
-	Error         string    `json:"error,omitempty"`
+	SourceCommit  string            `json:"sourceCommit"`
+	SchemaVersion int               `json:"schemaVersion"`
+	GeneratedAt   time.Time         `json:"generatedAt"`
+	OutputDir     string            `json:"outputDir"`
+	WrittenFiles  []string          `json:"writtenFiles"`
+	BackupFiles   []string          `json:"backupFiles"`
+	NoteCommits   map[string]string `json:"noteCommits,omitempty"`
+	Status        string            `json:"status"`
+	Error         string            `json:"error,omitempty"`
+}
+
+// NoteCommitError preserves this invocation's confirmed notes through later
+// rendering, close or output failures. An empty map makes no durability claim.
+func (r Result) NoteCommitError(err error) error {
+	if err != nil && len(r.NoteCommits) != 0 {
+		return fmt.Errorf("confirmed note commits %v; inspect `memdolt note list` and Dolt history before retrying: %w", r.NoteCommits, err)
+	}
+	return err
 }
 
 // Query is the existing owning-store read seam, not a second database opener.

@@ -66,20 +66,28 @@ func runServe(
 	if err := requireCurrentSchema(ctx, owner); err != nil {
 		return err
 	}
+	tools := mcpserver.RegisterTools(server, baseDir, owner)
+	// Install before publishing IPC so every reached render uses this queue.
+	// Close still runs before endpoint/store shutdown, including setup failure.
+	var endpoint *ipc.Server
+	defer func() {
+		err = errors.Join(err, tools.Close())
+		if endpoint != nil {
+			err = errors.Join(err, endpoint.Close())
+		}
+	}()
 	routes, err := storeipc.NewHandler(storeipc.Config{
 		Store:        owner,
 		ReviewAccept: owner.ReviewAcceptExpected,
+		Render:       tools.Render,
 	})
 	if err != nil {
 		return err
 	}
-	endpoint, err := ipc.Listen(ipc.Config{BaseDir: baseDir, Handler: routes})
+	endpoint, err = ipc.Listen(ipc.Config{BaseDir: baseDir, Handler: routes})
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, endpoint.Close()) }()
-	tools := mcpserver.RegisterTools(server, baseDir, owner)
-	defer func() { err = errors.Join(err, tools.Close()) }()
 	if pendingWork != nil {
 		defer func() { err = errors.Join(err, pendingWork.Close()) }()
 	}

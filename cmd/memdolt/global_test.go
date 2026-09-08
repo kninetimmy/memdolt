@@ -21,35 +21,46 @@ import (
 )
 
 func TestGlobalUnchangedDocumentReportsConfirmedConfigAfterLateFailure(t *testing.T) {
-	_, a := globalFixture(t)
-	file := filepath.Join(interopTempDir(t), "shared.md")
-	writeTestFile(t, file, "# Shared reference\n")
-	runMemdolt(t, "doc", "add", file, "--global", "--dir", a)
-	b := initStore(t)
-	runMemdolt(t, "global", "enable", "--dir", b)
-	global, err := localdolt.OpenGlobal(context.Background(), b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	late := errors.New("synthetic close after config flip")
-	st := &repoFaultStore{commandStore: &localCommandStore{Store: global, baseDir: b}, closeErr: late}
-	cmd := &cobra.Command{Use: "doc"}
-	cmd.Flags().Bool("global", true, "test global selection")
-	cmd.SetContext(context.Background())
-	out := &bytes.Buffer{}
-	cmd.SetOut(out)
-	jsonOutput = true
-	err = runDoc(cmd, st, "add", file, "", memory.UserActor)
-	if !errors.Is(err, late) || !strings.Contains(err.Error(), "configuration confirmed enabled") {
-		t.Fatalf("lost config-only progress: %v", err)
-	}
-	result := decodeJSON[localdolt.DocResult](t, out.String())
-	if result.Commit != "" || result.Status != "unchanged" || !result.EnabledDefaultRecall || result.Error == "" {
-		t.Fatal(result)
-	}
-	cfg, err := localdolt.ReadGlobalConfig(b)
-	if err != nil || !cfg.IncludeDocsInDefault {
-		t.Fatalf("reported config is not durable: %+v %v", cfg, err)
+	for _, failure := range []string{"close", "human output", "json output"} {
+		t.Run(failure, func(t *testing.T) {
+			_, a := globalFixture(t)
+			file := filepath.Join(interopTempDir(t), "shared.md")
+			writeTestFile(t, file, "# Shared reference\n")
+			runMemdolt(t, "doc", "add", file, "--global", "--dir", a)
+			b := initStore(t)
+			runMemdolt(t, "global", "enable", "--dir", b)
+			global, err := localdolt.OpenGlobal(context.Background(), b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			late := errors.New("synthetic failure after config flip")
+			st := &repoFaultStore{commandStore: &localCommandStore{Store: global, baseDir: b}}
+			cmd := &cobra.Command{Use: "doc"}
+			cmd.Flags().Bool("global", true, "test global selection")
+			cmd.SetContext(context.Background())
+			out := &bytes.Buffer{}
+			cmd.SetOut(out)
+			jsonOutput = failure != "human output"
+			if failure == "close" {
+				st.closeErr = late
+			} else {
+				cmd.SetOut(repoFailWriter{late})
+			}
+			err = runDoc(cmd, st, "add", file, "", memory.UserActor)
+			if !errors.Is(err, late) || !strings.Contains(err.Error(), "configuration confirmed enabled") || !st.closed {
+				t.Fatalf("lost config-only progress: %v", err)
+			}
+			if failure == "close" {
+				result := decodeJSON[localdolt.DocResult](t, out.String())
+				if result.Commit != "" || result.Status != "unchanged" || !result.EnabledDefaultRecall || result.Error == "" {
+					t.Fatal(result)
+				}
+			}
+			cfg, err := localdolt.ReadGlobalConfig(b)
+			if err != nil || !cfg.IncludeDocsInDefault {
+				t.Fatalf("reported config is not durable: %+v %v", cfg, err)
+			}
+		})
 	}
 }
 

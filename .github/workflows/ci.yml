@@ -99,3 +99,43 @@ jobs:
 
       - name: go test -race
         run: go test -race ./...
+
+  hub:
+    name: Test (hub ingress)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build disposable namespace test image
+        run: docker build -t memdolt-hub-test tests/hub
+
+      - name: Verify pinned native Dolt release before execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://github.com/dolthub/dolt/releases/download/v1.88.1/dolt-linux-amd64.tar.gz \
+            --output "$RUNNER_TEMP/dolt-linux-amd64.tar.gz"
+          # Published digest from the official release asset API, verified 2026-09-07:
+          # https://api.github.com/repos/dolthub/dolt/releases/tags/v1.88.1
+          printf '%s  %s\n' 26eccddbd0d7a0da6bc2a5bc6fd2adc2033a8c54d2b56d7204297a310321736e \
+            "$RUNNER_TEMP/dolt-linux-amd64.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/dolt-linux-amd64.tar.gz" -C "$RUNNER_TEMP"
+
+      - name: Build hub CLI
+        run: go build -o "$RUNNER_TEMP/hub-memdolt" ./cmd/memdolt
+
+      - name: Verify generated deployment and isolated private ingress
+        run: |
+          docker run --rm --privileged --network none \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/src,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/hub-memdolt,target=/inputs/memdolt,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/dolt-linux-amd64/bin/dolt,target=/inputs/dolt,readonly" \
+            memdolt-hub-test python3 /src/tests/hub/verify_linux.py \
+            --memdolt /inputs/memdolt --dolt /inputs/dolt --uid 1001

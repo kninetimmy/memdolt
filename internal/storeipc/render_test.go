@@ -38,6 +38,9 @@ func TestRenderOwnerLostReplyNeverReplaysReplacement(t *testing.T) {
 	if err == nil || result.Status != "unknown" || !strings.Contains(err.Error(), "inspect configured outputs") || !strings.Contains(err.Error(), "before retrying") || calls.Load() != 1 {
 		t.Fatalf("lost render reply=%+v, %v, calls=%d", result, err, calls.Load())
 	}
+	if !strings.Contains(err.Error(), "memdolt note list") || !strings.Contains(err.Error(), "Dolt history") || len(result.NoteCommits) != 0 {
+		t.Fatal("lost reply omitted possible note effects or claimed unobserved hashes")
+	}
 	for _, name := range []string{"PROJECT.md", "PROJECT_LEDGER.md"} {
 		raw, err := os.ReadFile(filepath.Join(base, ".memdolt", "rendered", name))
 		if err != nil || !strings.HasPrefix(string(raw), render.Marker) {

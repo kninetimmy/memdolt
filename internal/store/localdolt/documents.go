@@ -68,6 +68,10 @@ func (s *Store) DocAdd(ctx context.Context, opts DocAddOptions) (DocResult, erro
 }
 
 func (s *Store) docAdd(ctx context.Context, opts DocAddOptions, finalize func(*os.Root) (bool, error)) (result DocResult, err error) {
+	return s.docAddFinalize(ctx, opts, finalize, (*sql.Tx).Commit)
+}
+
+func (s *Store) docAddFinalize(ctx context.Context, opts DocAddOptions, finalize func(*os.Root) (bool, error), finalizeCommit func(*sql.Tx) error) (result DocResult, err error) {
 	if err := validateDocumentActor(opts.Actor); err != nil {
 		return result, err
 	}
@@ -176,19 +180,24 @@ func (s *Store) docAdd(ctx context.Context, opts DocAddOptions, finalize func(*o
 			Args: []any{chunk.ID, doc.ID, i, chunk.HeadingPath, chunk.Body},
 		})
 	}
-	commit, err := s.commitConn(ctx, conn, req)
+	configTable := "retrieval"
+	if s.globalRepo != nil {
+		configTable = "global"
+	}
+	commit, err := s.commitConnFinalize(ctx, conn, req, finalizeCommit)
+	if commit.Hash != "" {
+		result = DocResult{Status: status, Document: &doc, Chunks: chunks, Commit: commit.Hash}
+	}
 	if err != nil {
+		if commit.Hash != "" && (count == 0 || s.globalRepo != nil) {
+			err = fmt.Errorf("default-recall configuration was not finalized; inspect .memdolt/config.toml and set [%s] include_docs_in_default = true explicitly; do not replay ingestion to repair configuration: %w", configTable, err)
+		}
 		return result, fmt.Errorf("document commit failed; inspect `memdolt doc show %s` before retrying: %w", doc.ID, err)
 	}
-	result = DocResult{Status: status, Document: &doc, Chunks: chunks, Commit: commit.Hash}
 	if count == 0 || s.globalRepo != nil {
 		result.EnabledDefaultRecall, err = finalize(configRoot)
 		if err != nil {
-			table := "retrieval"
-			if s.globalRepo != nil {
-				table = "global"
-			}
-			return result, fmt.Errorf("document committed but default-recall configuration finalization failed; inspect .memdolt/config.toml and set [%s] include_docs_in_default = true explicitly; do not replay ingestion to repair configuration: %w", table, err)
+			return result, fmt.Errorf("document committed but default-recall configuration finalization failed; inspect .memdolt/config.toml and set [%s] include_docs_in_default = true explicitly; do not replay ingestion to repair configuration: %w", configTable, err)
 		}
 	}
 	return result, nil
@@ -238,6 +247,10 @@ func (s *Store) DocRemove(ctx context.Context, ident string, actor memory.Actor)
 	if err := s.globalWriteActor(actor); err != nil {
 		return result, err
 	}
+	return s.docRemove(ctx, ident, actor, (*sql.Tx).Commit)
+}
+
+func (s *Store) docRemove(ctx context.Context, ident string, actor memory.Actor, finalizeCommit func(*sql.Tx) error) (result DocResult, err error) {
 	if err := documentPathArgument(ident); err != nil {
 		return result, err
 	}
@@ -258,18 +271,21 @@ func (s *Store) DocRemove(ctx context.Context, ident string, actor memory.Actor)
 	if err := requireCleanWorkingSet(ctx, conn, "remove the document"); err != nil {
 		return result, err
 	}
-	commit, err := s.commitConn(ctx, conn, store.CommitRequest{
+	commit, err := s.commitConnFinalize(ctx, conn, store.CommitRequest{
 		Statements: []store.Statement{
 			{SQL: "DELETE FROM doc_chunks WHERE doc_id = ?", Args: []any{doc.ID}},
 			{SQL: "DELETE FROM documents WHERE id = ?", Args: []any{doc.ID}},
 		},
 		Text: []string{ident, doc.ID, actor.Name, actor.Raw}, RequireClean: true,
 		Message: "doc rm " + doc.ID, Author: actor.CommitAuthor(),
-	})
+	}, finalizeCommit)
+	if commit.Hash != "" {
+		result = DocResult{Status: "removed", Document: doc, Commit: commit.Hash}
+	}
 	if err != nil {
 		return result, fmt.Errorf("document removal failed; inspect `memdolt doc show %s` before retrying: %w", doc.ID, err)
 	}
-	return DocResult{Status: "removed", Document: doc, Commit: commit.Hash}, nil
+	return result, nil
 }
 
 func validateDocumentActor(actor memory.Actor) error {

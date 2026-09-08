@@ -212,7 +212,7 @@ func (s *Store) openEngine(ctx context.Context, dataDir string) error {
 //
 // A request that changes nothing fails: Dolt reports "nothing to commit"
 // rather than creating an empty commit.
-func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.CommitResult, error) {
+func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (result store.CommitResult, err error) {
 	// Before transfers, direct commits could interleave with proposal mutations.
 	// Share their boundary so a pull cannot replace a successful concurrent write
 	// and a review commit cannot sweep that write into another actor's commit.
@@ -227,7 +227,14 @@ func (s *Store) Commit(ctx context.Context, req store.CommitRequest) (store.Comm
 	if err != nil {
 		return store.CommitResult{}, fmt.Errorf("localdolt: acquire connection: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("localdolt: close commit connection: %w", closeErr))
+			if result.Hash != "" {
+				err = fmt.Errorf("localdolt: Dolt commit %s confirmed; inspect before retrying: %w", result.Hash, err)
+			}
+		}
+	}()
 
 	return s.commitConn(ctx, conn, req)
 }
@@ -278,9 +285,9 @@ func (s *Store) commitConnFinalize(ctx context.Context, conn *sql.Conn, req stor
 	result, err := commitTx(ctx, tx, req)
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			return store.CommitResult{}, errors.Join(err, fmt.Errorf("localdolt: rollback: %w", rollbackErr))
+			return result, errors.Join(err, fmt.Errorf("localdolt: rollback: %w", rollbackErr))
 		}
-		return store.CommitResult{}, err
+		return result, err
 	}
 
 	if err := finalize(tx); err != nil {
@@ -368,8 +375,19 @@ func commitTx(ctx context.Context, tx *sql.Tx, req store.CommitRequest) (store.C
 	row := tx.QueryRowContext(ctx,
 		"CALL DOLT_COMMIT('-A', '-m', ?, '--author', ?)",
 		req.Message, req.Author.String())
-	if err := row.Scan(&hash); err != nil {
-		return store.CommitResult{}, fmt.Errorf("localdolt: dolt commit: %w", err)
+	err := row.Scan(&hash)
+	return nativeCommitResult(hash, affected, err)
+}
+
+func nativeCommitResult(hash string, affected int64, err error) (store.CommitResult, error) {
+	if err != nil {
+		if hash != "" {
+			return store.CommitResult{Hash: hash, RowsAffected: affected}, fmt.Errorf("localdolt: Dolt commit %s confirmed but result finalization failed; inspect before retrying: %w", hash, err)
+		}
+		// Before #145 an unobserved native result looked like a refusal. The
+		// procedure may already have persisted; rolling back cannot prove it did
+		// not. Statement/validation failures above remain uncommitted failures.
+		return store.CommitResult{}, errors.Join(fmt.Errorf("localdolt: dolt commit: %w", err), store.ErrCommitUnknown)
 	}
 
 	return store.CommitResult{Hash: hash, RowsAffected: affected}, nil

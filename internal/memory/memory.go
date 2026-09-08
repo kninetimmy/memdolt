@@ -109,10 +109,16 @@ func (l *Lanes) write(ctx context.Context, message string, text []string, stmt s
 		Message:    message,
 		Author:     l.actor.CommitAuthor(),
 	})
-	if err != nil {
-		return "", err
+	return result.Hash, err
+}
+
+// ConfirmedWriteError retains a confirmed commit in later failure diagnostics.
+// An empty hash makes no durability claim; callers must inspect unknown replies.
+func ConfirmedWriteError(err error, commit, inspect string) error {
+	if err != nil && commit != "" {
+		return fmt.Errorf("commit %s confirmed; inspect %s before retrying: %w", commit, inspect, err)
 	}
-	return result.Hash, nil
+	return err
 }
 
 // maxSummary bounds the free text a commit message quotes.
@@ -193,10 +199,10 @@ func (l *Lanes) AddTask(ctx context.Context, title, notes string) (Task, string,
 			"VALUES (?, ?, ?, ?, ?, ?)",
 		Args: []any{task.ID, task.Title, task.Status, nullable(task.Notes), task.CreatedAt, task.UpdatedAt},
 	})
-	if err != nil {
-		return Task{}, "", fmt.Errorf("add task: %w", err)
+	if err != nil && hash == "" {
+		return Task{}, "", fmt.Errorf("add task %s: %w", task.ID, err)
 	}
-	return task, hash, nil
+	return task, hash, ConfirmedWriteError(err, hash, "`memdolt task list --status all` for task "+task.ID)
 }
 
 // CompleteTask marks a task done.
@@ -266,10 +272,10 @@ func (l *Lanes) setTaskStatus(ctx context.Context, id, status, notes string) (Ta
 	// leaves them alone declares them anyway, empty, because "there is
 	// nothing to scan here" is a claim the store makes a lane state.
 	hash, err := l.write(ctx, "task "+taskOperation(status)+" "+task.ID, []string{notes}, stmt)
-	if err != nil {
+	if err != nil && hash == "" {
 		return Task{}, "", fmt.Errorf("mark task %s %s: %w", task.ID, status, err)
 	}
-	return task, hash, nil
+	return task, hash, ConfirmedWriteError(err, hash, "`memdolt task list --status all` for task "+task.ID)
 }
 
 // taskOperation names the operation a status change is, for the commit
@@ -398,10 +404,10 @@ func (l *Lanes) LogNoteWithProvenance(ctx context.Context, body string, provenan
 	}
 	note.NoteProvenance = provenance
 	hash, err := l.write(ctx, "note add "+summarize(note.Text), noteText(note), noteStatement(note))
-	if err != nil {
-		return Note{}, "", fmt.Errorf("log session note: %w", err)
+	if err != nil && hash == "" {
+		return Note{}, "", fmt.Errorf("log session note %s: %w", note.ID, err)
 	}
-	return note, hash, nil
+	return note, hash, ConfirmedWriteError(err, hash, "`memdolt note list` and Dolt history for note "+note.ID)
 }
 
 // PrepareNote validates and mints a note without writing it. The MCP server
@@ -450,7 +456,12 @@ func (l *Lanes) CommitNotes(ctx context.Context, notes []Note) (string, error) {
 		Author:       l.actor.CommitAuthor(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("commit session-note batch: %w", err)
+		ids := make([]string, len(notes))
+		for i, note := range notes {
+			ids[i] = note.ID
+		}
+		return result.Hash, ConfirmedWriteError(fmt.Errorf("commit session-note batch (%s): %w", strings.Join(ids, ", "), err),
+			result.Hash, "`memdolt note list` and Dolt history")
 	}
 	return result.Hash, nil
 }
@@ -574,14 +585,17 @@ func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCod
 				command.SuccessCount, command.FailCount,
 			},
 		})
-	if err != nil {
+	if err != nil && hash == "" {
 		return Command{}, "", fmt.Errorf("record %s command: %w", kind, err)
 	}
-	persisted, err := l.Command(ctx, kind)
-	if err != nil {
-		return Command{}, "", fmt.Errorf("read back %s command after commit %s: %w", kind, hash, err)
+	persisted, readErr := l.Command(ctx, kind)
+	if readErr != nil {
+		// Only the identity is certain if read-back fails; the upsert's counter
+		// increments above are not the persisted totals.
+		persisted = Command{Kind: kind}
+		err = errors.Join(err, fmt.Errorf("read back %s command: %w", kind, readErr))
 	}
-	return persisted, hash, nil
+	return persisted, hash, ConfirmedWriteError(err, hash, "`memdolt command get "+kind+"` and Dolt history")
 }
 
 // Command returns the recorded command of one kind.
@@ -685,10 +699,10 @@ func (l *Lanes) SetNarrative(ctx context.Context, kind NarrativeKind, body strin
 			"VALUES (?, ?, ?, ?, ?)",
 		Args: []any{narrative.ID, narrative.Body, narrative.Actor, narrative.ActorRaw, narrative.CreatedAt},
 	})
-	if err != nil {
+	if err != nil && hash == "" {
 		return Narrative{}, "", fmt.Errorf("set the %s narrative: %w", kind, err)
 	}
-	return narrative, hash, nil
+	return narrative, hash, ConfirmedWriteError(err, hash, "`memdolt "+string(kind)+" show` and Dolt history for narrative "+narrative.ID)
 }
 
 // Narrative returns the current body of one narrative: the newest row of

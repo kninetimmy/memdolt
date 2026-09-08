@@ -321,7 +321,7 @@ func TestSessionNoteDeadlineFlushesAndDenyListRefusesVisibly(t *testing.T) {
 			tools.timer.Stop()
 			tools.timer = nil
 		}
-		tools.flushErr = tools.flushLocked(context.Background())
+		_, tools.flushErr = tools.flushLocked(context.Background())
 		flushErr := tools.flushErr
 		pending := append([]noteGroup(nil), tools.groups...)
 		tools.mu.Unlock()

@@ -29,7 +29,9 @@ func newDocCommand() *cobra.Command {
 			"UTF-8 files are documents with zero chunks. Dirty working sets refuse writes.\n\n" +
 			"The first ingestion into an empty documents table visibly enables\n" +
 			"[retrieval] include_docs_in_default. Later re-adds preserve user opt-outs.\n" +
-			"A config failure after commit reports the document and a manual remedy.\n" +
+			"A late commit, config, close or output failure retains the confirmed document\n" +
+			"id and commit hash with an inspection remedy. Lost results mean outcome\n" +
+			"unknown, not rollback. Never replay ingestion to repair configuration.\n" +
 			"Run index status/rebuild after changed chunks; derived vectors stay local.\n\n" +
 			"CLI source paths are explicitly selected, relative to the caller's working\n" +
 			"directory, and may be outside the repo. MCP doc_add instead confines files\n" +

@@ -101,6 +101,15 @@ Repository document first-ingestion/opt-out behavior remains unchanged. A late
 configuration error preserves confirmed document progress and names the manual
 `[global] include_docs_in_default` repair; inspect before retrying.
 
+Before integration with issue #145, the global branch could still discard a
+native document result on a late transaction error. After integration, observed
+native hashes and document/chunk identities survive add/remove finalization
+errors and cancellation. Add leaves config unfinalized and names the calling
+repository's `[global]` repair even when the shared table was already populated.
+An unobserved native result retains the unknown-outcome marker: inspect rows
+and history, without replay or an inferred rollback. The result policy is the
+shared document/native seam, not a new global transaction implementation.
+
 ## Recall, ownership and recovery
 
 Both CLI and MCP use the same application boundary. Enabled recall captures one

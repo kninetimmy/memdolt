@@ -50,6 +50,8 @@ func newOpenCodeWrapUpNoteCommand() *cobra.Command {
 		Long: "Verify the supplied OpenCode session id against its API before opening the store,\n" +
 			"then record one note with exact Session.Info provenance. With no text argument,\n" +
 			"the note is read from standard input.\n\n" +
+			"A late error retains the confirmed note id and commit hash. Inspect note list\n" +
+			"and Dolt history before retrying; a lost owner reply has an unknown outcome.\n\n" +
 			"Workflows must obtain the current ID from OpenCode host context, never discover\n" +
 			"or guess another session. The CLI verifies the supplied ID against the API;\n" +
 			"it cannot authenticate the origin of that ID.",
@@ -62,11 +64,8 @@ func newOpenCodeWrapUpNoteCommand() *cobra.Command {
 			note, err := logOpenCodeWrapUpNote(
 				cmd.Context(), flags.dir, args[0], body, opencodehost.VerifySession,
 			)
-			if err != nil {
-				return err
-			}
-			return emit(cmd, note,
-				[]string{fmt.Sprintf("noted %s as %s (commit %s)", note.ID, note.Actor, note.Commit)})
+			return emitLaneWrite(cmd, note, note.Commit, "`memdolt note list` and Dolt history for note "+note.ID,
+				[]string{fmt.Sprintf("noted %s as %s (commit %s)", note.ID, note.Actor, note.Commit)}, err)
 		},
 	}
 	return flags.bind(cmd)
@@ -88,7 +87,11 @@ func logOpenCodeWrapUpNote(
 	if err != nil {
 		return noteInfo{}, err
 	}
-	defer func() { err = errors.Join(err, st.Close()) }()
+	defer func() {
+		err = memory.ConfirmedWriteError(errors.Join(err, st.Close()), result.Commit,
+			"`memdolt note list` and Dolt history for note "+result.ID)
+		result.Error = laneError(err)
+	}()
 	if err := requireCurrentSchema(ctx, st); err != nil {
 		return noteInfo{}, err
 	}
@@ -100,8 +103,5 @@ func logOpenCodeWrapUpNote(
 		ModelID:    info.ModelID,
 		Variant:    info.Variant,
 	})
-	if err != nil {
-		return noteInfo{}, err
-	}
-	return noteInfo{Note: note, Commit: commit}, nil
+	return noteInfo{Note: note, Commit: commit}, err
 }

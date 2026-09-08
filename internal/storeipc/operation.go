@@ -140,6 +140,7 @@ type recordCommandArgs struct {
 type recordCommandResult struct {
 	Command memory.Command `json:"command"`
 	Commit  string         `json:"commit"`
+	Error   string         `json:"error,omitempty"`
 }
 
 type proposeFactArgs struct {
@@ -310,7 +311,7 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 		// A complete render executes once in the owner. Its typed result also
 		// preserves backups and partial replacements when preparation/finalization
 		// fails; no destination or query is accepted from the IPC client.
-		rendered, renderErr := h.store.Render(ctx)
+		rendered, renderErr := h.render(ctx)
 		if renderErr != nil {
 			rendered.Error = renderErr.Error()
 		}
@@ -397,7 +398,13 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 		}
 		command, commit, recordErr := memory.New(h.store, args.Actor).RecordCommand(
 			ctx, args.Kind, args.Cmdline, args.ExitCode)
-		result, err = recordCommandResult{Command: command, Commit: commit}, recordErr
+		wire := recordCommandResult{Command: command, Commit: commit}
+		if recordErr != nil && commit != "" {
+			wire.Error = recordErr.Error()
+		} else {
+			err = recordErr
+		}
+		result = wire
 	case opProposeFact:
 		args, decodeErr := operationArgs[proposeFactArgs](req.Args)
 		if decodeErr != nil {

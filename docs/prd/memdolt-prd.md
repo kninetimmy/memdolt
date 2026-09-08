@@ -83,6 +83,69 @@ Each project's memory is a Dolt database. The commit graph is the write-ahead lo
 - Commit metadata is load-bearing: author = normalized actor (`agent:claude-code`, `agent:codex`, `user`), message = structured one-liner (`propose fact msrv=1.24`, `note batch (3)`, `review accept #42`). `dolt_log` + `dolt_blame` then answer provenance queries with zero app code. **[V]** (system tables exist as documented.)
 - Agents never `ALTER TABLE`. Schema changes ship only in migrations run by the binary on `main` (§6.4). This keeps Dolt schema-conflict machinery **[V]** out of the daily path entirely.
 
+**Confirmed outcomes (issue #145).** Before this delivery, the #104 accumulator
+above retained every failed group for retry, while #139's native hash correction
+had not reached the older direct-lane/document/raw-owner consumers. After it,
+task add/done/block, notes/batches, command recording, narratives and document
+add/remove retain confirmed identity/hash with late native, read-back, config,
+close or output errors. A nonempty hash confirms durability; an unobserved native
+result or owner reply means unknown outcome, not rollback. Inspect the named row
+and Dolt history before any retry. Successful output fields remain compatible;
+CLI JSON adds an optional error. Failed command read-back returns only the certain
+kind plus hash/error; zero-value command totals in that failed result are unknown.
+Pre-commit validation, deny/config, clean-guard and statement refusals claim no
+durable effect and preserve their prior boundaries.
+
+`Toolset.flushLocked` attempts every actor group. It removes confirmed groups
+immediately even with a late error and reports confirmed hashes if any group
+fails. Only known uncommitted groups retain the orderly-shutdown retry; explicit
+render may also retry them. Unknown groups remain inspection-only and are never
+submitted again at timer, render or close; end that session and inspect the named
+notes before starting a fresh one. Unknown groups prevent session publication.
+New notes still refuse after a flush error. Timer failures are shown by the next
+render and retained for shutdown; errors from an explicit render are returned
+there and also retained for shutdown. A later render may succeed once eligible
+groups commit, without repeating any already-confirmed group. `Close` retains
+earlier/final failures, makes its existing bounded final attempt on eligible
+groups and discards every remaining group, including unknown groups. The existing
+five-minute timer, one-minute flush/close limit and crash-loss boundary remain.
+These rules bind Toolset's process-local accumulator alone, not all note writers.
+
+`Toolset.Render` holds the queue mutex through flush and the committed-main
+snapshot/file operation. A flush error produces `notes-failed` without publishing
+files, preserving committed effects and the remaining groups. Stale timer callbacks
+cannot consume a new timer or replay a flushed group. The production `runServe`
+owner installs this same render callback on authenticated IPC before listening;
+MCP render and live-owner CLI render therefore flush the same queue. Standalone
+`Store.Render` has no session queue and retains its existing read/file behavior.
+Proposal exclusion, per-file publication, actor attribution, deny-list checks,
+clean-working-set guards, serialization and global exclusion remain unchanged.
+No new batching service, schema, dependency or full M5/M6 claim is introduced.
+
+Before #145's review-cycle correction, successful flushes discarded their note
+IDs/hashes before calling Store.Render. A later config/snapshot/file error could
+report only file effects although notes committed. After the correction, the
+existing flush loop returns those effects and Toolset.Render retains them in
+optional `render.Result.NoteCommits` (`noteCommits`: note ID to commit hash).
+The map describes this invocation's confirmed flush only; it is independent of
+SourceCommit, which stays empty if snapshot capture fails. `NoteCommitError`
+adds note/history inspection evidence through later render, CLI close and output
+failures. Existing MCP/owner result envelopes carry the map without resubmission;
+a lost reply names possible note effects but claims no identities or hashes.
+Timer/shutdown errors reuse the same formatter. Queue policy, pure Store.Render,
+per-file publication and every prior guard remain unchanged. The AGENTS #145
+record inventories the reached methods, workflow updates and real-store tests.
+
+The complete symbol/file consumer inventory is in AGENTS.md's #145 record:
+`Store.Commit`/`commitConnFinalize`/`commitTx`/`nativeCommitResult`, every direct
+`Lanes.write` and `CommitNotes` caller, document mutations, existing human/interop/
+proposal/migration consumers, raw and typed owner handlers/clients, CLI direct/
+OpenCode/document/render paths, Toolset handlers/queue/render and `runServe`,
+soak result classifiers, matching tests and host workflows. In particular,
+ordinary failed staging retains its earlier residue/cleanup rules; a populated
+late hash does not authorize branch deletion. Migration/tag recovery still needs
+inspection and `memdolt init` rather than a claim that a late commit rolled back.
+
 Before issue #139, those direct lanes and reviewed proposals were the shipped
 writers; ordinary trusted human fact/decision commands remained deferred. After
 it, the repository CLI in §11.2 also lets humans assert, verify, edit summaries
@@ -195,6 +258,9 @@ same method once; authenticated IPC carries the operation and confirmed
 result-plus-error, with no caller-selected destination. Unknown replies require
 inspection before retry. Its committed-read and file boundaries are detailed
 in §11.2; the existing query and owner contracts above remain unchanged.
+Before #145 these entry points had no note flush. After it, `runServe` supplies
+the optional session render callback to the existing owner operation, while
+owners without a queue default to Store.Render. Submission remains single-shot.
 
 Review acceptance crosses that typed route as the complete application gate,
 not as a raw storage merge. The first version of this routing pass called the
@@ -910,6 +976,18 @@ changed structure. Isolated real replicas/local remote, CLI/owner/MCP, mixed
 model retrieval and the unchanged golden gates support this delivery; physical
 two-machine hub acceptance and full parity remain separately tracked.
 
+Before the #145/#147 integration, the #146 branch still had the older document
+native-result handling. After integration, global DocAdd/DocRemove retain #145's
+observed commit/identity results on finalization errors and cancellation, while
+unobserved results retain ErrCommitUnknown. Global add does not attempt config
+finalization after a native error; a confirmed result names the calling repo's
+`[global]` repair even if another repository populated the table earlier. The
+independent config-only flip for unchanged global docs remains. Real native
+tests distinguish observed and unobserved hashes and verify reopened rows/history
+without replay. These rules bind the shared document/native seams already named
+in #145, not all SQL errors. Session-render NoteCommits, note-group lifecycle,
+owner result envelopes and #147's hub/CI behavior remain unchanged.
+
 ---
 
 ## 11. Surfaces
@@ -984,8 +1062,9 @@ It preserves structured written-file/backup evidence on tool errors and never
 replays file replacement after a lost response. Modern/legacy attribution,
 static `tools/list` cache hints and every prior handler remain unchanged.
 This registration rule binds `RegisterTools`, not arbitrary SDK servers.
-Render includes only committed notes; it does not flush the accumulator or
-change its five-minute/orderly-shutdown behavior. No other deferred tool is
+Before #145 render included only already-committed notes and did not flush the
+accumulator. After #145 its session wrapper flushes first under §3.1's result,
+retry and inspection rules; standalone Store.Render is unchanged. No other deferred tool is
 introduced by this render delivery, and it does not complete M5.
 
 **Elicited-review handoff (2026-08-30, issue #106).** Before this delivery,
@@ -1237,6 +1316,16 @@ locate/eval-locate templates and two OpenCode command entries are additive.
 
 Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
 
+**Linux hub surfaces (issue #147).** Before this slice, the `hub init|status`
+mapping above was planned. After it, `hub init --output <absolute-local-dir>`
+generates a nonsecret bundle using explicit Linux installation/network options;
+`hub status --config <absolute-hub.json>` reports observed deployment health.
+`hub preflight` and `hub ready` are the generated systemd startup checks. All
+support `--json`; none initializes a local store or implicitly installs a hub.
+The [deployment runbook](../hub-deployment.md) specifies native 1.88.1, credential
+setup, applied nftables enforcement, preservation, supported platforms and the
+complete structural blast radius. Existing CLI/MCP/transfer behavior stays.
+
 **Trusted human repository facts/decisions (issue #139).** Before this slice,
 §12's CRUD port and M5 deferral still included the ordinary human commands.
 After it, these commands ship with `--dir` and `--json` on an initialized
@@ -1317,8 +1406,10 @@ and its comment claimed all failures rolled back. The pinned DOLT_COMMIT
 procedure persists before database/sql finalization. After this fix, that
 helper retains the real hash with a finalization error naming it; earlier
 failures still invoke rollback. The new human seam preserves the structured result.
-Older lane/document/raw owner wrappers still discard structured results on
-error, and note-batch retry bookkeeping remains follow-up work. Staging keeps
+Before #145 older lane/document/raw owner wrappers still discarded structured
+results on error, and note-batch retry bookkeeping remained follow-up work.
+After #145 those consumers retain confirmed effects and distinguish unknown
+outcomes under §3.1. Staging keeps
 its prior late-error expected-head refusal and inspectable proposal residue;
 it does not gain automatic deletion from the newly available hash.
 
@@ -2084,6 +2175,10 @@ and the current working set, refs and history remain unchanged. This boundary
 binds `Store.Render`, not every store read or generated-text helper.
 Issue #131 subsequently adds repository status to the same mutex without
 changing render's snapshot/file ordering or preservation behavior.
+Before #145 this described the complete session render too. After it,
+Toolset.Render first commits eligible pending notes under its separate queue
+mutex, then calls this unchanged Store.Render. Failed flushing publishes no
+files. Both the MCP tool and `runServe`'s authenticated CLI route use that wrapper.
 
 `internal/render.writeFiles` uses directory handles, refuses symlink/reparse
 traversal and unmarked same-name user files, and prepares both complete sibling
@@ -2240,9 +2335,11 @@ it when writing the approved summary; a failure stops later steps. Facts and
 decisions remain proposals for human review. Before issue #133, no template
 added render, sync, transcript capture, wrapper installation, or the other
 deferred backends. After it, the three wrap-up templates add only render after
-approved writes and report its committed source and file effects. Claude/Codex
-notes remain queued until their existing deadline/shutdown flush, so that
-summary is absent from a render made before the flush; render never forces it.
+approved writes and report its committed source and file effects. Before #145,
+Claude/Codex notes remained queued until their deadline/shutdown flush, so the
+summary was absent from earlier renders. After #145 step 6 flushes that owner's
+pending notes through either MCP or authenticated CLI before the snapshot;
+flush errors stop publication and confirmed/unknown outcomes require inspection.
 OpenCode's verified CLI summary is already committed. Their review, approval
 and identity pre-flight gates remain unchanged; a partial/unknown render stops
 the workflow for inspection before retry. Other deferred operations remain
@@ -2308,6 +2405,9 @@ excluded. This does not complete the remaining parity matrix.
 
 ### 13.1 The hub is one process
 
+**Before issue #147**, the design used the following SQL-bind-only example and
+tailnet-perimeter description. Preserve them as the historical before-state:
+
 `dolt sql-server` with `remotesapi` enabled **[V]**:
 
 ```yaml
@@ -2321,6 +2421,66 @@ data_dir: /mnt/ssd/memdolt-hub
 - Auth = SQL users/grants (`clone_admin` read; push requires elevated grants **[V]**; DoltHub itself calls this auth weak **[V]**) → **the tailnet is the perimeter** (r2 §6.2-6.3 posture: bind tailnet IP, systemd system unit under a dedicated user, `After=tailscaled`, bind-retry for the boot race). Non-Tailscale self-hosters: private network or SSH tunnel; never expose remotesapi publicly. **[design]**
 - Hardware: Pi 5 (8GB) comfortably exceeds Dolt's 2GB production minimum **[V]**; the hub does no inference (§4.1), so r2's Q3 concern does not exist here. Linux desktop per r2 §13.5 checklist (mask suspend, system unit, tailscaled at boot) equally fine. ARM64 Linux release binaries: **[L]** — confirm the asset on github.com/dolthub/dolt/releases during M0. `dolt version` pin: hub and clients within a documented compatible range; `doctor` checks skew.
 - SSD-primary storage recommended (r2 D8 carried over, downgraded from requirement to recommendation): live databases on USB SSD for endurance and random-write performance under commit churn. This is a documented recommendation, not a requirement — memdolt must not refuse to run without an SSD.
+
+**After issue #147**, native Dolt 1.88.1's remotesapi is explicitly accounted for:
+it binds `:port` independently of SQL `listener.host`. The example above does
+not enforce private remotes ingress. The measured managed-startup baseline is
+exactly **1.88.1**, not the historical ≥1.30 capability statement or an unmeasured
+compatibility range. Remotes wire-format metadata is not a Dolt release version.
+This delivery adds no skew guard to existing clone/push/pull clients or doctor.
+
+`hub init` generates exact nonsecret YAML, a dedicated-user native systemd unit,
+a separate privileged boundary unit, an nftables file and setup instructions.
+The generated deployment requires Linux/systemd/nftables and both configured
+private address families on its chosen interface. The boundary atomically creates
+only its own `inet memdolt_hub` input table; it refuses an existing table and
+never flushes the ruleset or unrelated traffic. The four rules permit loopback
+or the selected private interface/source prefix/destination on both configured
+TCP ports, then drop remaining traffic to those ports on both IP families.
+Other chains can deny more; accepts elsewhere cannot override the drop.
+
+Every generated server start checks trusted exact artifact bytes and the applied
+nftables table, refusing missing/unreadable/malformed/unapplied/dormant/weakened
+protection. The root check runs no Dolt command; native version, private privilege
+file existence and bounded address readiness run as the unprivileged service
+account before one native server. `ready` verifies the effective nonroot UID/GID
+against the configured account/group, including refusal of root-ID aliases;
+status and privileged preflight retain their distinct identities.
+Explicit absolute paths/names/addresses are
+validated before interpolation; no shell or password argument is used. The
+unit orders/binds after the boundary and selected private-network service and
+uses bounded visible failures/retries. No implicit install/firewall/account or
+database mutation occurs from the hub CLI. Native event flushing is disabled in
+generated server/probe environments. Ordinary data schema/history stays intact.
+The native version probe uses a temporary home/cwd and native metrics/update-check
+disable settings, retaining strict parsing without contacting GitHub or changing
+the operator's configuration; cleanup failures are visible. Nft probes retain
+their read-only applied-table behavior without temporary configuration.
+
+Only applied protection passes full preflight; `--files-only` validates artifacts
+before application and is not a server startup authorization. Stop leaves the
+table applied. The guard is a startup snapshot, not a monitor: a later root
+firewall writer can change protection, and the final check/start interval is not
+atomic against root. Do not enable a distribution nftables.service that flushes
+the machine ruleset; preserve this table in other firewall reloads and stop Dolt
+before changing it. Direct native server invocations do not inherit the guard.
+
+`hub status` reports observed release/configuration/private-interface/applied
+boundary and local TCP listener checks with failures/unknowns; it cannot prove
+process identity, credential correctness or physical off-network denial.
+Non-Linux live inspection/startup is explicitly unsupported. Native credentials
+are bootstrapped through loopback-only native SQL and prompted/environment flows,
+then persisted privately outside artifacts: CLONE_ADMIN is global remote-read
+authority and SUPER is broad remote-write authority, not database-scoped isolation.
+
+The [hub runbook](../hub-deployment.md) records the complete artifact/symbol/file/
+CLI/test/CI structural blast radius, output preservation and private path checks,
+native SQL/grant commands and exact enforcement limits. Existing local stores,
+owner routing, all MCP tools, transfer/merge/auth and code-index behavior remain;
+no Go dependency, durable schema change or inference is added. Topology/project
+identity, backup/retention, physical hub deployment and two-client/off-network
+acceptance remain separately tracked. The earlier physical/ARM64 evidence is not
+expanded by this isolated Linux-amd64 gate.
 
 ### 13.2 Backups (r2 §12, mostly dissolved, residue kept)
 
@@ -2510,6 +2670,17 @@ checks; actual Claude recall, proposals, task operations, and human elicitation
 remain unverified. This replaces M3's acceptance evidence only; the phased tool
 surface in §11.1 is unchanged. At that gate replacement, M4–M6 remained deferred.
 
+**M4 Linux hub subset (issue #147):** the historical subset records below left
+hub setup, authentication instructions and measured startup compatibility pending.
+After this slice, §13.1's reviewable artifacts, fail-closed private startup checks
+and hub status ship. The new Linux CI lane verifies generated unit grammar and
+actual ordered startup arguments with a checksum-verified native 1.88.1 in a
+disposable container/network namespaces, including real dual-stack allowed/denied
+traffic, preservation and refusal cases. It does not install under PID 1 or touch
+the runner-host firewall. Ordinary/golden gates retain their existing contexts.
+The physical two-client round trip/off-network acceptance, topology/project
+identity, backups/retention and other M4–M6 requirements remain separate.
+
 **M4 first subset (issue #123):** local-only `repo status` now ships as described
 in §11.2. Remotes configuration, remote status/diff, pull/push, conflict
 elicitation, hub init/systemd documentation, authentication setup, hub/client
@@ -2573,6 +2744,8 @@ the full M5 acceptance gate or change M6.
 ---
 
 **M5 render subset (issue #133):** the earlier records left all M5 deferred.
+Issue #145 subsequently preserves direct-lane late results and adds session-note
+flush before explicit rendering (§3.1); it does not complete M5 or M6.
 After this delivery, committed-memory rendering through CLI and MCP ships
 within §§11.1–11.3's read/file/owner boundaries, with the three core workflow
 templates updated. Synthetic direct, authenticated-owner and modern/legacy
