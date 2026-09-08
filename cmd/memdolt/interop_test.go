@@ -185,6 +185,133 @@ func TestInteropCLILegacyAndFailuresEmitOneResult(t *testing.T) {
 	}
 }
 
+func TestInteropCLITaggedMemhubSchemas(t *testing.T) {
+	raw, err := os.ReadFile(repoFile("internal", "store", "localdolt", "testdata", "memhub-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, schema := range []string{"0023_session_transcripts", "0024_session_note_provenance"} {
+		for _, owner := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/owner=%t", schema, owner), func(t *testing.T) {
+				source := decodeJSON[map[string]any](t, string(raw))
+				if source["source_schema_version"] != "0024_session_note_provenance" {
+					t.Fatal("fixture must reproduce the tagged exporter header; see testdata/README.md")
+				}
+				data := raw
+				if schema == "0023_session_transcripts" {
+					source["source_schema_version"], source["exported_by"] = schema, "memhub 0.2.0"
+					for _, note := range source["session_notes"].([]any) {
+						for _, column := range []string{"session_id", "agent_id", "provider_id", "model_id", "variant"} {
+							delete(note.(map[string]any), column)
+						}
+					}
+					data, err = json.Marshal(source)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				file := filepath.Join(interopTempDir(t), "legacy.json")
+				writeTestFile(t, file, string(data))
+				target := initStore(t)
+				var stop func()
+				if owner {
+					stop = serveTransferProcess(t, target)
+				}
+				out, err := interopProcess(t, "import", "--from-memhub", file, "--dir", target, "--json")
+				if err != nil {
+					t.Fatalf("tagged import: %s, %v", out, err)
+				}
+				imported := decodeJSON[localdolt.InteropResult](t, out)
+				if imported.Status != "imported" || imported.MainCommit == "" || len(imported.IdentityMap) != 17 || len(imported.CreatedProposals) != 2 || len(imported.RemainingProposals) != 0 {
+					t.Fatalf("tagged import result=%+v", imported)
+				}
+				// Import and export must own the store in distinct processes, even
+				// through IPC, so Dolt's warmed node cache cannot mask lost payloads.
+				if owner {
+					stop()
+					defer serveTransferProcess(t, target)()
+				}
+				before := interopRepoSnapshot(t, target)
+				native := filepath.Join(interopTempDir(t), "native.json")
+				out, err = interopProcess(t, "export", native, "--dir", target, "--json")
+				if err != nil {
+					t.Fatalf("reopened native export: %s, %v", out, err)
+				}
+				exported := decodeJSON[localdolt.InteropResult](t, out)
+				if !exported.Written || exported.SourceCommit != imported.MainCommit {
+					t.Fatalf("native export result=%+v", exported)
+				}
+				contents, err := os.ReadFile(native)
+				if err != nil {
+					t.Fatal(err)
+				}
+				bundle := decodeJSON[localdolt.InteropBundle](t, string(contents))
+				if bundle.MainCommit != imported.MainCommit || len(bundle.Proposals) != 2 || len(bundle.Tables["proposals"]) != 0 || len(bundle.Tables["facts"]) != 2 || len(bundle.Tables["decisions"]) != 2 {
+					t.Fatal("export lost the import commit or promoted pending memory")
+				}
+				rows := map[string]localdolt.InteropRow{}
+				for table, group := range bundle.Tables {
+					key := "id"
+					if table == "commands" {
+						key = "kind"
+					}
+					for _, row := range group {
+						rows[table+":"+*row[key]] = row
+					}
+				}
+				for i, proposal := range bundle.Proposals {
+					created := imported.CreatedProposals[i]
+					if proposal.ID != created.ID || proposal.Head != created.Commit || proposal.Parent != imported.MainCommit || len(proposal.Changes) != 1 || proposal.Changes[0].From != nil {
+						t.Fatal("export changed pending identity, ancestry or insert shape")
+					}
+					rows["pending_writes:"+proposal.ID] = proposal.Metadata
+					change := proposal.Changes[0]
+					rows[change.Table+":"+*change.To["id"]] = change.To
+				}
+				mapped := map[string]localdolt.InteropRow{}
+				for _, identity := range imported.IdentityMap {
+					row := rows[identity.Table+":"+identity.Value]
+					if row == nil || row[identity.Key] == nil || *row[identity.Key] != identity.Value {
+						t.Fatalf("lost row mapping: %+v", identity)
+					}
+					mapped[identity.Table+":"+identity.SourceID] = row
+				}
+				if len(rows) != 17 || len(mapped) != 17 || *mapped["commands:41"]["kind"] != "build" || *mapped["facts:11"]["superseded_by"] != *mapped["facts:12"]["id"] || *mapped["decisions:21"]["superseded_by"] != *mapped["decisions:22"]["id"] {
+					t.Fatal("lost command key, row identity or supersession mapping")
+				}
+				for _, note := range source["session_notes"].([]any) {
+					original := note.(map[string]any)
+					row := mapped[fmt.Sprintf("session_notes:%.0f", original["id"])]
+					for _, column := range []string{"text", "actor", "actor_raw", "session_id", "agent_id", "provider_id", "model_id", "variant"} {
+						var value any
+						if row[column] != nil {
+							value = *row[column]
+						}
+						if value != original[column] {
+							t.Fatalf("changed note %v column %s: %v != %v", original["id"], column, value, original[column])
+						}
+					}
+				}
+				genesis := *mapped["session_notes:import/genesis"]["text"]
+				if !strings.Contains(genesis, fmt.Sprintf(`"source_schema_version": %q`, schema)) || !strings.Contains(genesis, imported.SourceDigest) || strings.Contains(genesis, "synthetic-old-host") {
+					t.Fatal("genesis lost the declared schema/digest or imported the host root")
+				}
+				fact, decision := mapped["facts:pending_writes:81"], mapped["decisions:pending_writes:82"]
+				if *fact["key"] != "convention.pending" || *fact["value"] != "Pending fact remains unaccepted" || *fact["kind"] != "convention" || fact["verified_at"] != nil || fact["superseded_by"] != nil ||
+					*decision["title"] != "Pending decision remains unaccepted" || *decision["rationale"] != "Original proposed decision reasoning." || *decision["status"] != "active" || decision["summary"] != nil || decision["superseded_by"] != nil {
+					t.Fatal("pending payload or exact NULLs changed")
+				}
+				if interopRepoSnapshot(t, target) != before {
+					t.Fatal("native export changed destination memory or refs")
+				}
+				if after, err := os.ReadFile(file); err != nil || !bytes.Equal(after, data) {
+					t.Fatal("import/export modified the legacy source file")
+				}
+			})
+		}
+	}
+}
+
 func TestInteropCLIReexportPendingDecision(t *testing.T) {
 	for _, tc := range []struct{ owner, pending bool }{{false, true}, {true, true}, {false, false}, {true, false}} {
 		t.Run(fmt.Sprintf("owner=%t/pending=%t", tc.owner, tc.pending), func(t *testing.T) {

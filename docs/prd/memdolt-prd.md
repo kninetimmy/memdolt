@@ -2797,6 +2797,28 @@ members/identities, dangling/cyclic links, ambiguous live keys under the
 destination collation and unrepresentable timestamps/widths refuse before
 writes. Opaque source provenance never supplies import or review authority.
 
+Before #159, the "declared source schemas 1-24 are supported" claim above
+described numeric-string acceptance only. Tagged memhub exporters copy the
+stored migration identifier verbatim, so otherwise supported exports naming
+`0023_session_transcripts` (v0.2.0) or `0024_session_note_provenance` (v0.2.2)
+refused; the synthetic fixture's `"24"` masked that mismatch. After #159,
+`supportedMemhubSchema` admits the exact 24 names in those tagged migration
+lists as well as the existing numeric strings in 1-24, including leading zeroes
+and optional `+`. `memhub_export_version` remains integer 1; source schema
+remains a JSON string. Unknown/malformed names and newer versions refuse before
+memory/ref changes. The original declared string survives in the genesis note.
+This check binds `decodeMemhubExport` and the legacy `Store.ImportMemory` path,
+including authenticated-owner execution, not native headers or every Store write.
+All other import guards remain; the [migration guide](../migration.md#tagged-source-schema-headers-issue-159)
+records the complete touched-element inventory and tagged fixture provenance.
+Fresh-process synthetic tests import/reopen/export both headers through both
+routes with mappings, nullable note provenance and pending payloads intact.
+The unchanged real export clears this header check through direct and verified
+owner execution but still refuses duplicate command kinds without changing
+source or destination. Explicit source command reconciliation remains required;
+successful real migration, adoption and soak are not claimed. Frozen retrieval
+golden files and assertions remain unchanged.
+
 Two actual model differences need explicit disposition. memhub commands are
 identified by `(kind, cmdline)`, while §6.1 permits one current command per
 kind. Legacy pending supersede names existing fact/decision `old`/`new`

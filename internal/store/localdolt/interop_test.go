@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -166,15 +167,78 @@ func TestInteropLegacyAndNativeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInteropLegacySchemaIdentifiers(t *testing.T) {
+	var source memhubExport
+	if err := json.Unmarshal(legacyInteropFixture(t), &source); err != nil {
+		t.Fatal(err)
+	}
+	// Independent expected names from the two tagged migration lists cited in
+	// testdata/README.md, not the production allowlist or a prefix parser.
+	schemas := []string{
+		"0001_initial", "0002_git_search", "0003_pending_writes",
+		"0004_pending_write_provenance", "0005_pending_write_reviewed_at",
+		"0006_session_notes", "0007_project_narrative", "0008_decisions_source",
+		"0009_retrieval_indexes", "0010_embeddings_delete_triggers",
+		"0011_decision_summary", "0012_metrics_tables", "0013_session_turn_metrics",
+		"0014_documents", "0015_known_projects", "0016_global_accept_markers",
+		"0017_session_baseline", "0018_supersede", "0019_metrics_maintenance_debounce",
+		"0020_recall_metrics_surface", "0021_fact_kind", "0022_source_type_note",
+		"0023_session_transcripts", "0024_session_note_provenance", "+24", "0001",
+	}
+	for version := 1; version <= 24; version++ {
+		schemas = append(schemas, strconv.Itoa(version))
+	}
+	for _, schema := range schemas {
+		t.Run(schema, func(t *testing.T) {
+			source.Schema = &schema
+			data, err := json.Marshal(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, history, err := decodeMemhubExport(data)
+			if err != nil || history.Schema != schema {
+				t.Fatalf("supported header refused or normalized: schema=%q, history=%q, error=%v", schema, history.Schema, err)
+			}
+		})
+	}
+	for _, schema := range []string{
+		"", "0", "25", "-1", "+25", "24.0", " 24", "24 ",
+		"0024_SESSION_NOTE_PROVENANCE", "0024_session_note_provenance ",
+		"0024_session_transcripts", "0023_session_note_provenance",
+		"24_session_note_provenance", "00024_session_note_provenance",
+		"0024_other", "0025_future",
+	} {
+		t.Run("refuse/"+schema, func(t *testing.T) {
+			source.Schema = &schema
+			data, err := json.Marshal(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bundle, identities, history, err := decodeMemhubExport(data)
+			if err == nil || !strings.Contains(err.Error(), "unsupported memhub source_schema_version") || len(bundle.Tables) != 0 || len(identities) != 0 || history.Schema != "" {
+				t.Fatalf("invalid header reached row conversion: schema=%q, error=%v", schema, err)
+			}
+		})
+	}
+}
+
 func TestInteropPrevalidationAndDestinationRefusals(t *testing.T) {
 	ctx := context.Background()
 	fixture := legacyInteropFixture(t)
+	guardErrors := map[string]string{
+		"duplicate command kind": "reconcile commands explicitly",
+		"global pending":         "global-target memhub pending import is unsupported",
+		"legacy supersede":       "legacy supersede links old/new existing",
+	}
 	for _, tc := range []struct {
 		name string
 		edit func(map[string]any)
 	}{
 		{"unknown version", func(v map[string]any) { v["memhub_export_version"] = 2 }},
 		{"future schema", func(v map[string]any) { v["source_schema_version"] = "999" }},
+		{"future named schema", func(v map[string]any) { v["source_schema_version"] = "0025_future" }},
+		{"unknown schema name", func(v map[string]any) { v["source_schema_version"] = "0024_other" }},
+		{"malformed schema name", func(v map[string]any) { v["source_schema_version"] = "24_session_note_provenance" }},
 		{"unknown field", func(v map[string]any) { v["transcript_archive"] = "never-open-this" }},
 		{"duplicate ID", func(v map[string]any) { v["facts"].([]any)[1].(map[string]any)["id"] = 11 }},
 		{"dangling supersession", func(v map[string]any) { v["facts"].([]any)[0].(map[string]any)["superseded_by"] = 999 }},
@@ -212,9 +276,16 @@ func TestInteropPrevalidationAndDestinationRefusals(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := s.ImportMemory(ctx, ImportMemoryOptions{File: interopTestFile(t, data), FromMemhub: true})
-			if err == nil || result.Status != "refused" || result.MainCommit != "" || len(result.CreatedProposals) != 0 || transferMain(t, s) != before || internalCount(t, s, "SELECT COUNT(*) FROM dolt_status") != 0 {
+			file := interopTestFile(t, data)
+			result, err := s.ImportMemory(ctx, ImportMemoryOptions{File: file, FromMemhub: true})
+			if err == nil || result.Status != "refused" || result.MainCommit != "" || len(result.CreatedProposals) != 0 || transferMain(t, s) != before || internalCount(t, s, "SELECT COUNT(*) FROM dolt_status") != 0 || internalCount(t, s, "SELECT COUNT(*) FROM dolt_branches") != 1 {
 				t.Fatalf("invalid import mutated target: %+v, %v", result, err)
+			}
+			if !strings.Contains(err.Error(), guardErrors[tc.name]) {
+				t.Fatalf("did not reach the existing guard: %v", err)
+			}
+			if after, err := os.ReadFile(file); err != nil || !bytes.Equal(after, data) {
+				t.Fatal("refused import modified the source bundle")
 			}
 		})
 	}
