@@ -19,6 +19,97 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Confirmed outcomes and session rendering (issue #145).** Before this delivery,
+#139 preserved native finalization hashes but the older direct/document/raw-owner
+consumers could discard them, and MCP could retry a committed note batch. After
+it, confirmed row identities and hashes survive late failures through the reached
+application, CLI and authenticated owner paths. Full structural blast radius:
+
+- `internal/store/store.go` makes the result-plus-error obligation explicit for
+  every `Store.Commit` consumer and adds `ErrCommitUnknown`. A nonempty hash
+  confirms durability; an unobserved native/owner result does not prove rollback.
+  `localdolt/localdolt.go` retains hashes assigned before result-close failure,
+  preserves populated results through outer rollback/finalization, and reports
+  commit-connection close errors. `nativeCommitResult` classifies errors after
+  attempted DOLT_COMMIT without an observed hash as unknown; earlier validation,
+  deny/config, clean-guard and statement failures retain their prior refusal
+  behavior. This classification binds `commitTx`'s native result seam, not every
+  SQL error or independent merge procedure. SQL values remain bound and the
+  existing `proposalMu` serialization is unchanged.
+- `memory/memory.go` preserves results through `Lanes.write`, `AddTask`,
+  `CompleteTask`/`BlockTask` via `setTaskStatus`, `LogNote` via
+  `LogNoteWithProvenance`, `CommitNotes`, `RecordCommand` and `SetNarrative`.
+  `ConfirmedWriteError` names confirmed hashes and inspection remedies only when
+  a hash exists; it does not classify arbitrary errors. Command read-back failure
+  returns only its certain kind plus the commit/error; zero-value totals are not
+  authoritative on that failed response. Command upsert/read-back ordering,
+  normalization, raw/canonical attribution, note provenance, deny declarations,
+  batch RequireClean and committed readers remain unchanged.
+- `localdolt/documents.go` retains add/remove identity, chunks and hash before
+  testing the commit error. A first-document late commit error leaves default
+  recall config unfinalized and names the manual config remedy; do not replay
+  ingestion to repair it. Existing `documentFinalError` also retains connection
+  errors. The private `docAddFinalize`/`docRemove` finalizer seams default to the
+  same native transaction finalizer; exported arguments, pinned reads, file
+  protection, chunking, hash no-ops/replacement and configuration policy remain.
+- Other native-result consumers are inventoried rather than given new policy:
+  `humanMemoryWrite` and interop main/staging already retained confirmed effects;
+  ordinary `stage`/`stageOnBranch` still use a result hash for cleanup only with
+  no staging error, so late failure cannot broaden branch deletion. Migration
+  `applyMigration` still discards only uncommitted residue on failure, preserves
+  committed history, and uses inspection/re-init plus `ensureMigrationTag` for
+  missing tags. A late migration is not relabeled rolled back. Review/pull's
+  independent native merge procedures retain their existing boundaries.
+- `storeipc/{storeipc,client,owner_store}.go` carries raw Commit's optional error
+  and unknown fields, preserving confirmed hash/RowsAffected with an error.
+  Unknown native outcomes retain the marker over an authenticated reply; a lost
+  reply is unknown too. Pre-commit owner refusals keep HTTP status errors.
+  `operation.go` preserves typed command-record results on late errors and uses
+  the optional `Config.Render` callback for owners with a session queue, defaulting
+  to `Store.Render` otherwise. Existing document result envelopes, authentication,
+  argument decoding, explicit operation allow-list, one-submit/no-fallback and
+  no-replay rules remain. No new IPC operation or caller-selected render path.
+- `cmd/memdolt/lanes.go` retains direct results until its selected store closes,
+  then emits compatible success fields or confirmed fields with an optional JSON
+  error and nonzero result. Output failure names the commit and inspection remedy.
+  Its lane-specific help changes only task/note/command/narrative writers;
+  `opencode.go` retains verified note results through close/output failures while
+  preserving verify-before-open and exact provenance. `doc.go` updates help;
+  its existing result/close/output reporting remains. `render.go` updates help;
+  result and per-file reporting remain. Reads/review/global exclusion are unchanged.
+- `mcpserver/tools.go` retains task/command typed results on protocol tool errors;
+  a Go handler error still refuses an unconfirmed write. It attempts every actor
+  group, removes each confirmed group before the next, and reports its hash even
+  if another group fails. Known uncommitted groups retain explicit-render and
+  orderly-shutdown retry. Unknown groups retain IDs/errors for inspection only,
+  block session render and are never resubmitted; end that session and inspect
+  before starting a fresh one. New notes still refuse after any flush error.
+  Timer errors reach the next render once and remain in the shutdown error;
+  stale timer callbacks cannot consume another timer or replay a flushed group.
+  `Close` retains prior/final failures, attempts eligible groups with the existing
+  one-minute limit and discards all remaining groups, including unknown groups.
+  A crash still loses process memory. These queue rules bind Toolset alone.
+- `mcpserver/render.go` adds `Toolset.Render`: under its queue mutex, stop the
+  timer, flush with the existing one-minute bound, and call `Store.Render` only
+  after a successful flush. A flush failure reports `notes-failed` with no file
+  publication. `cmd/memdolt/serve.go` wires the same callback before publishing
+  IPC, preserving protocol/pending-work/toolset/IPC/store shutdown ordering.
+  Standalone `localdolt.Store.Render` still captures committed main without a
+  queue or memory commit; safe per-file publication and proposal exclusion remain.
+  Session render's queue mutex is separate from the unchanged store mutex.
+- The server instructions, three wrap-up templates and PRD §§3.1/5.2/11/16
+  preserve matching before/after records, approval and identity gates. New
+  localdolt/MCP/CLI confirmed-result tests plus updated MCP render and production
+  serve tests and `storeipc/confirmed_result_test.go` exercise actual native
+  finalization/cancellation, refused roots,
+  read-back/close/output errors, authenticated results, render ordering and
+  reopened rows/history. `tests/soak/roles.go` now records a confirmed hash as
+  committed even with an error; its ledger already records both. An explicit
+  unknown marker is indeterminate as cancellation already was. Its workload
+  and crash-audit policy remain.
+  No dependency, durable schema, new CRUD/global operation, polling service,
+  separate batch implementation or full M5/M6 completion is introduced.
+
 **Memory interoperability (issue #140).** Before this delivery, PRD §15
 described import-from-memhub and JSON interop but neither CLI command existed.
 After it, `export <bundle.json>`, `import <bundle.json>` and
@@ -334,9 +425,10 @@ The complete structural blast radius is:
   the real DOLT_COMMIT result plus an error naming its hash: the pinned Dolt
   procedure has already persisted before `sql.Tx.Commit`. Earlier failures
   still invoke rollback. This result contract binds `commitConn`/`Store.Commit`;
-  older document/lane/raw owner wrappers still discard the structured result
-  on error, though their error now carries the hash. `CommitNotes`/`Toolset`
-  retry bookkeeping is unchanged and remains separate follow-up work.
+  before #145 older document/lane/raw owner wrappers still discarded structured
+  results on error, and `CommitNotes`/`Toolset` retry bookkeeping was deferred.
+  After #145 the confirmed-outcome record above completes those consumers and
+  queue rules; the original human-only mutation boundary remains.
 - `localdolt/propose.go` keeps `ProposeSupersede` fact-only; before #139 its
   comment said no decision lane requested supersession, after it the new human
   lane does. `stage` uses a returned hash for automatic cleanup only without a
@@ -433,7 +525,9 @@ above or invoke memhub. The complete structural blast radius is:
   render operation participates. Other reads, migrations and foreign Dolt
   sessions retain their prior boundaries. Pinned reads still identify one
   snapshot if a nonparticipating writer moves main. No memory, refs, dirty
-  rows, note batches or history are changed by rendering.
+  rows, note batches or history are changed by `Store.Render` itself. Before
+  #145 this also described the MCP/owner entry points; afterward their session
+  wrapper flushes notes first, as recorded above.
   Issue #131 subsequently adds repository status to the same mutex; render's
   snapshot/file ordering and preservation behavior remain unchanged.
 - `storeipc/operation.go` adds `Backend.Render` and one explicit `render`
@@ -452,8 +546,9 @@ above or invoke memhub. The complete structural blast radius is:
   new `mcpserver/render.go` uses an empty typed input and a typed result, retaining
   structured file effects even on a visible tool error. `New`'s modern/legacy
   agent attribution, static cache hints, review behavior and note lifecycle
-  remain. Render does not flush queued notes; only the existing deadline or
-  orderly shutdown does. `instructions.md` adds that same committed-view rule.
+  remain. Before #145 render did not flush queued notes; only the deadline or
+  orderly shutdown did. After #145 the session entry points flush first, while
+  standalone Store.Render retains this original committed-view rule.
 - New `render/files_test.go`, `localdolt/render_test.go`, `cmd/memdolt/render_test.go`,
   `mcpserver/render_test.go`, `storeipc/render_test.go`, and the shared synthetic
   `render/testdata/memory.sql` exercise content, committed/dirty/proposal
@@ -464,8 +559,9 @@ above or invoke memhub. The complete structural blast radius is:
   its workflow boundaries; no test changes production behavior.
 - The three core wrap-up templates add render after approved writes, retaining
   their before/after deferral record and approval/provenance gates. Claude/Codex
-  explicitly report that their queued summary is absent until its existing
-  flush point. OpenCode's verified CLI summary is already committed. PRD
+  before #145 explicitly reported the queued summary absent until its deadline
+  or shutdown flush. After #145 explicit session render flushes it first.
+  OpenCode's verified CLI summary is already committed. PRD
   §§5.2/11.1/11.2/11.3/11.4/12/16 record the same read/file/owner boundaries.
   Existing `.gitignore` already keeps default output and backups local; custom
   destinations need an operator-managed ignore rule. No dependency, durable
@@ -575,6 +671,9 @@ export GOFLAGS=-tags=gms_pure_go
     failures, then discards any still-failed in-memory rows because a closed
     session cannot retry them. This retry/discard rule binds the MCP `Toolset`
     accumulator alone, not every batch loop or direct-lane write.
+    Before #145 "failures" here included committed and unknown groups. After
+    #145 confirmed groups are removed and unknown groups are inspection-only;
+    only known uncommitted groups retry, as specified in the #145 record above.
   - `cmd/memdolt/serve.go` registers that toolset on the already-open owner and
     closes it after protocol serving but before IPC and the store. The issue
     #103 lifecycle ordering, schema gate and authenticated owner endpoint still

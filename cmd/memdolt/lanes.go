@@ -57,12 +57,52 @@ func (f *storeFlags) bindWriter(cmd *cobra.Command) *cobra.Command {
 	return cmd
 }
 
+func (f *storeFlags) bindLaneWriter(cmd *cobra.Command) *cobra.Command {
+	if cmd.Long == "" {
+		cmd.Long = cmd.Short
+	}
+	cmd.Long += "\n\nA late failure retains any confirmed row identity and commit hash; inspect the\n" +
+		"named row and Dolt history before retrying. A lost owner reply means outcome\n" +
+		"unknown, never an automatic replay. Success output remains unchanged."
+	return f.bindWriter(cmd)
+}
+
 // run opens the store the flags name, hands its direct lanes to fn and
 // closes it again.
 func (f *storeFlags) run(cmd *cobra.Command, fn func(context.Context, *memory.Lanes) error) error {
 	return f.runStore(cmd, func(ctx context.Context, st commandStore, actor memory.Actor) error {
 		return fn(ctx, memory.New(st, actor))
 	})
+}
+
+// runLaneWrite closes the selected store before reporting a direct write, so
+// close failures cannot hide behind an already-emitted success.
+func runLaneWrite[T any](cmd *cobra.Command, flags *storeFlags, write func(context.Context, *memory.Lanes) (T, string, error)) (T, string, error) {
+	var result T
+	var commit string
+	err := flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
+		var err error
+		result, commit, err = write(ctx, lanes)
+		return err
+	})
+	return result, commit, err
+}
+
+func emitLaneWrite(cmd *cobra.Command, payload any, commit, inspect string, lines []string, err error) error {
+	if err != nil && commit == "" {
+		return err
+	}
+	if err != nil {
+		lines = append(lines, "error: "+err.Error())
+	}
+	return memory.ConfirmedWriteError(errors.Join(err, emit(cmd, payload, lines)), commit, inspect)
+}
+
+func laneError(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 // runStore opens the store the flags name, hands it to fn and closes it
@@ -186,6 +226,7 @@ func stamp(at time.Time) string { return at.Format(time.RFC3339) }
 type taskInfo struct {
 	memory.Task
 	Commit string `json:"commit"`
+	Error  string `json:"error,omitempty"`
 }
 
 func newTaskCommand() *cobra.Command {
@@ -208,19 +249,17 @@ func newTaskAddCommand() *cobra.Command {
 		Short: "Open a task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
-				task, commit, err := lanes.AddTask(ctx, args[0], notes)
-				if err != nil {
-					return err
-				}
-				return emit(cmd, taskInfo{Task: task, Commit: commit},
-					[]string{fmt.Sprintf("opened task %s (commit %s)", task.ID, commit)})
+			task, commit, err := runLaneWrite(cmd, &flags, func(ctx context.Context, lanes *memory.Lanes) (memory.Task, string, error) {
+				return lanes.AddTask(ctx, args[0], notes)
 			})
+			return emitLaneWrite(cmd, taskInfo{Task: task, Commit: commit, Error: laneError(err)}, commit,
+				"`memdolt task list --status all` for task "+task.ID,
+				[]string{fmt.Sprintf("opened task %s (commit %s)", task.ID, commit)}, err)
 		},
 	}
 	cmd.Flags().StringVar(&notes, "notes", "", "detail to record alongside the title")
 
-	return flags.bindWriter(cmd)
+	return flags.bindLaneWriter(cmd)
 }
 
 func newTaskDoneCommand() *cobra.Command {
@@ -231,18 +270,16 @@ func newTaskDoneCommand() *cobra.Command {
 		Short: "Mark a task done",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
-				task, commit, err := lanes.CompleteTask(ctx, args[0])
-				if err != nil {
-					return err
-				}
-				return emit(cmd, taskInfo{Task: task, Commit: commit},
-					[]string{fmt.Sprintf("task %s is done (commit %s)", task.ID, commit)})
+			task, commit, err := runLaneWrite(cmd, &flags, func(ctx context.Context, lanes *memory.Lanes) (memory.Task, string, error) {
+				return lanes.CompleteTask(ctx, args[0])
 			})
+			return emitLaneWrite(cmd, taskInfo{Task: task, Commit: commit, Error: laneError(err)}, commit,
+				"`memdolt task list --status all` for task "+task.ID,
+				[]string{fmt.Sprintf("task %s is done (commit %s)", task.ID, commit)}, err)
 		},
 	}
 
-	return flags.bindWriter(cmd)
+	return flags.bindLaneWriter(cmd)
 }
 
 func newTaskBlockCommand() *cobra.Command {
@@ -254,19 +291,17 @@ func newTaskBlockCommand() *cobra.Command {
 		Short: "Mark a task blocked",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
-				task, commit, err := lanes.BlockTask(ctx, args[0], notes)
-				if err != nil {
-					return err
-				}
-				return emit(cmd, taskInfo{Task: task, Commit: commit},
-					[]string{fmt.Sprintf("task %s is blocked (commit %s)", task.ID, commit)})
+			task, commit, err := runLaneWrite(cmd, &flags, func(ctx context.Context, lanes *memory.Lanes) (memory.Task, string, error) {
+				return lanes.BlockTask(ctx, args[0], notes)
 			})
+			return emitLaneWrite(cmd, taskInfo{Task: task, Commit: commit, Error: laneError(err)}, commit,
+				"`memdolt task list --status all` for task "+task.ID,
+				[]string{fmt.Sprintf("task %s is blocked (commit %s)", task.ID, commit)}, err)
 		},
 	}
 	cmd.Flags().StringVar(&notes, "notes", "", "what the task is blocked on; replaces the task's notes")
 
-	return flags.bindWriter(cmd)
+	return flags.bindLaneWriter(cmd)
 }
 
 func newTaskListCommand() *cobra.Command {
@@ -313,6 +348,7 @@ func newTaskListCommand() *cobra.Command {
 type noteInfo struct {
 	memory.Note
 	Commit string `json:"commit"`
+	Error  string `json:"error,omitempty"`
 }
 
 func newNoteCommand() *cobra.Command {
@@ -339,18 +375,16 @@ func newNoteAddCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
-				note, commit, err := lanes.LogNote(ctx, body)
-				if err != nil {
-					return err
-				}
-				return emit(cmd, noteInfo{Note: note, Commit: commit},
-					[]string{fmt.Sprintf("noted %s as %s (commit %s)", note.ID, note.Actor, commit)})
+			note, commit, err := runLaneWrite(cmd, &flags, func(ctx context.Context, lanes *memory.Lanes) (memory.Note, string, error) {
+				return lanes.LogNote(ctx, body)
 			})
+			return emitLaneWrite(cmd, noteInfo{Note: note, Commit: commit, Error: laneError(err)}, commit,
+				"`memdolt note list` and Dolt history for note "+note.ID,
+				[]string{fmt.Sprintf("noted %s as %s (commit %s)", note.ID, note.Actor, commit)}, err)
 		},
 	}
 
-	return flags.bindWriter(cmd)
+	return flags.bindLaneWriter(cmd)
 }
 
 func newNoteListCommand() *cobra.Command {
@@ -395,6 +429,7 @@ func newNoteListCommand() *cobra.Command {
 type commandInfo struct {
 	memory.Command
 	Commit string `json:"commit"`
+	Error  string `json:"error,omitempty"`
 }
 
 // commandLine renders a recorded command as one human-readable line.
@@ -425,19 +460,17 @@ func newCommandRecordCommand() *cobra.Command {
 		Short: "Record how a command of one kind ran",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
-				command, commit, err := lanes.RecordCommand(ctx, args[0], args[1], exitCode)
-				if err != nil {
-					return err
-				}
-				return emit(cmd, commandInfo{Command: command, Commit: commit},
-					[]string{fmt.Sprintf("recorded %s (commit %s)", commandLine(command), commit)})
+			command, commit, err := runLaneWrite(cmd, &flags, func(ctx context.Context, lanes *memory.Lanes) (memory.Command, string, error) {
+				return lanes.RecordCommand(ctx, args[0], args[1], exitCode)
 			})
+			return emitLaneWrite(cmd, commandInfo{Command: command, Commit: commit, Error: laneError(err)}, commit,
+				"`memdolt command get "+args[0]+"` and Dolt history",
+				[]string{fmt.Sprintf("recorded %s (commit %s)", commandLine(command), commit)}, err)
 		},
 	}
 	cmd.Flags().IntVar(&exitCode, "exit", 0, "the exit status the run finished with")
 
-	return flags.bindWriter(cmd)
+	return flags.bindLaneWriter(cmd)
 }
 
 func newCommandGetCommand() *cobra.Command {
@@ -465,6 +498,7 @@ func newCommandGetCommand() *cobra.Command {
 type narrativeInfo struct {
 	memory.Narrative
 	Commit string `json:"commit"`
+	Error  string `json:"error,omitempty"`
 }
 
 // newNarrativeCommand builds `memdolt state` or `memdolt arch`. The two
@@ -497,18 +531,16 @@ func newNarrativeSetCommand(kind memory.NarrativeKind, subject string) *cobra.Co
 			if err != nil {
 				return err
 			}
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
-				narrative, commit, err := lanes.SetNarrative(ctx, kind, body)
-				if err != nil {
-					return err
-				}
-				return emit(cmd, narrativeInfo{Narrative: narrative, Commit: commit},
-					[]string{fmt.Sprintf("recorded %s %s (commit %s)", kind, narrative.ID, commit)})
+			narrative, commit, err := runLaneWrite(cmd, &flags, func(ctx context.Context, lanes *memory.Lanes) (memory.Narrative, string, error) {
+				return lanes.SetNarrative(ctx, kind, body)
 			})
+			return emitLaneWrite(cmd, narrativeInfo{Narrative: narrative, Commit: commit, Error: laneError(err)}, commit,
+				"`memdolt "+string(kind)+" show` and Dolt history for narrative "+narrative.ID,
+				[]string{fmt.Sprintf("recorded %s %s (commit %s)", kind, narrative.ID, commit)}, err)
 		},
 	}
 
-	return flags.bindWriter(cmd)
+	return flags.bindLaneWriter(cmd)
 }
 
 func newNarrativeShowCommand(kind memory.NarrativeKind, subject string) *cobra.Command {

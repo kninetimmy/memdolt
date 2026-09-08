@@ -47,15 +47,18 @@ type Toolset struct {
 	groups   []noteGroup
 	timer    *time.Timer
 	flushErr error
-	closed   bool
+	// A timer error must also reach the next explicit render before publication.
+	renderFlushErr error
+	closed         bool
 
 	elicit    *elicitationStateStore
 	elicitErr error
 }
 
 type noteGroup struct {
-	actor memory.Actor
-	notes []memory.Note
+	actor   memory.Actor
+	notes   []memory.Note
+	unknown error
 }
 
 // RegisterTools adds exactly the implemented surface. Later-milestone
@@ -84,14 +87,14 @@ func registerTools(server *mcp.Server, baseDir string, st Backend, interval time
 	mcp.AddTool(server, &mcp.Tool{Name: "get_command", Description: "Return the recorded command for one kind."}, tools.getCommand)
 	mcp.AddTool(server, &mcp.Tool{Name: "task_add", Description: "Create a directly committed task."}, tools.taskAdd)
 	mcp.AddTool(server, &mcp.Tool{Name: "task_done", Description: "Mark a task done in a directly attributed commit."}, tools.taskDone)
-	mcp.AddTool(server, &mcp.Tool{Name: "log_session_note", Description: "Queue a session note for the five-minute or orderly-shutdown batch commit."}, tools.logSessionNote)
+	mcp.AddTool(server, &mcp.Tool{Name: "log_session_note", Description: "Queue a session note for the five-minute, explicit render or orderly-shutdown batch commit. Confirmed groups are never replayed after late errors."}, tools.logSessionNote)
 	mcp.AddTool(server, &mcp.Tool{Name: "record_command", Description: "Record a command outcome in a directly attributed commit."}, tools.recordCommand)
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_fact", Description: "Stage a fact on a single-commit proposal branch without moving main."}, tools.proposeFact)
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_decision", Description: "Stage a decision on a single-commit proposal branch without moving main."}, tools.proposeDecision)
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_supersede", Description: "Stage a fact supersession and replacement on a single-commit proposal branch without moving main."}, tools.proposeSupersede)
 	mcp.AddTool(server, &mcp.Tool{Name: "review_pending", Description: "Offer repository proposals for human elicitation review; global proposals remain CLI-only."}, tools.reviewPending)
 	mcp.AddTool(server, &mcp.Tool{Name: "doc_add", Description: "Ingest a confined repository Markdown document in one attributed commit; the first document enables default recall. Unchanged bytes are a no-op."}, tools.docAdd)
-	mcp.AddTool(server, &mcp.Tool{Name: "render", Description: "Render committed main to configured local PROJECT.md and PROJECT_LEDGER.md; report backups and partial failures. Pending notes and proposals are excluded."}, tools.render)
+	mcp.AddTool(server, &mcp.Tool{Name: "render", Description: "Flush this session's pending notes, then render committed main to configured local PROJECT.md and PROJECT_LEDGER.md. Flush errors prevent publication; inspect confirmed commits before retrying. Proposals remain excluded; report backups and partial file failures."}, tools.render)
 	return tools
 }
 
@@ -338,7 +341,7 @@ type taskWriteOutput struct {
 func (t *Toolset) taskAdd(ctx context.Context, _ *mcp.CallToolRequest, in taskAddInput) (*mcp.CallToolResult, taskWriteOutput, error) {
 	actor := ActorFromContext(ctx)
 	task, commit, err := memory.New(t.store, actor).AddTask(ctx, in.Title, in.Notes)
-	return &mcp.CallToolResult{}, taskWriteOutput{Task: task, Commit: commit, Actor: actor}, err
+	return committedToolResult(taskWriteOutput{Task: task, Commit: commit, Actor: actor}, commit, err)
 }
 
 type taskDoneInput struct {
@@ -348,7 +351,7 @@ type taskDoneInput struct {
 func (t *Toolset) taskDone(ctx context.Context, _ *mcp.CallToolRequest, in taskDoneInput) (*mcp.CallToolResult, taskWriteOutput, error) {
 	actor := ActorFromContext(ctx)
 	task, commit, err := memory.New(t.store, actor).CompleteTask(ctx, in.ID)
-	return &mcp.CallToolResult{}, taskWriteOutput{Task: task, Commit: commit, Actor: actor}, err
+	return committedToolResult(taskWriteOutput{Task: task, Commit: commit, Actor: actor}, commit, err)
 }
 
 type noteInput struct {
@@ -380,7 +383,16 @@ type commandWriteOutput struct {
 func (t *Toolset) recordCommand(ctx context.Context, _ *mcp.CallToolRequest, in recordCommandInput) (*mcp.CallToolResult, commandWriteOutput, error) {
 	actor := ActorFromContext(ctx)
 	command, commit, err := memory.New(t.store, actor).RecordCommand(ctx, in.Kind, in.Cmdline, in.ExitCode)
-	return &mcp.CallToolResult{}, commandWriteOutput{Command: command, Commit: commit, Actor: actor}, err
+	return committedToolResult(commandWriteOutput{Command: command, Commit: commit, Actor: actor}, commit, err)
+}
+
+// A Go handler error makes the SDK discard typed output. A confirmed write
+// instead carries that output with a visible protocol tool error.
+func committedToolResult[T any](result T, commit string, err error) (*mcp.CallToolResult, T, error) {
+	if err != nil && commit != "" {
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, result, nil
+	}
+	return &mcp.CallToolResult{}, result, err
 }
 
 type proposeFactInput struct {
@@ -501,33 +513,64 @@ func (t *Toolset) queueNote(ctx context.Context, actor memory.Actor, body string
 }
 
 func (t *Toolset) startTimer() {
-	t.timer = time.AfterFunc(t.interval, func() {
+	var timer *time.Timer
+	timer = time.AfterFunc(t.interval, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), noteFlushTimeout)
 		defer cancel()
 		t.mu.Lock()
 		defer t.mu.Unlock()
+		if t.closed || t.timer != timer {
+			return
+		}
 		t.timer = nil
 		if err := t.flushLocked(ctx); err != nil {
-			t.flushErr = err
+			t.flushErr = errors.Join(t.flushErr, err)
+			t.renderFlushErr = errors.Join(t.renderFlushErr, err)
 		}
 	})
+	t.timer = timer
 }
 
 func (t *Toolset) flushLocked(ctx context.Context) error {
-	failed := make([]noteGroup, 0, len(t.groups))
 	var errs []error
-	for _, group := range t.groups {
-		if _, err := memory.New(t.store, group.actor).CommitNotes(ctx, group.notes); err != nil {
-			failed = append(failed, group)
-			errs = append(errs, fmt.Errorf("flush session-note batch for %s: %w", group.actor.Name, err))
+	var confirmed []string
+	for i := 0; i < len(t.groups); {
+		group := t.groups[i]
+		if group.unknown != nil {
+			errs = append(errs, group.unknown)
+			i++
+			continue
 		}
+		commit, err := memory.New(t.store, group.actor).CommitNotes(ctx, group.notes)
+		if commit != "" {
+			confirmed = append(confirmed, group.actor.Name+"="+commit)
+		}
+		if err != nil {
+			err = fmt.Errorf("flush session-note batch for %s: %w", group.actor.Name, err)
+			if commit == "" && errors.Is(err, store.ErrCommitUnknown) {
+				err = fmt.Errorf("end this session and inspect the named notes before starting a fresh session; this group will not be replayed: %w", err)
+				t.groups[i].unknown = err
+			}
+			errs = append(errs, err)
+		}
+		if err != nil && commit == "" {
+			i++
+			continue
+		}
+		// DOLT_COMMIT can persist before finalization fails. Remove confirmed
+		// rows before the next group, so no timer/render/shutdown retries them.
+		t.groups = append(t.groups[:i], t.groups[i+1:]...)
 	}
-	t.groups = failed
-	return errors.Join(errs...)
+	err := errors.Join(errs...)
+	if err != nil && len(confirmed) != 0 {
+		return fmt.Errorf("confirmed note batches %s; %w", strings.Join(confirmed, ", "), err)
+	}
+	return err
 }
 
-// Close retries groups retained by a failed deadline flush before the owner
-// store closes. Successful groups were already removed and are not recommitted.
+// Close retries known uncommitted groups before the owner store closes.
+// Before #145 it retried all failures. Confirmed groups are now removed even
+// after late errors, and unknown groups remain inspect-only without replay.
 // After this final attempt, failed groups are discarded with the returned error;
 // a prior deadline error remains visible even if its shutdown retry succeeds.
 func (t *Toolset) Close() error {

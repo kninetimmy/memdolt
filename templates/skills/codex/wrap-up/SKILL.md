@@ -23,11 +23,22 @@ compatibility: codex
    or `--actor user` for a proposal and human review.
 5. Record the approved summary with `log_session_note`.
    Report it as queued: its actor's batch commits at the five-minute deadline
-   or orderly server shutdown; an abrupt exit can lose an uncommitted note.
+   or orderly server shutdown, and now also at the explicit render below;
+   an abrupt exit can lose an uncommitted note.
 6. Call `render` (CLI equivalent: `memdolt render --json`) to refresh the local
    generated files from committed main. Report the source commit, written
-   outputs, and recoverable backups. The queued summary above is excluded
-   until its existing flush point; rendering does not flush it or promote claims.
+   outputs, and recoverable backups. Before issue #145 the queued summary was
+   excluded until its deadline/shutdown flush. Now MCP render and its live-owner
+   CLI route flush that owner's notes before the snapshot. Failed flushing
+   prevents publication; proposals remain excluded.
+
+Before #145 late commit errors could discard confirmed results and retain a
+committed note group for retry. Now retain each returned row id and commit hash
+alongside its error; inspect note/task/command lists and Dolt history before
+retrying. Confirmed groups are never replayed. Only known uncommitted groups
+retry on explicit render or orderly shutdown; unknown groups are inspection-only.
+Close reports earlier/final failures and discards remaining groups after its
+bounded final attempt. A lost reply means unknown outcome, not rollback.
 
 Stop on the first tool failure; on a partial render or unknown reply, inspect
 the reported outputs/backups before retrying. Before issue #133, M3 had no

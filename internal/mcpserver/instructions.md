@@ -4,9 +4,18 @@
 - Recall relevant memory before reading `PROJECT_LEDGER.md`; use the ledger only
   when recall is empty or the user explicitly asks for it.
 - Use `render` to refresh these local files at the configured output directory
-  (default `.memdolt/rendered`). It reads one committed main snapshot and does
-  not flush queued notes or promote proposals. Inspect reported outputs and
+  (default `.memdolt/rendered`). Before issue #145 it did not flush queued notes.
+  Now it flushes this owner's session notes before reading one committed main
+  snapshot; authenticated `memdolt render` reaches the same queue. A flush error
+  prevents publication. Proposals remain excluded. Inspect reported outputs and
   backups before retrying any partial failure or unknown response.
+- A nonempty commit hash confirms a durable write even with a late error.
+  Inspect the returned row identity and Dolt history; never automatically replay
+  it. A lost result means outcome unknown, not rollback. MCP removes confirmed
+  note groups immediately, retries only known uncommitted groups on explicit
+  render or orderly shutdown, and retains unknown groups only for inspection.
+  Timer failures remain visible to the next render and shutdown. Close reports
+  earlier/final failures and discards remaining rows; a crash loses the queue.
 - To find code by intent, use `locate` before grep. Use grep only to confirm or
   narrow the files that locate returns.
   Before issue #138 this named an absent tool; after it the real local locator

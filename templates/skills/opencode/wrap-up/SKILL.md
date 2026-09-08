@@ -52,8 +52,19 @@ would succeed.
    or `--actor user` for a proposal and human review.
 6. Call `render` (CLI equivalent: `memdolt render --json`) to refresh the local
    generated files from committed main. Report the source commit, written
-   outputs, and recoverable backups. Rendering does not flush pending MCP
-   notes or promote claims; the verified CLI summary in step 3 is already committed.
+   outputs, and recoverable backups. Before issue #145 rendering did not flush
+   pending MCP notes. Now MCP render and its live-owner CLI route flush that
+   owner's notes before the snapshot; failed flushing prevents publication.
+   Proposals remain excluded. The verified CLI summary in step 3 is already
+   committed and is not queued or replayed by render.
+
+Before #145 late commit errors could discard confirmed results and retain a
+committed note group for retry. Now retain each returned row id and commit hash
+alongside its error; inspect note/task/command lists and Dolt history before
+retrying. Confirmed groups are never replayed. Only known uncommitted groups
+retry on explicit render or orderly shutdown; unknown groups are inspection-only.
+Close reports earlier/final failures and discards remaining groups after its
+bounded final attempt. A lost reply means unknown outcome, not rollback.
 
 Stop on the first failure; on a partial render or unknown reply, inspect the
 reported outputs/backups before retrying. Before issue #133, M3 had no wrap-up

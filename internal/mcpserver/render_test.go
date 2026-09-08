@@ -15,7 +15,7 @@ import (
 	"github.com/kninetimmy/memdolt/internal/store"
 )
 
-func TestRenderMCPContentProvenanceAndQueuedNoteIsolation(t *testing.T) {
+func TestRenderMCPContentProvenanceAndQueuedNoteFlush(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "modern", true: "legacy"}[legacy], func(t *testing.T) {
 			ctx := context.Background()
@@ -35,10 +35,10 @@ func TestRenderMCPContentProvenanceAndQueuedNoteIsolation(t *testing.T) {
 			server := New("test")
 			tools := RegisterTools(server, base, testElicitationBackend(base, st))
 			client, session := connect(t, server, &mcp.Implementation{Name: "cli", Version: "1"}, legacy)
-			callOK(t, client, "log_session_note", map[string]any{"text": "QUEUED_NOTE_EXCLUDED"})
+			callOK(t, client, "log_session_note", map[string]any{"text": "QUEUED_NOTE_INCLUDED"})
 			callOK(t, client, "propose_fact", map[string]any{"key": "pending.render", "value": "PROPOSAL_EXCLUDED", "rationale": "pending fixture"})
 			first := callAs[render.Result](t, client, "render", map[string]any{})
-			if first.Status != "written" || first.SourceCommit != seed.Hash || len(first.WrittenFiles) != 2 {
+			if first.Status != "written" || first.SourceCommit == seed.Hash || len(first.WrittenFiles) != 2 {
 				t.Fatalf("MCP render=%+v", first)
 			}
 			project, err := os.ReadFile(first.WrittenFiles[0])
@@ -49,7 +49,7 @@ func TestRenderMCPContentProvenanceAndQueuedNoteIsolation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, text := range []string{seed.Hash, "Building durable memory", "Local owner → committed Dolt", "agent:opencode", "cli", "Recorded session\n\nSecond paragraph stays.", "ses_fixture", "fixture-model"} {
+			for _, text := range []string{first.SourceCommit, "QUEUED_NOTE_INCLUDED", "Building durable memory", "Local owner → committed Dolt", "agent:opencode", "cli", "Recorded session\n\nSecond paragraph stays.", "ses_fixture", "fixture-model"} {
 				if !strings.Contains(string(project), text) {
 					t.Errorf("PROJECT lacks %q", text)
 				}
@@ -59,7 +59,7 @@ func TestRenderMCPContentProvenanceAndQueuedNoteIsolation(t *testing.T) {
 					t.Errorf("ledger lacks %q", text)
 				}
 			}
-			for _, excluded := range []string{"QUEUED_NOTE_EXCLUDED", "PROPOSAL_EXCLUDED", "Token Accounting"} {
+			for _, excluded := range []string{"PROPOSAL_EXCLUDED", "Token Accounting"} {
 				if strings.Contains(string(project)+string(ledger), excluded) {
 					t.Errorf("render exposed %s", excluded)
 				}
@@ -79,8 +79,8 @@ func TestRenderMCPContentProvenanceAndQueuedNoteIsolation(t *testing.T) {
 			if err != nil || len(entries) != 0 {
 				t.Fatal("MCP selected an arbitrary output")
 			}
-			if got := testCount(t, st, "SELECT COUNT(*) FROM session_notes AS OF 'main'"); got != 1 {
-				t.Fatal("render flushed the pending MCP note")
+			if got := testCount(t, st, "SELECT COUNT(*) FROM session_notes AS OF 'main'"); got != 2 {
+				t.Fatal("render did not flush the pending MCP note once")
 			}
 			closeSessions(t, client, session)
 			if err := tools.Close(); err != nil {

@@ -24,8 +24,12 @@ func newRenderCommand() *cobra.Command {
 			"Report partial completion and retained backups on failure; inspect before retry.\n" +
 			"A crash may leave .memdolt-render.lock in the output directory: stop all\n" +
 			"renders and inspect outputs/backups before removing that residue.\n" +
-			"Pending notes and proposals are excluded. No initialization, migration,\n" +
-			"Dolt commit, transcript archive or token accounting is performed.",
+			"A live MCP owner flushes its pending notes before capturing committed main.\n" +
+			"Flush errors prevent publication; confirmed groups are never replayed.\n" +
+			"Inspect note list/history on confirmed or unknown errors as well as outputs.\n" +
+			"Without a session queue, render reads committed main without a Dolt commit.\n" +
+			"Proposals remain excluded. No initialization, migration, transcript archive\n" +
+			"or token accounting is performed.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := localdolt.RequireExistingTransferStore(flags.dir); err != nil {

@@ -87,10 +87,7 @@ func (s *OwnerStore) Commit(ctx context.Context, req store.CommitRequest) (store
 		Message:      req.Message,
 		Author:       Actor{Name: req.Author.Name, Email: req.Author.Email},
 	})
-	if err != nil {
-		return store.CommitResult{}, err
-	}
-	return store.CommitResult{Hash: result.Hash, RowsAffected: result.RowsAffected}, nil
+	return store.CommitResult{Hash: result.Hash, RowsAffected: result.RowsAffected}, err
 }
 
 func wireArgs(args []any) []any {
@@ -300,6 +297,12 @@ func (s *OwnerStore) RecordCommand(
 	err := s.operation(ctx, opRecordCommand, recordCommandArgs{
 		Actor: actor, Kind: kind, Cmdline: cmdline, ExitCode: exitCode,
 	}, &result)
+	if err != nil && !IsOwnerRefusal(err) {
+		return memory.Command{}, "", fmt.Errorf("command owner response lost or unavailable; outcome unknown; inspect `memdolt command get %s` and Dolt history before retrying: %w", kind, err)
+	}
+	if result.Error != "" {
+		err = errors.New(result.Error)
+	}
 	return result.Command, result.Commit, err
 }
 
