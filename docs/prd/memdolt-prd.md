@@ -1181,6 +1181,16 @@ locate/eval-locate templates and two OpenCode command entries are additive.
 
 Cobra; every memhub subcommand maps (full disposition in §12). New/renamed: `memdolt pull|push|repo status` (replaces `sync *`), `memdolt review` (same verbs; diffs rendered from proposal branches), `memdolt history <fact|decision|state|arch> <ident>` (`<ident>` names the fact/decision; `state`/`arch` take none — the narrative table itself is the subject), `memdolt hub init|status` (hub bootstrap + doctor), `memdolt import --from-memhub <export.json>`. Dropped: `sync adopt`, `export`/`import` JSON as the sync path (kept only for interop/migration), `wrapup-policy`-style multi-binary — single binary.
 
+**Linux hub surfaces (issue #147).** Before this slice, the `hub init|status`
+mapping above was planned. After it, `hub init --output <absolute-local-dir>`
+generates a nonsecret bundle using explicit Linux installation/network options;
+`hub status --config <absolute-hub.json>` reports observed deployment health.
+`hub preflight` and `hub ready` are the generated systemd startup checks. All
+support `--json`; none initializes a local store or implicitly installs a hub.
+The [deployment runbook](../hub-deployment.md) specifies native 1.88.1, credential
+setup, applied nftables enforcement, preservation, supported platforms and the
+complete structural blast radius. Existing CLI/MCP/transfer behavior stays.
+
 **Trusted human repository facts/decisions (issue #139).** Before this slice,
 §12's CRUD port and M5 deferral still included the ordinary human commands.
 After it, these commands ship with `--dir` and `--json` on an initialized
@@ -2252,6 +2262,9 @@ excluded. This does not complete the remaining parity matrix.
 
 ### 13.1 The hub is one process
 
+**Before issue #147**, the design used the following SQL-bind-only example and
+tailnet-perimeter description. Preserve them as the historical before-state:
+
 `dolt sql-server` with `remotesapi` enabled **[V]**:
 
 ```yaml
@@ -2265,6 +2278,59 @@ data_dir: /mnt/ssd/memdolt-hub
 - Auth = SQL users/grants (`clone_admin` read; push requires elevated grants **[V]**; DoltHub itself calls this auth weak **[V]**) → **the tailnet is the perimeter** (r2 §6.2-6.3 posture: bind tailnet IP, systemd system unit under a dedicated user, `After=tailscaled`, bind-retry for the boot race). Non-Tailscale self-hosters: private network or SSH tunnel; never expose remotesapi publicly. **[design]**
 - Hardware: Pi 5 (8GB) comfortably exceeds Dolt's 2GB production minimum **[V]**; the hub does no inference (§4.1), so r2's Q3 concern does not exist here. Linux desktop per r2 §13.5 checklist (mask suspend, system unit, tailscaled at boot) equally fine. ARM64 Linux release binaries: **[L]** — confirm the asset on github.com/dolthub/dolt/releases during M0. `dolt version` pin: hub and clients within a documented compatible range; `doctor` checks skew.
 - SSD-primary storage recommended (r2 D8 carried over, downgraded from requirement to recommendation): live databases on USB SSD for endurance and random-write performance under commit churn. This is a documented recommendation, not a requirement — memdolt must not refuse to run without an SSD.
+
+**After issue #147**, native Dolt 1.88.1's remotesapi is explicitly accounted for:
+it binds `:port` independently of SQL `listener.host`. The example above does
+not enforce private remotes ingress. The measured managed-startup baseline is
+exactly **1.88.1**, not the historical ≥1.30 capability statement or an unmeasured
+compatibility range. Remotes wire-format metadata is not a Dolt release version.
+This delivery adds no skew guard to existing clone/push/pull clients or doctor.
+
+`hub init` generates exact nonsecret YAML, a dedicated-user native systemd unit,
+a separate privileged boundary unit, an nftables file and setup instructions.
+The generated deployment requires Linux/systemd/nftables and both configured
+private address families on its chosen interface. The boundary atomically creates
+only its own `inet memdolt_hub` input table; it refuses an existing table and
+never flushes the ruleset or unrelated traffic. The four rules permit loopback
+or the selected private interface/source prefix/destination on both configured
+TCP ports, then drop remaining traffic to those ports on both IP families.
+Other chains can deny more; accepts elsewhere cannot override the drop.
+
+Every generated server start checks trusted exact artifact bytes and the applied
+nftables table, refusing missing/unreadable/malformed/unapplied/dormant/weakened
+protection. The root check runs no Dolt command; native version, private privilege
+file existence and bounded address readiness run as the unprivileged service
+account before one native server. Explicit absolute paths/names/addresses are
+validated before interpolation; no shell or password argument is used. The
+unit orders/binds after the boundary and selected private-network service and
+uses bounded visible failures/retries. No implicit install/firewall/account or
+database mutation occurs from the hub CLI. Native event flushing is disabled in
+generated server/probe environments. Ordinary data schema/history stays intact.
+
+Only applied protection passes full preflight; `--files-only` validates artifacts
+before application and is not a server startup authorization. Stop leaves the
+table applied. The guard is a startup snapshot, not a monitor: a later root
+firewall writer can change protection, and the final check/start interval is not
+atomic against root. Do not enable a distribution nftables.service that flushes
+the machine ruleset; preserve this table in other firewall reloads and stop Dolt
+before changing it. Direct native server invocations do not inherit the guard.
+
+`hub status` reports observed release/configuration/private-interface/applied
+boundary and local TCP listener checks with failures/unknowns; it cannot prove
+process identity, credential correctness or physical off-network denial.
+Non-Linux live inspection/startup is explicitly unsupported. Native credentials
+are bootstrapped through loopback-only native SQL and prompted/environment flows,
+then persisted privately outside artifacts: CLONE_ADMIN is global remote-read
+authority and SUPER is broad remote-write authority, not database-scoped isolation.
+
+The [hub runbook](../hub-deployment.md) records the complete artifact/symbol/file/
+CLI/test/CI structural blast radius, output preservation and private path checks,
+native SQL/grant commands and exact enforcement limits. Existing local stores,
+owner routing, all MCP tools, transfer/merge/auth and code-index behavior remain;
+no Go dependency, durable schema change or inference is added. Topology/project
+identity, backup/retention, physical hub deployment and two-client/off-network
+acceptance remain separately tracked. The earlier physical/ARM64 evidence is not
+expanded by this isolated Linux-amd64 gate.
 
 ### 13.2 Backups (r2 §12, mostly dissolved, residue kept)
 
@@ -2453,6 +2519,17 @@ Claude compatibility is expected from official host documentation and these
 checks; actual Claude recall, proposals, task operations, and human elicitation
 remain unverified. This replaces M3's acceptance evidence only; the phased tool
 surface in §11.1 is unchanged. At that gate replacement, M4–M6 remained deferred.
+
+**M4 Linux hub subset (issue #147):** the historical subset records below left
+hub setup, authentication instructions and measured startup compatibility pending.
+After this slice, §13.1's reviewable artifacts, fail-closed private startup checks
+and hub status ship. The new Linux CI lane verifies generated unit grammar and
+actual ordered startup arguments with a checksum-verified native 1.88.1 in a
+disposable container/network namespaces, including real dual-stack allowed/denied
+traffic, preservation and refusal cases. It does not install under PID 1 or touch
+the runner-host firewall. Ordinary/golden gates retain their existing contexts.
+The physical two-client round trip/off-network acceptance, topology/project
+identity, backups/retention and other M4–M6 requirements remain separate.
 
 **M4 first subset (issue #123):** local-only `repo status` now ships as described
 in §11.2. Remotes configuration, remote status/diff, pull/push, conflict
