@@ -41,7 +41,7 @@ func TestTrackedHostRegistrationsUseNativeCoexistingShapes(t *testing.T) {
 		!reflect.DeepEqual(openCodeServer.Command, []string{"memdolt", "serve"}) {
 		t.Fatalf("opencode.json memdolt registration = %+v, present %t", openCodeServer, ok)
 	}
-	if got := sortedRawKeys(openCode.Commands); !reflect.DeepEqual(got, []string{"memdolt-check-init", "memdolt-eval-locate", "memdolt-global", "memdolt-init-project", "memdolt-locate", "memdolt-recall", "memdolt-wrap-up"}) {
+	if got := sortedRawKeys(openCode.Commands); !reflect.DeepEqual(got, []string{"memdolt-catch-up", "memdolt-check-init", "memdolt-eval-locate", "memdolt-global", "memdolt-init-project", "memdolt-locate", "memdolt-recall", "memdolt-wrap-up"}) {
 		t.Fatalf("OpenCode commands = %q, want namespaced shipped workflows", got)
 	}
 	for name, raw := range openCode.Commands {
@@ -61,7 +61,7 @@ func TestTrackedHostRegistrationsUseNativeCoexistingShapes(t *testing.T) {
 }
 
 func TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools(t *testing.T) {
-	want := []string{"memdolt-check-init", "memdolt-eval-locate", "memdolt-global", "memdolt-init-project", "memdolt-locate", "memdolt-recall", "memdolt-wrap-up"}
+	want := []string{"memdolt-catch-up", "memdolt-check-init", "memdolt-eval-locate", "memdolt-global", "memdolt-init-project", "memdolt-locate", "memdolt-recall", "memdolt-wrap-up"}
 	sets := map[string][]string{
 		"claude":   flatSkillNames(t, repoFile("templates", "skills", "claude")),
 		"codex":    directorySkillNames(t, repoFile("templates", "skills", "codex")),
@@ -161,14 +161,17 @@ func TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools(t *testing.T) 
 	}
 }
 
-func TestInstalledOnboardingResourcesResolveOutsideCheckout(t *testing.T) {
+func TestInstalledOnboardingAndCatchUpResourcesResolveOutsideCheckout(t *testing.T) {
 	source, err := filepath.Abs(repoFile("templates", "skills"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared, err := os.ReadFile(filepath.Join(source, "memdolt-resources", "onboarding.md"))
-	if err != nil {
-		t.Fatal(err)
+	shared := map[string][]byte{}
+	for _, name := range []string{"onboarding", "catch-up"} {
+		shared[name], err = os.ReadFile(filepath.Join(source, "memdolt-resources", name+".md"))
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	readme, err := os.ReadFile(repoFile("README.md"))
 	if err != nil {
@@ -176,13 +179,13 @@ func TestInstalledOnboardingResourcesResolveOutsideCheckout(t *testing.T) {
 	}
 	for _, host := range []string{"claude", "codex", "opencode"} {
 		t.Run(host, func(t *testing.T) {
-			// Match README's copy layout beside an existing generic memhub skill.
+			// Match README's copy layout beside existing generic memhub skills.
 			installed := t.TempDir()
-			discovery, entry, generic := "skills", "memdolt-init-project/SKILL.md", "recall/SKILL.md"
+			discovery, suffix := "skills", "/SKILL.md"
 			destination := "~/." + host
 			switch host {
 			case "claude":
-				discovery, entry, generic = "commands", "memdolt-init-project.md", "recall.md"
+				discovery, suffix = "commands", ".md"
 			case "opencode":
 				destination = "~/.config/opencode"
 			}
@@ -191,13 +194,17 @@ func TestInstalledOnboardingResourcesResolveOutsideCheckout(t *testing.T) {
 					t.Errorf("README does not document installed path %s", path)
 				}
 			}
-			genericPath := filepath.Join(installed, discovery, filepath.FromSlash(generic))
-			if err := os.MkdirAll(filepath.Dir(genericPath), 0o700); err != nil {
-				t.Fatal(err)
-			}
 			const existing = "existing memhub workflow\n"
-			if err := os.WriteFile(genericPath, []byte(existing), 0o600); err != nil {
-				t.Fatal(err)
+			var genericPaths []string
+			for _, name := range []string{"recall", "catch-up"} {
+				path := filepath.Join(installed, discovery, filepath.FromSlash(name+suffix))
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				genericPaths = append(genericPaths, path)
 			}
 			if err := os.CopyFS(filepath.Join(installed, discovery), os.DirFS(filepath.Join(source, host))); err != nil {
 				t.Fatal(err)
@@ -207,25 +214,33 @@ func TestInstalledOnboardingResourcesResolveOutsideCheckout(t *testing.T) {
 			}
 			// The target project has no templates/ and is not the source checkout.
 			t.Chdir(t.TempDir())
-			entryPath := filepath.Join(installed, discovery, filepath.FromSlash(entry))
-			body, err := os.ReadFile(entryPath)
-			if err != nil {
-				t.Fatal(err)
+			for _, link := range []struct{ from, label, resource string }{
+				{discovery + "/memdolt-init-project" + suffix, "shared onboarding procedure", "onboarding"},
+				{discovery + "/memdolt-catch-up" + suffix, "shared catch-up procedure", "catch-up"},
+				{"memdolt-resources/onboarding.md", "shared catch-up procedure", "catch-up"},
+			} {
+				entryPath := filepath.Join(installed, filepath.FromSlash(link.from))
+				body, err := os.ReadFile(entryPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				match := regexp.MustCompile(`\[` + regexp.QuoteMeta(link.label) + `\]\(([^)]+)\)`).FindSubmatch(body)
+				if len(match) != 2 {
+					t.Fatalf("installed %s lacks its %s link", link.from, link.label)
+				}
+				resolved := filepath.Join(filepath.Dir(entryPath), filepath.FromSlash(string(match[1])))
+				if want := filepath.Join(installed, "memdolt-resources", link.resource+".md"); resolved != want {
+					t.Fatalf("installed link resolved to %s, want %s", resolved, want)
+				}
+				got, err := os.ReadFile(resolved)
+				if err != nil || string(got) != string(shared[link.resource]) {
+					t.Fatalf("installed resource differs or cannot be read: %v", err)
+				}
 			}
-			link := regexp.MustCompile(`\[shared onboarding procedure\]\(([^)]+)\)`).FindSubmatch(body)
-			if len(link) != 2 {
-				t.Fatal("installed onboarding entry point lacks its shared procedure link")
-			}
-			resolved := filepath.Join(filepath.Dir(entryPath), filepath.FromSlash(string(link[1])))
-			if want := filepath.Join(installed, "memdolt-resources", "onboarding.md"); resolved != want {
-				t.Fatalf("installed link resolved to %s, want %s", resolved, want)
-			}
-			got, err := os.ReadFile(resolved)
-			if err != nil || string(got) != string(shared) {
-				t.Fatalf("installed resource differs or cannot be read: %v", err)
-			}
-			if got, err := os.ReadFile(genericPath); err != nil || string(got) != existing {
-				t.Fatalf("copy changed existing memhub workflow: %q, %v", got, err)
+			for _, path := range genericPaths {
+				if got, err := os.ReadFile(path); err != nil || string(got) != existing {
+					t.Fatalf("copy changed existing memhub workflow: %q, %v", got, err)
+				}
 			}
 		})
 	}

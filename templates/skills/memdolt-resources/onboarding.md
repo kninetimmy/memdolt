@@ -30,7 +30,7 @@ choices below; do not repeatedly ask for an action already authorized.
    memhub skills and unrelated entries. Report old installed aliases
    (`check-init`, `recall`, `wrap-up`, `locate`, `eval-locate`, `global`)
    with their paths and apparent ownership for human review; do not delete or
-   overwrite them. Use the seven `memdolt-*` entry points. The shared resource
+   overwrite them. Use the eight `memdolt-*` entry points. The shared resources
    must be copied beside the host's commands/skills root as documented in the
    README; the target project need not contain this source checkout. Preserve
    user trust choices and let the host present its own approval prompts.
@@ -156,6 +156,12 @@ not prove that a live agent followed these instructions.
 
 ## Daily work, transfer and failure recovery
 
+For an existing replica, use `memdolt-catch-up` and the
+[shared catch-up procedure](catch-up.md) to reconcile its selected remote and
+read refreshed local context. This relative resource link also resolves in
+the installed sibling `memdolt-resources/` directory. Catch-up honors existing
+transfer/refresh authorization and leaves model provisioning an explicit choice.
+
 Use `memdolt-recall` / `memdolt-locate` during work and `memdolt-wrap-up` to
 inspect and separately approve changed narratives before rendering. Its existing
 task/command/proposal approvals remain. OpenCode wrap-up must verify the current
@@ -167,13 +173,15 @@ Drive snapshot adoption becomes an explicitly selected Dolt remote workflow:
 clone once, then authorized pull/merge → refresh local vectors and views → work
 → human review → wrap-up/render/flush → authorized push. Use
 `repo remote list` and `repo status --local` to inspect offline; remote-aware
-`repo status --diff` may fetch and needs transfer authorization too.
+`repo status --diff` fetches and needs transfer authorization too.
 `pull <remote> --json` reports actual conflict choices; provide a complete
 human-reviewed `pull <remote> --resolve <file>` or the supported MCP human forms.
 Never synthesize confirmation. Push publishes committed main without forcing;
 it neither accepts proposals nor flushes notes. After pull/merge, run
 `index status`, approved `index rebuild` if needed, and `render` explicitly.
-There is no Drive adopt step or new catch-up workflow.
+Before #157, this guidance stated: "There is no Drive adopt step or new catch-up
+workflow." After it, `memdolt-catch-up` supplies the shared host procedure above;
+there is still no Drive adopt step or new catch-up runtime command.
 
 Pending proposal branches and queued MCP notes do not transfer. Models, memory
 vectors, code indexes, rendered files and per-machine configuration stay local.
