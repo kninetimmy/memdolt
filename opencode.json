@@ -10,6 +10,10 @@
     }
   },
   "commands": {
+    "memdolt-catch-up": {
+      "description": "Catch up selected Memdolt remote memory and refresh local context",
+      "template": "Use the memdolt-catch-up skill. Arguments: $ARGUMENTS"
+    },
     "memdolt-init-project": {
       "description": "Guide Memdolt project bootstrap and approved narratives",
       "template": "Use the memdolt-init-project skill. Arguments: $ARGUMENTS"

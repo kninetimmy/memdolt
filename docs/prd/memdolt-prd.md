@@ -2462,6 +2462,92 @@ nontransferred proposals/queued notes and the still-refusing global proposal
 acceptance path retain their existing contracts. No runtime code, dependency,
 schema, auto-migration, live configuration or hub deployment changes.
 
+### 11.6 Existing-repository catch-up (issue #157)
+
+Before this delivery, §11.5's seven host workflows and shared onboarding
+guidance described the daily transfer sequence but left a new catch-up
+workflow outside that slice. After it, `memdolt-catch-up` is the eighth
+namespaced entry point for each host. It selects an existing repository and
+configured remote, fetches status, performs authorized reconciliation with
+human conflict choices, then refreshes applicable local vectors and rendered
+context. It adds no CLI command, MCP tool, installer or transfer implementation.
+The complete touched structure is:
+
+- New `templates/skills/memdolt-resources/catch-up.md` owns the shared procedure:
+  authority/absolute-target/live-MCP binding checks, offline local/remotes
+  inspection, selected-remote fetch/diff, current/ahead/behind/divergence and
+  refusal handling, authorized pull and complete hash-bound human resolution.
+  It retains the shipped owner/credential, main-only transfer, proposal/queued
+  note exclusion and separate-global contracts. MCP forms retain single-use
+  continuation after nine forms and fresh review after cancel/expiry/restart
+  or changed heads. Vector staleness is distinct from configured retrieval
+  mode, verified model availability and authorization; FTS-only work can skip
+  vectors without changing configuration or provisioning models. Explicit
+  render accounts for queued note commits, then reads the resulting context
+  and queue without reseeding narratives or inventing work. Confirmed hashes,
+  noteCommits and file/backup effects remain visible on later failures;
+  unknown or partial outcomes stop dependent work for inspection, not replay.
+- New `templates/skills/claude/memdolt-catch-up.md`,
+  `templates/skills/codex/memdolt-catch-up/SKILL.md` and
+  `templates/skills/opencode/memdolt-catch-up/SKILL.md` keep the existing
+  host-specific frontmatter conventions and load that one procedure relative
+  to the installed entry point. Missing resources refuse the workflow. The
+  prior seven templates per host and generic installed memhub files remain.
+- `templates/skills/memdolt-resources/onboarding.md` updates its discovery count
+  and links the sibling catch-up resource for daily use. Its former statement
+  that no new catch-up workflow exists is preserved there as before/after;
+  the new source procedure replaces only that absence. Onboarding's authority,
+  setup choices, separate narrative approvals, host attribution, optional
+  model/doc/global/remote setup, migration boundary and outcome rules remain.
+- `opencode.json` adds one `memdolt-catch-up` command referencing that exact
+  skill. Its seven previous commands, native V2 server registration and
+  source-relative skills array are unchanged; no live host configuration is
+  installed or rewritten.
+- `README.md` updates the three Quickstart package counts from seven to eight,
+  exposes catch-up under moving between machines and clarifies that status
+  fetches. MCP/hosts preserves the historical seven-workflow record and adds
+  the eighth with both shared filenames under the existing sibling-resource
+  copy layout. Existing collision inspection, generic memhub preservation,
+  target/binding, trust, model/credential and transfer limits remain.
+- `cmd/memdolt/host_templates_test.go` extends
+  `TestTrackedHostRegistrationsUseNativeCoexistingShapes` and
+  `TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools` to expect
+  eight names/exact OpenCode references, retaining every previous registration,
+  frontmatter and wrap-up check. The former
+  `TestInstalledOnboardingResourcesResolveOutsideCheckout` becomes
+  `TestInstalledOnboardingAndCatchUpResourcesResolveOutsideCheckout`: it copies
+  the same documented layout, resolves both entry-point links and onboarding's
+  sibling link from an unrelated cwd, compares actual resource bytes, and
+  preserves generic recall and catch-up fixtures. Enumeration/JSON helpers
+  and the exclusion of shared resources from discovery remain unchanged.
+- New `cmd/memdolt/catch_up_test.go` adds
+  `TestCatchUpFTSRecipePreservesContextAfterReopening`, using existing disposable
+  CLI/remote/owner helpers. Direct and real owner-process cases inspect local
+  and named remote state, pull a behind replica, observe unchanged views until
+  explicit render, then reopen and read narratives, rendered context, tasks,
+  pending proposals and current heads. FTS retrieves the incoming task despite
+  missing vectors, preserving local configuration and an empty model location.
+  The recipe deliberately skips optional vector rebuilding. Existing tests
+  retain real inference, conflict forms/cursors and late/unknown render/transfer
+  coverage; this recipe does not claim to exercise those branches anew.
+- This PRD adds this bounded delivery and the §12/§16 follow-ups while keeping
+  the prior scope records, parity baseline and acceptance gates.
+
+The new authority/authorization/sequence restrictions bind the catch-up host
+procedure, not every CLI/MCP caller. `RepoStatus` still fetches and rolls back
+its merge preview without promoting main; `Pull` retains its separate schema,
+deny-list and merge validation. Their mutation mutex coordinates cooperating
+Memdolt operations, not foreign Dolt sessions. `index status` compares source
+and vector rows, not mode/artifacts; `index rebuild` can lazily open the existing
+engine, which verifies/provisions both models, tokenizers and native runtime.
+`Toolset.Render` flushes that owner's queue; standalone `Store.Render` has no
+session queue. These named operations keep those specific boundaries, not a
+new blanket rule for all readers/writers. `RegisterTools` still registers 22
+tools. No runtime code, dependency, schema, model manifest, golden assertion,
+user memory, installed host file or global replica changes. Package/CLI recipe
+evidence does not establish live-agent compliance, real hybrid catch-up, cold
+client-process behavior or physical two-client/hub acceptance.
+
 ---
 
 ## 12. Feature parity matrix (memhub v0.2.0 baseline + v0.2.2 OpenCode 2 supplement → memdolt)
@@ -2497,6 +2583,12 @@ Every ordinary row uses v0.2.0 as its baseline. Rows explicitly labeled v0.2.2 a
 | OpenCode session-note provenance and memhub export-v1 import (v0.2.2 supplement) | port nullable verified session metadata without changing note text or actor/source semantics (§6.1, §11.4, §15) |
 | OpenCode complete unredacted transcript export (v0.2.2 supplement) | port the separately approved, validated, local-only `.json.zst` archive; never recall, embed, or export it (§11.4) |
 | OpenCode hibernated discovery and wrapper resync (v0.2.2 supplement) | keep hibernated surfaces undiscovered; report-only actionable orphans, never overwrite or delete user files (§11.4) |
+
+Before #157, the skills row above characterized catch-up as trivial `pull`.
+After it, §11.6 ships the bounded host procedure with target/remote inspection,
+authorized pull and human conflict review, explicit applicable local refresh,
+and confirmed/unknown outcome handling. The remaining skill set and M5 parity
+still need their separate delivery; this is not full memhub workflow parity.
 
 Before #139 the CRUD row's `port (§6)` still left ordinary human fact/decision
 commands deferred. After it, the repository human subset in §11.2 ships,
@@ -2802,6 +2894,15 @@ They do not establish live three-host compliance, replace M3's acceptance
 record, complete the M5 parity matrix or change physical M4/M6 gates. Catch-up,
 optional user migration, global proposal acceptance and runtime upgrade/audit
 work remain separate.
+
+**Catch-up workflow subset (issue #157):** the #155 scope record above left
+catch-up separate. After #157, §11.6 adds it through existing operations and
+the same portable host layout. Package-copy and disposable direct/owner FTS
+recipes exercise resource resolution, pull, explicit view refresh and reopened
+context/queue. They do not prove live human-approval compliance, real hybrid
+catch-up, physical two-client acceptance or completion of M4/M5/M6. Optional
+user migration, global proposal acceptance and runtime audit/upgrade remain
+separate work.
 
 **M4 Linux hub subset (issue #147):** the historical subset records below left
 hub setup, authentication instructions and measured startup compatibility pending.

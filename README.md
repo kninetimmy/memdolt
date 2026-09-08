@@ -62,7 +62,7 @@ https://github.com/kninetimmy/memdolt/blob/main/README.md.
    Claude MCP configuration. Preserve every other entry and let Claude
    handle its own trust/approval prompts. Use serve --dir with this
    project's absolute path if the launch directory is not guaranteed.
-4. Offer the seven memdolt-* templates in templates/skills/claude/ for
+4. Offer the eight memdolt-* templates in templates/skills/claude/ for
    ~/.claude/commands/, plus templates/skills/memdolt-resources/ for
    ~/.claude/memdolt-resources/. Follow the MCP and hosts copy layout.
    Preserve existing commands, including memhub, and report old aliases
@@ -101,7 +101,7 @@ https://github.com/kninetimmy/memdolt/blob/main/README.md.
    project's absolute path as a TOML string>]. Preserve all other
    settings. Resolve an existing server name before changing it.
    Let Codex handle project trust; do not silently mark paths trusted.
-4. Offer the seven memdolt-* directories in templates/skills/codex/ for
+4. Offer the eight memdolt-* directories in templates/skills/codex/ for
    ~/.codex/skills/, plus templates/skills/memdolt-resources/ for
    ~/.codex/memdolt-resources/. Follow the MCP and hosts copy layout.
    Preserve existing skills, including memhub, and report old aliases
@@ -140,7 +140,7 @@ https://github.com/kninetimmy/memdolt/blob/main/README.md.
    mcp.servers.memdolt entry, commands, and a real skills path.
    Do not replace the whole configuration or copy a relative skills
    path that does not exist in this project. Preserve user settings.
-4. Offer the seven memdolt-* directories in templates/skills/opencode/
+4. Offer the eight memdolt-* directories in templates/skills/opencode/
    for ~/.config/opencode/skills/, plus templates/skills/memdolt-resources/
    for ~/.config/opencode/memdolt-resources/. Preserve existing skills,
    including memhub; report old aliases for human review without deletion.
@@ -479,6 +479,15 @@ collisions, document defaults, sync, and recovery.
 
 ## Moving between machines
 
+For an existing local repository, invoke `memdolt-catch-up` after installing
+the [host workflows](#mcp-and-hosts). Its
+[shared procedure](templates/skills/memdolt-resources/catch-up.md) verifies
+the target and selected remote, fetches status, performs authorized pull/merge
+with human conflict choices, then refreshes applicable local vectors and
+rendered context. Existing authorization carries forward. Model provisioning
+is a separate choice; session render can commit queued notes. It reports
+confirmed/unknown/partial effects and the refreshed queue without auto-pushing.
+
 Each client gets a local clone. The URLs below are **placeholders** for an
 already configured remotesapi endpoint and database, not an address to deploy:
 
@@ -512,7 +521,7 @@ choices needed. Review the full result and supply a complete resolution with
 There is no Drive snapshot adoption step. Pending proposals/queued notes do
 not transfer; models, indexes, views and configuration remain local. Global
 memory uses separate remotes, explicit `--global` transfers and local refresh.
-Remote-aware status may fetch and also needs transfer authorization. See the
+Remote-aware status fetches and also needs transfer authorization. See the
 [transfer and conflict contract](docs/prd/memdolt-prd.md).
 
 ### Self-host a hub
@@ -630,11 +639,13 @@ tool discovery. `doctor` checks store health and recognizes OpenCode
 registration; it does not validate all three hosts or grant trust.
 
 Before #155, six generic workflows shipped: **check-init, recall, wrap-up,
-locate, eval-locate, global**. After it, all seven shipped entry points use
+locate, eval-locate, global**. After it, seven entry points used
 namespaced filenames/directories and frontmatter: **memdolt-check-init,
 memdolt-eval-locate, memdolt-global, memdolt-init-project, memdolt-locate,
-memdolt-recall, memdolt-wrap-up**. Install only selected workflows using this
-copy layout; copy the shared resource with onboarding:
+memdolt-recall, memdolt-wrap-up**. Issue #157 adds **memdolt-catch-up** as the
+eighth, preserving those workflows and native MCP registrations. Install only
+selected workflows using this copy layout; copy the shared resources with
+onboarding or catch-up:
 
 | Host | Source | User destination |
 | --- | --- | --- |
@@ -645,8 +656,10 @@ copy layout; copy the shared resource with onboarding:
 
 Copy each selected file/directory with its name intact. The resource directory
 is a **sibling** of `commands/` or `skills/`, outside workflow discovery.
-Claude's onboarding link is `../memdolt-resources/onboarding.md`; Codex and
-OpenCode use `../../memdolt-resources/onboarding.md` from their `SKILL.md`.
+Claude's shared links use `../memdolt-resources/`; Codex and OpenCode use
+`../../memdolt-resources/` from their `SKILL.md`. The resource filenames are
+`onboarding.md` and `catch-up.md`; keep both together so onboarding's link to
+catch-up also resolves.
 Resolve links relative to the installed entry point, not the project directory.
 This layout works with a target project that has no Memdolt source checkout.
 
