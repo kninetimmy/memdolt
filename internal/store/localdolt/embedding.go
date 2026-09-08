@@ -58,6 +58,9 @@ func (s *Store) EmbeddingSources(ctx context.Context) ([]store.EmbeddingSource, 
 		},
 	}
 	for _, query := range queries {
+		if s.globalRepo != nil && query.sourceType == "task" {
+			continue
+		}
 		rows, err := conn.QueryContext(ctx, query.sql)
 		if err != nil {
 			return nil, fmt.Errorf("localdolt: read %s embedding sources: %w", query.sourceType, err)

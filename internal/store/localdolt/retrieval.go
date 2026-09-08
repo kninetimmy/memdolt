@@ -30,8 +30,10 @@ func (s *Store) RecallSources(ctx context.Context) ([]store.RecallSource, error)
 	if err := appendDecisionSources(ctx, conn, &sources); err != nil {
 		return nil, err
 	}
-	if err := appendTaskSources(ctx, conn, &sources); err != nil {
-		return nil, err
+	if s.globalRepo == nil {
+		if err := appendTaskSources(ctx, conn, &sources); err != nil {
+			return nil, err
+		}
 	}
 	if err := appendDocumentSources(ctx, conn, &sources); err != nil {
 		return nil, err
@@ -65,6 +67,9 @@ func (s *Store) RecallFTS(ctx context.Context, query string, sourceTypes []strin
 	seenTypes := map[string]bool{}
 	var hits []store.LexicalHit
 	for _, sourceType := range sourceTypes {
+		if s.globalRepo != nil && sourceType == "task" {
+			continue
+		}
 		if seenTypes[sourceType] {
 			continue
 		}

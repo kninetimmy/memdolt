@@ -55,6 +55,7 @@ type Options struct {
 }
 
 type Warning struct {
+	Scope      string `json:"scope,omitempty"`
 	Kind       string `json:"kind"`
 	StaleCount int    `json:"staleCount"`
 	TotalCount int    `json:"totalCount"`
@@ -63,21 +64,23 @@ type Warning struct {
 }
 
 type Hit struct {
-	Rank         int                     `json:"rank"`
-	SourceType   string                  `json:"sourceType"`
-	SourceID     string                  `json:"sourceId"`
-	Title        string                  `json:"title"`
-	Body         string                  `json:"body"`
-	Score        float64                 `json:"score"`
-	FTSScore     float64                 `json:"ftsScore"`
-	VectorScore  float64                 `json:"vectorScore"`
-	Stale        bool                    `json:"stale"`
-	SupersededBy string                  `json:"supersededBy,omitempty"`
-	Source       string                  `json:"source,omitempty"`
-	CreatedAt    time.Time               `json:"createdAt"`
-	RerankScore  *float32                `json:"rerankScore,omitempty"`
-	Kind         string                  `json:"kind,omitempty"`
-	LastChanged  *store.CommitProvenance `json:"lastChanged,omitempty"`
+	Scope          string                  `json:"scope,omitempty"`
+	SnapshotCommit string                  `json:"snapshotCommit,omitempty"`
+	Rank           int                     `json:"rank"`
+	SourceType     string                  `json:"sourceType"`
+	SourceID       string                  `json:"sourceId"`
+	Title          string                  `json:"title"`
+	Body           string                  `json:"body"`
+	Score          float64                 `json:"score"`
+	FTSScore       float64                 `json:"ftsScore"`
+	VectorScore    float64                 `json:"vectorScore"`
+	Stale          bool                    `json:"stale"`
+	SupersededBy   string                  `json:"supersededBy,omitempty"`
+	Source         string                  `json:"source,omitempty"`
+	CreatedAt      time.Time               `json:"createdAt"`
+	RerankScore    *float32                `json:"rerankScore,omitempty"`
+	Kind           string                  `json:"kind,omitempty"`
+	LastChanged    *store.CommitProvenance `json:"lastChanged,omitempty"`
 }
 
 type Response struct {
@@ -121,6 +124,10 @@ type candidate struct {
 // and MCP call this same application seam so mode selection, warnings,
 // observability, and close failures cannot drift between surfaces.
 func Run(ctx context.Context, st Store, baseDir string, options Options) (Response, error) {
+	return run(ctx, st, baseDir, options, nil)
+}
+
+func run(ctx context.Context, st Store, baseDir string, options Options, global *GlobalScope) (Response, error) {
 	paths, err := layout.New(baseDir)
 	if err != nil {
 		return Response{}, err
@@ -140,7 +147,13 @@ func Run(ctx context.Context, st Store, baseDir string, options Options) (Respon
 			return Response{}, err
 		}
 	}
-	response, recallErr := Recall(ctx, st, paths.EmbeddingsFile(), engine, cfg, options)
+	var response Response
+	var recallErr error
+	if global != nil {
+		response, recallErr = recallCombined(ctx, st, paths.EmbeddingsFile(), engine, cfg, options, *global)
+	} else {
+		response, recallErr = Recall(ctx, st, paths.EmbeddingsFile(), engine, cfg, options)
+	}
 	if engine != nil {
 		recallErr = errors.Join(recallErr, engine.Close())
 	}
@@ -152,6 +165,10 @@ func Run(ctx context.Context, st Store, baseDir string, options Options) (Respon
 // whose derived vector is missing or invalid, and that exception is always
 // accompanied by stale_embeddings.
 func Recall(ctx context.Context, st Store, embeddingsPath string, inference Inference, cfg Config, options Options) (Response, error) {
+	return recall(ctx, st, embeddingsPath, inference, cfg, options, nil)
+}
+
+func recall(ctx context.Context, st Store, embeddingsPath string, inference Inference, cfg Config, options Options, combined *combinedStore) (Response, error) {
 	started := time.Now()
 	resolved, err := resolve(cfg, options)
 	if err != nil {
@@ -177,6 +194,9 @@ func Recall(ctx context.Context, st Store, embeddingsPath string, inference Infe
 	ageByKey := make(map[sourceKey]*float64)
 	staleByKey := make(map[sourceKey]bool)
 	for _, source := range sources {
+		if combined != nil && !combined.include(source) {
+			continue
+		}
 		if !allowed[source.SourceType] || (resolved.acceptedOnly && !acceptedSource(source.Source)) {
 			continue
 		}
@@ -212,7 +232,11 @@ func Recall(ctx context.Context, st Store, embeddingsPath string, inference Infe
 				eligibleEmbeddings = append(eligibleEmbeddings, source)
 			}
 		}
-		vectors, status, err := embedding.CurrentVectors(ctx, embeddingsPath, eligibleEmbeddings)
+		currentVectors := embedding.CurrentVectors
+		if combined != nil {
+			currentVectors = combined.currentVectors
+		}
+		vectors, status, err := currentVectors(ctx, embeddingsPath, eligibleEmbeddings)
 		if err != nil {
 			return Response{}, err
 		}
@@ -224,8 +248,11 @@ func Recall(ctx context.Context, st Store, embeddingsPath string, inference Infe
 			}
 		}
 		staleCount := status.Missing + status.ContentHashMismatched + status.WrongByteLength
-		if staleCount > 0 {
+		if staleCount > 0 && combined == nil {
 			warnings = append(warnings, staleEmbeddingWarning(status, len(eligibleEmbeddings)))
+		}
+		if combined != nil {
+			warnings = append(warnings, combined.warnings...)
 		}
 
 		queryVector, err := inference.Embed(resolved.query)

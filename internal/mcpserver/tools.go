@@ -14,6 +14,7 @@ import (
 	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/render"
 	"github.com/kninetimmy/memdolt/internal/retrieval"
+	"github.com/kninetimmy/memdolt/internal/scopedrecall"
 	"github.com/kninetimmy/memdolt/internal/search"
 	"github.com/kninetimmy/memdolt/internal/store"
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
@@ -170,7 +171,7 @@ func (t *Toolset) recall(ctx context.Context, _ *mcp.CallToolRequest, in recallI
 		use := false
 		options.UseReranker = &use
 	}
-	response, err := retrieval.Run(ctx, t.store, t.baseDir, options)
+	response, err := scopedrecall.Run(ctx, t.store, t.baseDir, options)
 	return &mcp.CallToolResult{}, response, err
 }
 

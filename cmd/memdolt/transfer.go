@@ -81,7 +81,7 @@ func newTransferCommand(operation string) *cobra.Command {
 					return err
 				}
 			}
-			st, err := openCommandStore(cmd.Context(), flags.dir, cliActor)
+			st, err := flags.open(cmd.Context(), cliActor)
 			if err != nil {
 				return err
 			}
@@ -95,6 +95,7 @@ func newTransferCommand(operation string) *cobra.Command {
 	if operation == "pull" {
 		cmd.Flags().StringVar(&resolutionFile, "resolve", "", "complete conflict-resolution JSON file; - reads stdin; bound to the displayed local/remote hashes")
 	}
+	flags.bindGlobal(cmd)
 	return flags.bind(cmd)
 }
 

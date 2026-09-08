@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kninetimmy/memdolt/internal/embedding"
-	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
 )
 
@@ -35,7 +34,7 @@ func newIndexRebuildCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				paths, err := layout.New(flags.dir)
+				paths, err := flags.paths()
 				if err != nil {
 					return err
 				}
@@ -64,6 +63,7 @@ func newIndexRebuildCommand() *cobra.Command {
 			})
 		},
 	}
+	flags.bindGlobal(cmd)
 	return flags.bind(cmd)
 }
 
@@ -79,7 +79,7 @@ func newIndexStatusCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				paths, err := layout.New(flags.dir)
+				paths, err := flags.paths()
 				if err != nil {
 					return err
 				}
@@ -104,5 +104,6 @@ func newIndexStatusCommand() *cobra.Command {
 			})
 		},
 	}
+	flags.bindGlobal(cmd)
 	return flags.bind(cmd)
 }

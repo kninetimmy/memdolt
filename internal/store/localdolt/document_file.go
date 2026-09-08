@@ -16,7 +16,8 @@ import (
 )
 
 type documentConfig struct {
-	Doc struct {
+	Global GlobalConfig `toml:"global"`
+	Doc    struct {
 		AllowedDirs []string `toml:"allowed_dirs"`
 	} `toml:"doc"`
 	Retrieval struct {
@@ -27,19 +28,9 @@ type documentConfig struct {
 // A missing optional config uses defaults. An existing link, unreadable file,
 // malformed TOML or invalid doc table never becomes an empty allow-list.
 func readDocumentConfig(root *os.Root) (cfg documentConfig, raw []byte, mode os.FileMode, err error) {
-	info, err := root.Lstat(layout.ConfigFileName)
-	if os.IsNotExist(err) {
-		return cfg, nil, 0o600, nil
-	}
+	raw, mode, err = readConfigBytes(root)
 	if err != nil {
-		return cfg, nil, 0, fmt.Errorf("inspect document configuration: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return cfg, nil, 0, errors.New("document configuration must be a regular file, not a link or directory")
-	}
-	raw, err = root.ReadFile(layout.ConfigFileName)
-	if err != nil {
-		return cfg, nil, 0, fmt.Errorf("read document configuration: %w", err)
+		return cfg, nil, 0, err
 	}
 	metadata, err := toml.Decode(string(raw), &cfg)
 	if err != nil {
@@ -49,11 +40,50 @@ func readDocumentConfig(root *os.Root) (cfg documentConfig, raw []byte, mode os.
 		if len(key) > 0 && key[0] == "doc" {
 			return cfg, nil, 0, errors.New("unknown [doc] configuration key; use allowed_dirs")
 		}
+		if len(key) > 0 && key[0] == "global" {
+			return cfg, nil, 0, errors.New("unknown [global] configuration key; use enabled or include_docs_in_default")
+		}
 	}
-	return cfg, raw, info.Mode().Perm(), nil
+	return cfg, raw, mode, nil
+}
+
+// File protection is shared; each consumer decodes only its own policy tables.
+func readConfigBytes(root *os.Root) (raw []byte, mode os.FileMode, err error) {
+	info, err := root.Lstat(layout.ConfigFileName)
+	if os.IsNotExist(err) {
+		return nil, 0o600, nil
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect document configuration: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, 0, errors.New("document configuration must be a regular file, not a link or directory")
+	}
+	file, err := root.Open(layout.ConfigFileName)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read document configuration: %w", err)
+	}
+	opened, statErr := file.Stat()
+	if statErr == nil && (!opened.Mode().IsRegular() || !os.SameFile(info, opened) || globalUnsafeLink(info)) {
+		statErr = errors.New("document configuration identity changed or is a reparse point")
+	}
+	if statErr == nil {
+		statErr = layout.CheckOwnerSource(root, opened)
+	}
+	if statErr != nil {
+		return nil, 0, errors.Join(statErr, file.Close())
+	}
+	raw, err = io.ReadAll(file)
+	if err = errors.Join(err, file.Close()); err != nil {
+		return nil, 0, fmt.Errorf("read document configuration: %w", err)
+	}
+	return raw, info.Mode().Perm(), nil
 }
 
 func (s *Store) documentConfigRoot() (*os.Root, error) {
+	if s.globalRepo != nil {
+		return globalConfigRoot(s.globalRepo.Base())
+	}
 	base, err := filepath.EvalSymlinks(s.paths.Base())
 	if err != nil {
 		return nil, fmt.Errorf("resolve document repository root: %w", err)
@@ -69,20 +99,33 @@ func (s *Store) documentConfigRoot() (*os.Root, error) {
 // latest complete config into a map so unknown tables survive semantically.
 // A temporary file and rooted rename avoid truncating the operator's config.
 func enableDocumentRecall(root *os.Root) (enabled bool, err error) {
-	cfg, raw, mode, err := readDocumentConfig(root)
-	if err != nil || cfg.Retrieval.IncludeDocsInDefault {
+	return setDocumentConfigBool(root, "retrieval", "include_docs_in_default", true)
+}
+
+func enableGlobalDocumentRecall(root *os.Root) (bool, error) {
+	return setDocumentConfigBool(root, "global", "include_docs_in_default", true)
+}
+
+// This same rooted replacement now also owns the two per-repo global flags.
+// Other TOML values, concurrent-edit detection and final-interval limits remain.
+func setDocumentConfigBool(root *os.Root, table, key string, value bool) (changed bool, err error) {
+	_, raw, mode, err := readDocumentConfig(root)
+	if err != nil {
 		return false, err
 	}
 	values := map[string]any{}
 	if _, err := toml.Decode(string(raw), &values); err != nil {
 		return false, fmt.Errorf("parse configuration for document recall: %w", err)
 	}
-	retrieval, ok := values["retrieval"].(map[string]any)
+	retrieval, ok := values[table].(map[string]any)
 	if !ok {
 		retrieval = map[string]any{}
-		values["retrieval"] = retrieval
+		values[table] = retrieval
 	}
-	retrieval["include_docs_in_default"] = true
+	if old, _ := retrieval[key].(bool); old == value {
+		return false, nil
+	}
+	retrieval[key] = value
 	var encoded bytes.Buffer
 	if err := toml.NewEncoder(&encoded).Encode(values); err != nil {
 		return false, fmt.Errorf("encode document recall configuration: %w", err)
@@ -147,7 +190,7 @@ func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig, metadat
 	}
 	file := opts.File
 	if !filepath.IsAbs(file) {
-		file = filepath.Join(s.paths.Base(), file)
+		file = filepath.Join(s.policyPaths().Base(), file)
 	}
 	path, err = filepath.EvalSymlinks(file)
 	if err != nil {
@@ -164,7 +207,7 @@ func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig, metadat
 	}
 	rootPath := filepath.Dir(path)
 	if opts.Confined {
-		base, err := filepath.EvalSymlinks(s.paths.Base())
+		base, err := filepath.EvalSymlinks(s.policyPaths().Base())
 		if err != nil {
 			return "", nil, fmt.Errorf("resolve document repository root: %w", err)
 		}
@@ -224,6 +267,15 @@ func (s *Store) readDocumentFile(opts DocAddOptions, cfg documentConfig, metadat
 	if err := checkDocumentOwnerFile(metadata, info); err != nil {
 		return "", nil, err
 	}
+	if s.globalRepo != nil {
+		globalMetadata, err := os.OpenRoot(s.paths.Dir())
+		if err != nil {
+			return "", nil, fmt.Errorf("open global owner metadata for source protection: %w", err)
+		}
+		if err := errors.Join(checkDocumentOwnerFile(globalMetadata, info), globalMetadata.Close()); err != nil {
+			return "", nil, err
+		}
+	}
 	data, err = io.ReadAll(opened)
 	if err != nil {
 		return "", nil, fmt.Errorf("read document file: %w", err)
@@ -248,7 +300,7 @@ func checkDocumentOwnerFile(metadata *os.Root, source os.FileInfo) (err error) {
 func (s *Store) documentIdentityPath(ident string) (string, error) {
 	path := ident
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(s.paths.Base(), path)
+		path = filepath.Join(s.policyPaths().Base(), path)
 	}
 	missing := ""
 	for {

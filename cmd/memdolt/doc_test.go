@@ -241,10 +241,10 @@ func TestDocumentCLIMissingUnsupportedAndOwnerFailures(t *testing.T) {
 			t.Fatalf("owner failure attempted direct fallback: %v", err)
 		}
 	}
-	if help := runMemdolt(t, "doc", "--help"); strings.Contains(help, "--global") || !strings.Contains(help, "2000-character") || !strings.Contains(help, "allowed_dirs") {
+	if help := runMemdolt(t, "doc", "--help"); !strings.Contains(help, "--global") || !strings.Contains(help, "2000-character") || !strings.Contains(help, "allowed_dirs") {
 		t.Fatalf("document help = %s", help)
 	}
-	if err := runMemdoltErr(t, "doc", "add", "file.md", "--global"); !strings.Contains(err, "unknown flag") {
+	if err := runMemdoltErr(t, "doc", "add", "file.md", "--global", "--dir", base); !strings.Contains(err, "disabled") {
 		t.Fatal(err)
 	}
 }

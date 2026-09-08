@@ -39,7 +39,7 @@ func newRepoRemoteCommand() *cobra.Command {
 				if err := localdolt.RequireExistingTransferStore(flags.dir); err != nil {
 					return err
 				}
-				st, err := openCommandStore(cmd.Context(), flags.dir, cliActor)
+				st, err := flags.open(cmd.Context(), cliActor)
 				if err != nil {
 					return err
 				}
@@ -64,6 +64,7 @@ func newRepoRemoteCommand() *cobra.Command {
 				"before retrying. Remote status/diff, merges and hub setup remain separate."
 			child.Flags().StringVar(&user, "user", "", "SQL username to store; no password is needed or stored for configuration")
 		}
+		flags.bindGlobal(child)
 		cmd.AddCommand(flags.bind(child))
 	}
 	return cmd
