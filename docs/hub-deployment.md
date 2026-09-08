@@ -108,7 +108,7 @@ test -n "$DOLT_ROOT_PASSWORD" || exit 1
 export DOLT_ROOT_PASSWORD
 export DOLT_DISABLE_EVENT_FLUSH=1
 /usr/local/bin/dolt sql-server --host 127.0.0.1 --port 13307 \
-  --data-dir /srv/memdolt-hub --cfg-dir /srv/memdolt-hub/.doltcfg \
+  --data-dir /srv/memdolt-hub --doltcfg-dir /srv/memdolt-hub/.doltcfg \
   --privilege-file /srv/memdolt-hub/.doltcfg/privileges.db \
   --socket /srv/memdolt-hub/dolt.sock
 # After the bootstrap server has stopped:

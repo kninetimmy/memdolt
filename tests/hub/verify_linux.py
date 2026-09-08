@@ -180,7 +180,7 @@ def verify(root, source_memdolt, source_dolt, uid):
         native_env = {"PATH": "/usr/bin:/bin", "HOME": str(data), "DOLT_ROOT_PASSWORD": uuid.uuid4().hex,
                       "DOLT_DISABLE_EVENT_FLUSH": "1"}
         bootstrap = spawn(as_user([dolt, "sql-server", "--host", "127.0.0.1", "--port", "13307",
-                                  "--data-dir", data, "--cfg-dir", data / ".doltcfg",
+                                  "--data-dir", data, "--doltcfg-dir", data / ".doltcfg",
                                   "--privilege-file", data / ".doltcfg/privileges.db", "--socket", data / "dolt.sock"]), native_env)
         for _ in range(100):
             if connect(hub_ns, "127.0.0.1", 13307):
