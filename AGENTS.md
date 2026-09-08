@@ -58,7 +58,9 @@ The complete structural blast radius is:
   upsert/supersession rules and confirmed result-plus-error behavior.
 - `document_file.go` reuses the rooted config replacement for global enablement
   and default-doc flags. Opened configuration identity, regular/reparse and
-  owner-alias checks precede its content read. Other TOML tables survive as
+  owner-alias checks precede its content read. The raw reader is shared but
+  ReadGlobalConfig decodes only [global], preserving disabled recall's prior
+  independence from unrelated document settings. Other TOML tables survive as
   before. Global document sources use calling-repo policy and protect both
   known owner credential identities; local sources retain their existing check.
   `documents.go` retains hashes, ids, scoped reads/removal, replacement chunks
@@ -98,7 +100,8 @@ The complete structural blast radius is:
   selection. `root.go` adds that family. `lanes.go` keeps its existing route
   unless a command explicitly enables the new flag. `human_memory.go` adds
   promotion and scoped human flags/result notices; `doc.go` adds scoped flags,
-  remove alias and config notice. `index.go`, `remote.go`, `repo.go` and
+  remove alias and config notice, preserving a confirmed config-only flip after
+  later close/output failures too. `index.go`, `remote.go`, `repo.go` and
   `transfer.go` reuse existing operations with global selection; their ordinary
   routing, authentication, result/close contracts and conflict behavior remain.
   `recall.go` and MCP `tools.go` call the shared seam; CLI adds scope labels.

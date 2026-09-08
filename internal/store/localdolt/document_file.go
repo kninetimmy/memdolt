@@ -28,33 +28,9 @@ type documentConfig struct {
 // A missing optional config uses defaults. An existing link, unreadable file,
 // malformed TOML or invalid doc table never becomes an empty allow-list.
 func readDocumentConfig(root *os.Root) (cfg documentConfig, raw []byte, mode os.FileMode, err error) {
-	info, err := root.Lstat(layout.ConfigFileName)
-	if os.IsNotExist(err) {
-		return cfg, nil, 0o600, nil
-	}
+	raw, mode, err = readConfigBytes(root)
 	if err != nil {
-		return cfg, nil, 0, fmt.Errorf("inspect document configuration: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return cfg, nil, 0, errors.New("document configuration must be a regular file, not a link or directory")
-	}
-	file, err := root.Open(layout.ConfigFileName)
-	if err != nil {
-		return cfg, nil, 0, fmt.Errorf("read document configuration: %w", err)
-	}
-	opened, statErr := file.Stat()
-	if statErr == nil && (!opened.Mode().IsRegular() || !os.SameFile(info, opened) || globalUnsafeLink(info)) {
-		statErr = errors.New("document configuration identity changed or is a reparse point")
-	}
-	if statErr == nil {
-		statErr = layout.CheckOwnerSource(root, opened)
-	}
-	if statErr != nil {
-		return cfg, nil, 0, errors.Join(statErr, file.Close())
-	}
-	raw, err = io.ReadAll(file)
-	if err = errors.Join(err, file.Close()); err != nil {
-		return cfg, nil, 0, fmt.Errorf("read document configuration: %w", err)
+		return cfg, nil, 0, err
 	}
 	metadata, err := toml.Decode(string(raw), &cfg)
 	if err != nil {
@@ -68,7 +44,40 @@ func readDocumentConfig(root *os.Root) (cfg documentConfig, raw []byte, mode os.
 			return cfg, nil, 0, errors.New("unknown [global] configuration key; use enabled or include_docs_in_default")
 		}
 	}
-	return cfg, raw, info.Mode().Perm(), nil
+	return cfg, raw, mode, nil
+}
+
+// File protection is shared; each consumer decodes only its own policy tables.
+func readConfigBytes(root *os.Root) (raw []byte, mode os.FileMode, err error) {
+	info, err := root.Lstat(layout.ConfigFileName)
+	if os.IsNotExist(err) {
+		return nil, 0o600, nil
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect document configuration: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, 0, errors.New("document configuration must be a regular file, not a link or directory")
+	}
+	file, err := root.Open(layout.ConfigFileName)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read document configuration: %w", err)
+	}
+	opened, statErr := file.Stat()
+	if statErr == nil && (!opened.Mode().IsRegular() || !os.SameFile(info, opened) || globalUnsafeLink(info)) {
+		statErr = errors.New("document configuration identity changed or is a reparse point")
+	}
+	if statErr == nil {
+		statErr = layout.CheckOwnerSource(root, opened)
+	}
+	if statErr != nil {
+		return nil, 0, errors.Join(statErr, file.Close())
+	}
+	raw, err = io.ReadAll(file)
+	if err = errors.Join(err, file.Close()); err != nil {
+		return nil, 0, fmt.Errorf("read document configuration: %w", err)
+	}
+	return raw, info.Mode().Perm(), nil
 }
 
 func (s *Store) documentConfigRoot() (*os.Root, error) {

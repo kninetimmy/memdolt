@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/store"
@@ -89,8 +91,23 @@ func ReadGlobalConfig(repo string) (cfg GlobalConfig, err error) {
 		return cfg, err
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
-	doc, _, _, err := readDocumentConfig(root)
-	return doc.Global, err
+	raw, _, err := readConfigBytes(root)
+	if err != nil {
+		return cfg, err
+	}
+	var decoded struct {
+		Global GlobalConfig `toml:"global"`
+	}
+	metadata, err := toml.Decode(string(raw), &decoded)
+	if err != nil {
+		return cfg, fmt.Errorf("parse global configuration: %w", err)
+	}
+	for _, key := range metadata.Undecoded() {
+		if len(key) > 0 && key[0] == "global" {
+			return cfg, errors.New("unknown [global] configuration key; use enabled or include_docs_in_default")
+		}
+	}
+	return decoded.Global, nil
 }
 
 // SetGlobalEnabled changes only this repository's opt-in. Bootstrap is explicit;

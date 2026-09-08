@@ -231,6 +231,15 @@ func TestGlobalCLIDisabledEquivalenceMissingStateAndOwnerContention(t *testing.T
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("disabled global changed repository recall output")
 	}
+	// Retrieval has always ignored unrelated document policy. The global flag
+	// reader must not make a disabled recall newly validate that other table.
+	writeTestFile(t, pathsFor(t, a).ConfigFile(), "[doc]\nallowed_dirs=7\nunknown_key=true\n[global]\nenabled=false\n")
+	withUnrelatedConfig := decodeJSON[retrieval.Response](t, runMemdolt(t, "recall", "scopebeacon", "--dir", a, "--json"))
+	withUnrelatedConfig.ElapsedMS = 0
+	if !reflect.DeepEqual(before, withUnrelatedConfig) {
+		t.Fatal("disabled recall changed due to unrelated doc config")
+	}
+	writeTestFile(t, pathsFor(t, a).ConfigFile(), "[global]\nenabled=false\n")
 	runMemdolt(t, "global", "enable", "--dir", a)
 	if _, err := runMemdoltResult(t, "recall", "scopebeacon", "--dir", a); err == nil || !strings.Contains(err.Error(), "explicitly") {
 		t.Fatalf("missing global state silently ignored: %v", err)
