@@ -988,6 +988,12 @@ without replay. These rules bind the shared document/native seams already named
 in #145, not all SQL errors. Session-render NoteCommits, note-group lifecycle,
 owner result envelopes and #147's hub/CI behavior remain unchanged.
 
+Before #146's first review correction, enable/disable could mutate config and
+then lose its change report on path, read/close or output failure. After it, the
+shared CLI path preflights config/global paths and preserves any confirmed flag
+change through later failures, including JSON/human inspection remedies. The
+rooted writer and every other global/native/MCP policy retain their boundaries.
+
 ---
 
 ## 11. Surfaces

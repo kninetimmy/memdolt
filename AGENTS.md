@@ -139,6 +139,19 @@ behavior, raw/typed owner results, all wrap-up templates and #147's hub code,
 runbook and CI lane. Root registers both global and hub; no hub/runtime/credential
 policy, dependency, schema or frozen golden assertion changes in this integration.
 
+Before #146's first review correction, global enable/disable wrote the config
+before resolving global paths and could discard Changed on a later read/close
+or output error. After it, the shared CLI command checks config and global paths
+first and preserves confirmed changes through its deferred report, including the
+known enabled value and a config-inspection remedy in JSON/human errors. A
+preflight refusal leaves config untouched. The private setter constructor seam
+only lets the CLI regression inject failures after a real config replacement;
+SetGlobalEnabled and the rooted writer retain their existing contracts. The
+regressions cover both commands, human/JSON output, invalid/linked global homes,
+late setter close, follow-up read and output failures. This reporting boundary
+binds these CLI toggles, not every config writer; global data, docs, recall,
+native late results, schemas and MCP registrations remain unchanged.
+
 **Confirmed outcomes and session rendering (issue #145).** Before this delivery,
 #139 preserved native finalization hashes but the older direct/document/raw-owner
 consumers could discard them, and MCP could retry a committed note batch. After

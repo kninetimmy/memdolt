@@ -73,6 +73,13 @@ data and other repositories' settings. `global status --json` reports the opt-in
 and, when enabled, the actual replica status or its availability error. While
 disabled it explicitly reports that the replica was not opened.
 
+Before #146's first review correction, an enable/disable failure after writing
+config could lose its confirmed-change report. Now configuration and global-path
+checks precede the toggle, so those refusals preserve the original file. Later
+read/close failures retain `changed: true`, the known enabled value and an
+inspection remedy; output failures also name the confirmed change in the error.
+Inspect the selected repository's `.memdolt/config.toml` before retrying.
+
 `fact add/verify/supersede/list` and `decision add/set-summary/supersede/list`
 accept `--global`. Writes retain the trusted `user` CLI boundary; source labels
 do not grant authority. Born-global fact add uses the existing live-key upsert,

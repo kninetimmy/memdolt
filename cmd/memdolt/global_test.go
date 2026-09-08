@@ -20,6 +20,127 @@ import (
 	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
+func TestGlobalTogglePreflightRefusalPreservesConfig(t *testing.T) {
+	for _, operation := range []string{"enable", "disable"} {
+		for _, unsafe := range []string{"relative home", "linked replica"} {
+			for _, mode := range []string{"human", "json"} {
+				t.Run(operation+"/"+unsafe+"/"+mode, func(t *testing.T) {
+					home := isolatedGlobalHome(t)
+					base := initStore(t)
+					initial := "false"
+					if operation == "disable" {
+						initial = "true"
+					}
+					path := pathsFor(t, base).ConfigFile()
+					before := "[global]\nenabled = " + initial + "\ninclude_docs_in_default = true\n"
+					writeTestFile(t, path, before)
+					if unsafe == "relative home" {
+						t.Setenv("HOME", "relative")
+						t.Setenv("USERPROFILE", "relative")
+					} else {
+						if err := os.Mkdir(filepath.Join(home, ".memdolt"), 0o700); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(interopTempDir(t), filepath.Join(home, ".memdolt", "global")); err != nil {
+							t.Skipf("host cannot create a linked-replica fixture: %v", err)
+						}
+					}
+					args := []string{"global", operation, "--dir", base}
+					if mode == "json" {
+						args = append(args, "--json")
+					}
+					out, err := runMemdoltResult(t, args...)
+					if err == nil || out != "" {
+						t.Fatalf("unsafe preflight did not refuse without a change report: %q, %v", out, err)
+					}
+					after, err := os.ReadFile(path)
+					if err != nil || string(after) != before {
+						t.Fatalf("refused toggle changed repository config: %q, %v", after, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestGlobalToggleReportsConfirmedChangeThroughLaterFailures(t *testing.T) {
+	for _, operation := range []string{"enable", "disable"} {
+		for _, failure := range []string{"setter close", "config reread", "output"} {
+			for _, mode := range []string{"human", "json"} {
+				t.Run(operation+"/"+failure+"/"+mode, func(t *testing.T) {
+					isolatedGlobalHome(t)
+					base := initStore(t)
+					wanted := operation == "enable"
+					if _, err := localdolt.SetGlobalEnabled(base, !wanted); err != nil {
+						t.Fatal(err)
+					}
+					late := errors.New("synthetic failure after real config replacement")
+					calls := 0
+					cmd := newGlobalCommandWithSetter(func(repo string, enabled bool) (bool, error) {
+						calls++
+						changed, err := localdolt.SetGlobalEnabled(repo, enabled)
+						if err != nil || !changed {
+							t.Fatalf("fixture did not perform its real toggle: changed=%t, %v", changed, err)
+						}
+						cfg, err := localdolt.ReadGlobalConfig(repo)
+						if err != nil || cfg.Enabled != wanted {
+							t.Fatalf("toggle was not persisted: %+v, %v", cfg, err)
+						}
+						if failure == "setter close" {
+							return changed, late
+						}
+						if failure == "config reread" {
+							path := pathsFor(t, repo).ConfigFile()
+							raw, err := os.ReadFile(path)
+							if err != nil {
+								t.Fatal(err)
+							}
+							// A foreign edit after the confirmed replacement prevents
+							// follow-up decoding; it cannot erase the confirmed effect.
+							writeTestFile(t, path, string(raw)+"\n[unterminated")
+						}
+						return changed, nil
+					})
+					cmd.SetArgs([]string{operation, "--dir", base})
+					cmd.SilenceUsage, cmd.SilenceErrors = true, true
+					cmd.SetContext(context.Background())
+					out := &bytes.Buffer{}
+					cmd.SetOut(out)
+					cmd.SetErr(&bytes.Buffer{})
+					jsonOutput = mode == "json"
+					if failure == "output" {
+						cmd.SetOut(repoFailWriter{late})
+					}
+					err := cmd.Execute()
+					value := "enabled=false"
+					if wanted {
+						value = "enabled=true"
+					}
+					if err == nil || calls != 1 || !strings.Contains(err.Error(), "configuration confirmed "+value) || !strings.Contains(err.Error(), "inspect") || !strings.Contains(err.Error(), base) {
+						t.Fatalf("lost confirmed toggle or retried it: calls=%d, %v", calls, err)
+					}
+					if failure != "config reread" && !errors.Is(err, late) {
+						t.Fatalf("underlying late error lost: %v", err)
+					}
+					if failure != "output" {
+						if mode == "json" {
+							report := decodeJSON[globalStatusReport](t, out.String())
+							if !report.Changed || report.Enabled != wanted || report.Path == "" || !strings.Contains(report.Error, "configuration confirmed "+value) || !strings.Contains(report.Error, "inspect") {
+								t.Fatalf("JSON lost confirmed config change: %+v", report)
+							}
+						} else if !strings.Contains(out.String(), "configuration confirmed "+value) {
+							t.Fatalf("human report lost confirmed config change: %q", out.String())
+						}
+						if failure == "config reread" && !strings.Contains(err.Error(), "parse global configuration") {
+							t.Fatalf("fixture did not reach failed follow-up read: %v", err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestGlobalUnchangedDocumentReportsConfirmedConfigAfterLateFailure(t *testing.T) {
 	for _, failure := range []string{"close", "human output", "json output"} {
 		t.Run(failure, func(t *testing.T) {

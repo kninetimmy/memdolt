@@ -27,6 +27,9 @@ const globalHelp = "Global memory is one shareable Dolt replica at ~/.memdolt/gl
 	"Global operations take the shared replica's exclusive lock. Contention is a\n" +
 	"visible refusal; stop the active operation/owner and inspect before retrying.\n" +
 	"No competing embedded engine or uncertain-write replay is attempted.\n\n" +
+	"Enable/disable checks configuration and global paths before changing the flag.\n" +
+	"A later failure reports any confirmed change; inspect that repository's\n" +
+	".memdolt/config.toml before retrying, including after an output failure.\n\n" +
 	"fact/decision add --global and promote <id> --global are trusted human writes.\n" +
 	"Promotion copies a committed live record with a fresh id and preserves NULLs;\n" +
 	"existing live global fact keys refuse promotion. Explicit fact add --global\n" +
@@ -51,19 +54,16 @@ type globalStatusReport struct {
 }
 
 func newGlobalCommand() *cobra.Command {
+	return newGlobalCommandWithSetter(localdolt.SetGlobalEnabled)
+}
+
+func newGlobalCommandWithSetter(setEnabled func(string, bool) (bool, error)) *cobra.Command {
 	cmd := &cobra.Command{Use: "global", Short: "Opt into, bootstrap and inspect the shared global Dolt replica", Long: globalHelp}
 	for _, operation := range []string{"enable", "disable", "status"} {
 		var flags storeFlags
 		child := &cobra.Command{Use: operation, Short: operation + " global memory for this repository", Long: globalHelp, Args: cobra.NoArgs}
-		child.RunE = func(cmd *cobra.Command, _ []string) error {
+		child.RunE = func(cmd *cobra.Command, _ []string) (err error) {
 			var report globalStatusReport
-			var err error
-			if operation != "status" {
-				report.Changed, err = localdolt.SetGlobalEnabled(flags.dir, operation == "enable")
-				if err != nil {
-					return err
-				}
-			}
 			report.GlobalConfig, err = localdolt.ReadGlobalConfig(flags.dir)
 			if err != nil {
 				return err
@@ -73,6 +73,38 @@ func newGlobalCommand() *cobra.Command {
 				return err
 			}
 			report.Path, report.Status = paths.DoltDataDir(), "disabled (replica not opened)"
+			defer func() {
+				if err != nil && !report.Changed && operation != "status" {
+					return
+				}
+				confirmation := fmt.Sprintf("global configuration confirmed enabled=%t for %s; inspect its .memdolt/config.toml before retrying", operation == "enable", flags.dir)
+				if err != nil {
+					if report.Changed {
+						report.Status = "changed; follow-up failed"
+						err = fmt.Errorf("%s: %w", confirmation, err)
+					}
+					report.Error = err.Error()
+				}
+				outputErr := emit(cmd, report, []string{fmt.Sprintf("global memory: %s (enabled=%t)", report.Status, report.Enabled), "store: " + report.Path, report.Error})
+				if outputErr != nil && report.Changed {
+					outputErr = fmt.Errorf("%s: %w", confirmation, outputErr)
+				}
+				err = errors.Join(err, outputErr)
+			}()
+			if operation != "status" {
+				report.Changed, err = setEnabled(flags.dir, operation == "enable")
+				if report.Changed {
+					report.Enabled = operation == "enable"
+				}
+				if err != nil {
+					return err
+				}
+				cfg, readErr := localdolt.ReadGlobalConfig(flags.dir)
+				if readErr != nil {
+					return readErr
+				}
+				report.GlobalConfig = cfg
+			}
 			if report.Enabled {
 				report.Status = "enabled; use global status to inspect the replica"
 				if operation == "status" {
@@ -90,7 +122,7 @@ func newGlobalCommand() *cobra.Command {
 					}
 				}
 			}
-			return errors.Join(err, emit(cmd, report, []string{fmt.Sprintf("global memory: %s (enabled=%t)", report.Status, report.Enabled), "store: " + report.Path, report.Error}))
+			return err
 		}
 		cmd.AddCommand(flags.bind(child))
 	}
