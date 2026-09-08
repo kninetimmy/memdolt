@@ -37,8 +37,8 @@ func newHumanMemoryCommand(kind string) *cobra.Command {
 			"changed write is one user-authored Dolt commit; earlier content stays in\n" +
 			"history and superseded rows remain present. Source labels are metadata.\n\n" +
 			"Agents must use propose_fact/propose_decision/propose_supersede and human\n" +
-			"review. These direct mutations are absent from MCP. No global flags or\n" +
-			"promotion backend are available. Lists read committed main only.\n\n" +
+			"review. These direct mutations are absent from MCP. --global selects the\n" +
+			"enabled shared replica; see global --help. Lists read committed main only.\n\n" +
 			"Decision list includes all statuses by default; --status active filters it.\n" +
 			"MCP list_decisions retains its active-only default and default limit.\n\n" +
 			"Fact add updates only the live dotted key, retaining id and created_at;\n" +
@@ -57,7 +57,7 @@ func newHumanMemoryCommand(kind string) *cobra.Command {
 			"fact list or decision list --status all after an unknown outcome before\n" +
 			"retrying; a confirmed commit remains reported with any later error.",
 	}
-	operations := []string{"add", "list", "supersede"}
+	operations := []string{"add", "list", "supersede", "promote"}
 	if kind == "fact" {
 		operations = append(operations, "verify")
 	} else {
@@ -68,6 +68,7 @@ func newHumanMemoryCommand(kind string) *cobra.Command {
 		uses := map[string]string{
 			"add": "add <title> --rationale <text>", "list": "list", "supersede": "supersede <old> --by <new>",
 			"verify": "verify <id-or-key>", "set-summary": "set-summary <id> <summary>",
+			"promote": "promote <id-or-key> --global",
 		}
 		if kind == "fact" {
 			uses["add"] = "add <key> <value>"
@@ -108,6 +109,7 @@ func newHumanMemoryCommand(kind string) *cobra.Command {
 		if flag := child.Flags().Lookup("actor"); flag != nil {
 			flag.Usage = "trusted human attribution: empty or user; agent identities must use the reviewed lane"
 		}
+		flags.bindGlobal(child)
 		child.RunE = func(cmd *cobra.Command, args []string) error {
 			actor, err := memory.NormalizeActor(flags.actor)
 			if err != nil {
@@ -122,7 +124,10 @@ func newHumanMemoryCommand(kind string) *cobra.Command {
 			if err := localdolt.RequireExistingTransferStore(flags.dir); err != nil {
 				return err
 			}
-			st, err := openCommandStore(cmd.Context(), flags.dir, actor.CommitAuthor())
+			if operation == "promote" {
+				return flags.promote(cmd, actor, args[0])
+			}
+			st, err := flags.open(cmd.Context(), actor.CommitAuthor())
 			if err != nil {
 				return err
 			}
@@ -195,7 +200,10 @@ func (f humanMemoryCommand) run(cmd *cobra.Command, st commandStore, actor memor
 	default:
 		err = errors.New("unknown human memory command")
 	}
-	err = errors.Join(err, st.Close())
+	return emitHumanMemory(cmd, result, errors.Join(err, st.Close()))
+}
+
+func emitHumanMemory(cmd *cobra.Command, result localdolt.HumanMemoryResult, err error) error {
 	if err != nil && result.Commit == "" {
 		return err
 	}
@@ -209,9 +217,34 @@ func (f humanMemoryCommand) run(cmd *cobra.Command, st commandStore, actor memor
 	if result.Commit != "" {
 		line += " (commit " + result.Commit + ")"
 	}
+	if len(result.TitleCollisions) > 0 {
+		line += " (retained decision title collisions: " + strings.Join(result.TitleCollisions, ", ") + ")"
+	}
 	err = errors.Join(err, emit(cmd, result, []string{line}))
 	if err != nil && result.Commit != "" {
 		return fmt.Errorf("%s %s confirmed %s in commit %s; inspect the list before retrying: %w", result.Kind, result.ID, result.Status, result.Commit, err)
 	}
 	return err
+}
+
+func (f humanMemoryCommand) promote(cmd *cobra.Command, actor memory.Actor, ident string) error {
+	if !f.global {
+		return errors.New("promotion requires --global; the repository row and its history are preserved")
+	}
+	// Capture through the existing repository owner and close that read before
+	// acquiring the global lock. No two-store transaction or uncertain replay.
+	st, err := openCommandStore(cmd.Context(), f.dir, actor.CommitAuthor())
+	if err != nil {
+		return err
+	}
+	record, err := st.CapturePromotion(cmd.Context(), f.kind, ident)
+	if err = errors.Join(err, st.Close()); err != nil {
+		return err
+	}
+	global, err := localdolt.OpenGlobal(cmd.Context(), f.dir)
+	if err != nil {
+		return err
+	}
+	result, err := global.PromoteGlobal(cmd.Context(), record, actor)
+	return emitHumanMemory(cmd, result, errors.Join(err, global.Close()))
 }

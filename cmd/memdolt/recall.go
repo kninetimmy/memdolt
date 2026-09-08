@@ -9,6 +9,7 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/retrieval"
+	"github.com/kninetimmy/memdolt/internal/scopedrecall"
 )
 
 func newRecallCommand() *cobra.Command {
@@ -48,7 +49,7 @@ func newRecallCommand() *cobra.Command {
 				if cmd.Flags().Changed("min-rerank-score") {
 					options.MinRerankScore = &minRerankScore
 				}
-				response, err := retrieval.Run(ctx, st, flags.dir, options)
+				response, err := scopedrecall.Run(ctx, st, flags.dir, options)
 				if err != nil {
 					return err
 				}
@@ -80,6 +81,9 @@ func recallLines(response retrieval.Response) []string {
 		if hit.Stale {
 			tags += " [stale]"
 		}
+		if hit.Scope != "" {
+			tags += " [" + hit.Scope + " at " + hit.SnapshotCommit + "]"
+		}
 		if hit.SupersededBy != "" {
 			tags += " [superseded by " + hit.SupersededBy + "]"
 		}
@@ -97,6 +101,9 @@ func recallLines(response retrieval.Response) []string {
 	if len(response.Warnings) > 0 {
 		lines = append(lines, "Warnings:")
 		for _, warning := range response.Warnings {
+			if warning.Scope != "" {
+				warning.Kind = warning.Scope + ":" + warning.Kind
+			}
 			lines = append(lines, fmt.Sprintf("  %s (%d/%d): %s — %s", warning.Kind,
 				warning.StaleCount, warning.TotalCount, warning.Reason, warning.Fix))
 		}

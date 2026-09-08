@@ -10,6 +10,10 @@
     }
   },
   "commands": {
+    "global": {
+      "description": "Inspect and manage the enabled global memory replica",
+      "template": "Use the memdolt global skill. Arguments: $ARGUMENTS"
+    },
     "eval-locate": {
       "description": "Evaluate the memdolt local code locator",
       "template": "Use the memdolt eval-locate skill. Arguments: $ARGUMENTS"

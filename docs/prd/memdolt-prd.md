@@ -854,6 +854,62 @@ A `global` Dolt database on the hub, cloned to `~/.memdolt/global/` on each mach
 - Sync: plain push/pull like any project; ULID keys make cross-machine global writes merge-clean.
 - memhub's `global_accept_markers` replay machinery is unnecessary — merge idempotency does the job.
 
+Before issue #146, these global replica, human-write, document and merged-recall
+surfaces were design-only. After it they ship with the same schema in the exact
+layout `~/.memdolt/global/.memdolt/dolt/memory`; global ownership and the separate
+derived `embeddings.sqlite` are adjacent under `global/.memdolt`. No existing
+repository path changes, new durable table/dependency, hub-only metadata or
+host-root column is introduced. Native Dolt remotes, schema/version checks,
+authentication and transfer guards are reused. [The global memory guide](../global-memory.md)
+specifies bootstrap, layout, metadata, recovery and commands completely.
+
+`global enable/disable/status` use the calling repository's `[global]` settings,
+default off. Disable preserves every replica and other repositories' settings.
+After enable, explicitly use `global init` or `global clone <remote-url>`; ordinary
+reads/writes never bootstrap or migrate. `repo remote add/list`, `repo status`,
+`push`, `pull` and `index status/rebuild` select this replica with `--global`.
+All retain `--dir`/`--json` conventions and existing transfer/authentication
+behavior. The global wrappers take one exclusive replica lock; contention with
+another CLI/MCP owner visibly refuses, without a competing engine, policy from
+another repository, or an uncertain-write retry.
+
+Human fact/decision commands and `doc add/list/show/remove --global` now exist.
+Only normalized trusted user writes enter this global CLI lane. Existing nullable
+schema fields survive promotion, which captures committed repository data and
+copies it with a fresh ULID, source commit/id in the result and commit message.
+Repository rows and history remain intact. The earlier “repo row wins locally”
+means no local mutation: both hits remain eligible for ranking. Existing live
+global fact keys refuse promotion; explicit human fact add retains its guarded
+live-key upsert. Decision title collisions preserve both records and report ids.
+Ambiguous keys require ids; promote a live replacement instead of copying a
+cross-scope supersession link. Global document content hashes/chunk replacement
+and scoped stored-id reads/removals retain their existing semantics. The prior
+first-empty-table config flip still governs repository documents; every successful
+global add independently enables its calling repository's default global docs,
+including an unchanged document already populated by another repository.
+
+The shared CLI/MCP application seam feeds committed scope captures into one
+candidate pool, one query embedding and one rerank pass. Equal ids/keys do not
+collapse. Hits report scope/captured commit and optional matching blame. Captures
+serialize participating mutations and refuse a changed foreign main; each scope
+has its own commit, not a distributed snapshot. Active repository retrieval knobs
+and independent default-doc settings govern both scopes. Global vectors stay
+local, use the same verified model/current-source hashes, and emit scoped fallback
+warnings. Disabled recall uses the prior path and output except timing/observability.
+Missing/corrupt/newer replicas are reported visibly. Tasks, notes, narratives,
+archives and code remain outside the global corpus despite the shared schema.
+
+`OpenGlobal`'s opt-in/lock policy binds its callers, not arbitrary native Dolt
+sessions or raw stores opened at that directory. Global document guards and
+global `EmbeddingSources`/`RecallSources` filtering bind stores opened by that
+wrapper; ordinary repository readers remain unchanged. `CapturePromotion` and
+`CaptureRecall` are new authenticated owner reads, with no global write operation.
+Existing global-target proposal acceptance refusals and terminal remedies remain;
+no new accepting MCP path or fake success is added. AGENTS.md inventories every
+changed structure. Isolated real replicas/local remote, CLI/owner/MCP, mixed
+model retrieval and the unchanged golden gates support this delivery; physical
+two-machine hub acceptance and full parity remain separately tracked.
+
 ---
 
 ## 11. Surfaces

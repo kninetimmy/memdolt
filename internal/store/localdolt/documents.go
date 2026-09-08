@@ -58,6 +58,12 @@ type DocResult struct {
 // IPC. Source is always user (PRD §7.6); the normalized caller authors the
 // commit. Neither this source label nor any path grants review authority.
 func (s *Store) DocAdd(ctx context.Context, opts DocAddOptions) (DocResult, error) {
+	if err := s.globalWriteActor(opts.Actor); err != nil {
+		return DocResult{}, err
+	}
+	if s.globalRepo != nil {
+		return s.docAdd(ctx, opts, enableGlobalDocumentRecall)
+	}
 	return s.docAdd(ctx, opts, enableDocumentRecall)
 }
 
@@ -129,7 +135,11 @@ func (s *Store) docAdd(ctx context.Context, opts DocAddOptions, finalize func(*o
 			return result, fmt.Errorf("document path collides with document %s under the existing database path index; use an unambiguous source path", old.ID)
 		}
 		if old.ContentHash == doc.ContentHash {
-			return DocResult{Status: "unchanged", Document: &old}, nil
+			result = DocResult{Status: "unchanged", Document: &old}
+			if s.globalRepo != nil {
+				result.EnabledDefaultRecall, err = finalize(configRoot)
+			}
+			return result, err
 		}
 		doc.ID, doc.Path, status = old.ID, old.Path, "updated"
 	}
@@ -171,10 +181,14 @@ func (s *Store) docAdd(ctx context.Context, opts DocAddOptions, finalize func(*o
 		return result, fmt.Errorf("document commit failed; inspect `memdolt doc show %s` before retrying: %w", doc.ID, err)
 	}
 	result = DocResult{Status: status, Document: &doc, Chunks: chunks, Commit: commit.Hash}
-	if count == 0 {
+	if count == 0 || s.globalRepo != nil {
 		result.EnabledDefaultRecall, err = finalize(configRoot)
 		if err != nil {
-			return result, fmt.Errorf("document committed but default-recall configuration finalization failed; inspect .memdolt/config.toml and set [retrieval] include_docs_in_default = true explicitly; do not replay ingestion to repair configuration: %w", err)
+			table := "retrieval"
+			if s.globalRepo != nil {
+				table = "global"
+			}
+			return result, fmt.Errorf("document committed but default-recall configuration finalization failed; inspect .memdolt/config.toml and set [%s] include_docs_in_default = true explicitly; do not replay ingestion to repair configuration: %w", table, err)
 		}
 	}
 	return result, nil
@@ -221,6 +235,9 @@ func (s *Store) DocShow(ctx context.Context, ident string) (result DocResult, er
 }
 
 func (s *Store) DocRemove(ctx context.Context, ident string, actor memory.Actor) (result DocResult, err error) {
+	if err := s.globalWriteActor(actor); err != nil {
+		return result, err
+	}
 	if err := documentPathArgument(ident); err != nil {
 		return result, err
 	}

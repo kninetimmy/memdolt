@@ -28,8 +28,9 @@ import (
 // storeFlags are the flags a direct-lane command needs to find its store
 // and attribute its writes.
 type storeFlags struct {
-	dir   string
-	actor string
+	dir    string
+	actor  string
+	global bool
 }
 
 // commandStore is the complete initialized store surface shipped commands
@@ -76,7 +77,7 @@ func (f *storeFlags) runStore(cmd *cobra.Command, fn func(context.Context, comma
 	}
 
 	ctx := cmd.Context()
-	st, err := openCommandStore(ctx, f.dir, actor.CommitAuthor())
+	st, err := f.open(ctx, actor.CommitAuthor())
 	if err != nil {
 		return err
 	}

@@ -74,7 +74,7 @@ func newRepoStatusCommand() *cobra.Command {
 			if err := localdolt.RequireExistingTransferStore(flags.dir); err != nil {
 				return err
 			}
-			st, err := openCommandStore(cmd.Context(), flags.dir, cliActor)
+			st, err := flags.open(cmd.Context(), cliActor)
 			if err != nil {
 				return err
 			}
@@ -84,6 +84,7 @@ func newRepoStatusCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Local, "local", false, "offline status; no remote configuration read or request")
 	cmd.Flags().BoolVar(&opts.Diff, "diff", false, "exact committed differences from local main to remote main")
 	cmd.Flags().StringVar(&opts.User, "user", "", "SQL username override; password comes only from the owner's DOLT_REMOTE_PASSWORD")
+	flags.bindGlobal(cmd)
 	return flags.bind(cmd)
 }
 

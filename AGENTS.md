@@ -19,6 +19,105 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Shared global memory (issue #146).** Before this delivery, PRD §10's global
+replica, human operations and combined recall were design-only; earlier #132,
+#138–140 records below accurately excluded them. After it, the CLI global
+operations and merged CLI/MCP recall ship. The complete commands, exact layout,
+metadata and recovery contract are in [the global memory guide](docs/global-memory.md).
+Global-target proposal acceptance still refuses with its existing terminal
+remedy. No complete parity or physical two-machine hub acceptance is claimed.
+The complete structural blast radius is:
+
+- New `localdolt/global.go` and `global_path_windows.go`/`global_path_other.go`
+  resolve `~/.memdolt/global/.memdolt/dolt/memory`, reuse the existing Paths and
+  store schema, check local/contained managed paths and links/reparse points,
+  own the two per-repository `[global]` flags and open only an existing current
+  replica. No machine registry/config or live user store is touched by tests.
+  The ordinary global lock refuses competing CLI/MCP owners before opening an
+  engine. This policy binds `OpenGlobal` and its callers, not arbitrary native
+  Dolt sessions or raw `New` calls with the same directory. Existing repository
+  layout, native bootstrap, migrations and lock implementation remain unchanged.
+- `localdolt/localdolt.go` adds the calling repository policy pointer; global
+  writes recheck enablement and use that repository's deny-list. Ordinary
+  stores keep their prior policy, commit ordering and result semantics. New
+  `global_promotion.go` captures committed fixed-schema rows under proposalMu
+  using existing immutable interop reads, then copies one live fact/decision
+  with a fresh ULID and exact nullable fields. Source id/commit enter the result
+  and real user-authored commit; no host-root metadata is added. Existing live
+  fact keys refuse promotion; human FactAdd keeps its guarded upsert. Decision
+  duplicates are retained and their colliding ids reported. SQL computes title
+  equality with its normal collation in a projection: the pinned optimizer
+  misuses FULLTEXT for WHERE equality even with IGNORE INDEX. No new index is
+  needed at memory scale. Superseded-row promotion refuses dangling cross-scope
+  links and names the live replacement. These rules bind PromoteGlobal, not
+  arbitrary Commit calls, imports or reviewed lanes. Existing proposal/review
+  behavior, including terminal global acceptance refusal, remains unchanged.
+- `localdolt/human_memory.go` adds optional source-capture/collision fields to
+  HumanMemoryResult and global-only decision collision reporting. Its six human
+  methods retain attribution, validation, mutex, clean/merge/schema/deny checks,
+  upsert/supersession rules and confirmed result-plus-error behavior.
+- `document_file.go` reuses the rooted config replacement for global enablement
+  and default-doc flags. Opened configuration identity, regular/reparse and
+  owner-alias checks precede its content read. Other TOML tables survive as
+  before. Global document sources use calling-repo policy and protect both
+  known owner credential identities; local sources retain their existing check.
+  `documents.go` retains hashes, ids, scoped reads/removal, replacement chunks
+  and commit behavior. Global writes require user; every successful global add
+  flips only its calling repository's default docs, even when shared content is
+  unchanged. Repository first-document/opt-out behavior remains. These policies
+  bind these document/config helpers, not every file reader. Existing final
+  check/open and config-replacement intervals are not filesystem compare-and-swap.
+- New `localdolt/recall_snapshot.go` captures sources, lexical hits, semantic
+  text and optional blame while serializing cooperating writes, and refuses a
+  changed foreign main. It claims one commit per scope, not an atomic pair of
+  databases. `store/store.go` adds only its typed capture records. Existing
+  Store operations and schema stay intact. `localdolt/retrieval.go` and
+  `embedding.go` exclude tasks only for OpenGlobal stores; ordinary committed
+  source/FTS/provenance readers and semantic-text shapes remain unchanged.
+- New `retrieval/global.go` scopes identities internally before existing scoring,
+  reads each local vector store with CurrentVectors, retains both equal-id/key
+  hits, and restores the original ids with scope/snapshotCommit metadata.
+  `retrieval/recall.go` reuses one query embedding, candidate map, score/floor/
+  age/stale/superseded/accepted filter and rerank pass. Per-scope default-doc
+  inclusion precedes candidate selection; default docs still require rerank.
+  Global stale-vector warnings name the proper global rebuild. Ordinary Recall
+  and Run keep their output and algorithm apart from optional omitted metadata.
+  `scopedrecall/recall.go` is the new shared CLI/MCP policy/open/close seam:
+  disabled goes through prior Run; enabled holds the global lock through capture,
+  local vector reads and inference. Missing state/lock/close errors stay visible.
+  Only facts/decisions/docs enter global recall; tasks, notes, narratives, code
+  and archives never become global corpora. Inference/hash rules and both golden
+  corpora/thresholds remain unchanged; vectors never enter Dolt or sync.
+- `storeipc/operation.go` adds exactly two read-only allow-list operations and
+  Backend methods, capture_promotion/capture_recall. New `storeipc/global.go`
+  checks UTF-8 before encoding and submits each capture once. Existing owner
+  authentication, no-fallback/no-replay, loss/late error handling and all write
+  operations remain; no global promotion write or accepting MCP path is added.
+- New CLI `global.go` owns enable/disable/status, wraps existing init/clone at
+  the checked global location, and supplies explicit global flags/path/open
+  selection. `root.go` adds that family. `lanes.go` keeps its existing route
+  unless a command explicitly enables the new flag. `human_memory.go` adds
+  promotion and scoped human flags/result notices; `doc.go` adds scoped flags,
+  remove alias and config notice. `index.go`, `remote.go`, `repo.go` and
+  `transfer.go` reuse existing operations with global selection; their ordinary
+  routing, authentication, result/close contracts and conflict behavior remain.
+  `recall.go` and MCP `tools.go` call the shared seam; CLI adds scope labels.
+  All twenty-two MCP registrations, inputs, note/proposal/review lifecycle and
+  discovery/cache behavior remain. The count still binds RegisterTools alone.
+- New global tests in CLI/localdolt/retrieval/storeipc/MCP cover real isolated
+  replicas and local remote history after reopening, three-repo config/docs,
+  human/promoted fields/nulls, collisions, equal ids, fallback/filters, disabled
+  equivalence, missing/corrupt/newer stores, locks, credentials and late/lost
+  captures. The golden-tagged CLI global model test copies model artifacts to
+  an isolated home and verifies real rebuild/recall. Existing doc/host-template
+  tests update only now-shipped flag/template expectations. No test changes
+  production source protection, frozen golden assertions or host acceptance.
+- Three new global skill templates for Claude/Codex/OpenCode plus one
+  `opencode.json` command expose real workflows and the preserved human gate.
+  Existing core/locator templates and host registrations remain. Server
+  instructions, this record, PRD §10 and the new guide retain matching
+  before/after scope; no dependency or durable migration is introduced.
+
 **Memory interoperability (issue #140).** Before this delivery, PRD §15
 described import-from-memhub and JSON interop but neither CLI command existed.
 After it, `export <bundle.json>`, `import <bundle.json>` and

@@ -48,6 +48,8 @@ const (
 	opRepoStatus       = "repo_status"
 	opExportMemory     = "export_memory"
 	opImportMemory     = "import_memory"
+	opCapturePromotion = "capture_promotion"
+	opCaptureRecall    = "capture_recall"
 )
 
 const (
@@ -69,6 +71,8 @@ type Backend interface {
 	EmbeddingSources(context.Context) ([]store.EmbeddingSource, error)
 	RecallSources(context.Context) ([]store.RecallSource, error)
 	RecallFTS(context.Context, string, []string) ([]store.LexicalHit, error)
+	CapturePromotion(context.Context, string, string) (localdolt.PromotionRecord, error)
+	CaptureRecall(context.Context, store.RecallSnapshotOptions) (store.RecallSnapshot, error)
 	SearchDecisions(context.Context, string, int) ([]store.DecisionSearchHit, error)
 	LastChanged(context.Context, string, string) (*store.CommitProvenance, error)
 	CheckWriteText(context.Context, []string) error
@@ -228,6 +232,18 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var result any
 	var err error
 	switch req.Operation {
+	case opCapturePromotion:
+		var args lastChangedArgs
+		args, err = operationArgs[lastChangedArgs](req.Args)
+		if err == nil {
+			result, err = h.store.CapturePromotion(ctx, args.SourceType, args.SourceID)
+		}
+	case opCaptureRecall:
+		var args store.RecallSnapshotOptions
+		args, err = operationArgs[store.RecallSnapshotOptions](req.Args)
+		if err == nil {
+			result, err = h.store.CaptureRecall(ctx, args)
+		}
 	case opExportMemory, opImportMemory:
 		// The owner reads/publishes the checked local bundle and performs the
 		// entire import once. A populated failure result preserves durable progress.

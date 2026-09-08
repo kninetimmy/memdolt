@@ -3,6 +3,14 @@
 - On turn one, read `.memdolt/rendered/PROJECT.md` once for project context.
 - Recall relevant memory before reading `PROJECT_LEDGER.md`; use the ledger only
   when recall is empty or the user explicitly asks for it.
+  Before issue #146 recall used repository memory only. After it, enabled
+  repositories combine committed global facts, decisions and documents in the
+  same candidate pool and rerank pass. Report scope/snapshotCommit and scoped
+  freshness warnings; a missing replica or competing owner is a visible error.
+  Disabled global recall preserves the repository-only output. Human global
+  CLI writes and promotion now exist; this grants no new agent write authority.
+  Global-target proposals still refuse acceptance with the existing terminal
+  remedy. Never turn that refusal into a direct write or claim acceptance.
 - Use `render` to refresh these local files at the configured output directory
   (default `.memdolt/rendered`). It reads one committed main snapshot and does
   not flush queued notes or promote proposals. Inspect reported outputs and

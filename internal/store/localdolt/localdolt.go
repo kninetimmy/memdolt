@@ -79,6 +79,9 @@ type Store struct {
 	cfg    Config
 	paths  layout.Paths
 	logger *slog.Logger
+	// Only OpenGlobal supplies the active repository's policy. Disk ownership
+	// and derived artifacts always remain at paths, including for global reads.
+	globalRepo *layout.Paths
 
 	mu         sync.Mutex
 	proposalMu sync.Mutex
@@ -329,7 +332,12 @@ func (s *Store) checkDenyList(text []string) error {
 	if len(text) == 0 {
 		return nil
 	}
-	list, err := denylist.Load(s.paths.ConfigFile())
+	if s.globalRepo != nil {
+		if err := requireGlobalEnabled(s.globalRepo.Base()); err != nil {
+			return err
+		}
+	}
+	list, err := denylist.Load(s.policyPaths().ConfigFile())
 	if err != nil {
 		return fmt.Errorf("localdolt: refusing the write: %w", err)
 	}

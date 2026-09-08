@@ -38,7 +38,8 @@ func newDocCommand() *cobra.Command {
 			"independently of deny-list patterns. Paths are local identities,\n" +
 			"not portable cross-machine aliases. Store work uses the authenticated live\n" +
 			"owner when present. Writes submit once: inspect doc ls/show after a lost\n" +
-			"reply before retrying. No global document backend is advertised.",
+			"reply before retrying. --global selects the enabled shared replica and\n" +
+			"requires the human user actor for writes; see global --help.",
 	}
 	for _, operation := range []string{"add", "ls", "show", "rm"} {
 		var flags storeFlags
@@ -52,6 +53,9 @@ func newDocCommand() *cobra.Command {
 		child := &cobra.Command{Use: uses[operation], Short: shorts[operation], Long: shorts[operation] + "\n\n" + cmd.Long, Args: cobra.ExactArgs(1)}
 		if operation == "ls" {
 			child.Args, child.Aliases = cobra.NoArgs, []string{"list"}
+		}
+		if operation == "rm" {
+			child.Aliases = []string{"remove"}
 		}
 		child.RunE = func(cmd *cobra.Command, args []string) error {
 			ident := ""
@@ -76,7 +80,7 @@ func newDocCommand() *cobra.Command {
 			if err := localdolt.RequireExistingTransferStore(flags.dir); err != nil {
 				return err
 			}
-			st, err := openCommandStore(cmd.Context(), flags.dir, actor.CommitAuthor())
+			st, err := flags.open(cmd.Context(), actor.CommitAuthor())
 			if err != nil {
 				return err
 			}
@@ -90,6 +94,7 @@ func newDocCommand() *cobra.Command {
 		if operation == "add" {
 			child.Flags().StringVar(&title, "title", "", "document title; blank uses its first heading or filename")
 		}
+		flags.bindGlobal(child)
 		cmd.AddCommand(child)
 	}
 	return cmd
@@ -125,7 +130,7 @@ func runDoc(cmd *cobra.Command, st commandStore, operation, ident, title string,
 		err = errors.New("unknown document operation")
 	}
 	err = errors.Join(err, st.Close())
-	if err != nil && result.Commit == "" {
+	if err != nil && result.Commit == "" && !result.EnabledDefaultRecall {
 		return err
 	}
 	if err != nil {
@@ -146,12 +151,19 @@ func runDoc(cmd *cobra.Command, st commandStore, operation, ident, title string,
 		}
 	}
 	if result.EnabledDefaultRecall {
-		lines = append(lines, "enabled [retrieval] include_docs_in_default for this repository")
+		table := "retrieval"
+		if global, _ := cmd.Flags().GetBool("global"); global {
+			table = "global"
+		}
+		lines = append(lines, "enabled ["+table+"] include_docs_in_default for this repository")
 	}
 	err = errors.Join(err, emit(cmd, result, lines))
 	if err != nil && result.Commit != "" {
 		return fmt.Errorf("document %s confirmed %s in commit %s; inspect doc ls/show before retrying: %w",
 			result.Document.ID, result.Status, result.Commit, err)
+	}
+	if err != nil && result.EnabledDefaultRecall {
+		return fmt.Errorf("document default-recall configuration confirmed enabled; inspect the repository config before retrying: %w", err)
 	}
 	return err
 }

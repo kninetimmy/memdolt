@@ -133,6 +133,22 @@ type LexicalHit struct {
 	Score      float64
 }
 
+type RecallSnapshotOptions struct {
+	Query       string   `json:"query"`
+	SourceTypes []string `json:"sourceTypes"`
+	Provenance  bool     `json:"provenance"`
+}
+
+// RecallSnapshot holds the committed inputs for one scope. Each scope has its
+// own commit; this does not claim an atomic transaction across two databases.
+type RecallSnapshot struct {
+	Commit     string                       `json:"commit"`
+	Sources    []RecallSource               `json:"sources"`
+	Embeddings []EmbeddingSource            `json:"embeddings"`
+	Lexical    []LexicalHit                 `json:"lexical"`
+	Provenance map[string]*CommitProvenance `json:"provenance,omitempty"`
+}
+
 // DecisionSearchHit is one committed decision matched by the text-search
 // surface. Score is Dolt's higher-is-better natural-language relevance.
 type DecisionSearchHit struct {

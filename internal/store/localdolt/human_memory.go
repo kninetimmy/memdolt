@@ -28,12 +28,15 @@ type DecisionAddOptions struct {
 // HumanMemoryResult carries a confirmed identity/hash even when finalization
 // fails. Unchanged means no row changed and no empty commit was manufactured.
 type HumanMemoryResult struct {
-	Kind   string `json:"kind"`
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	By     string `json:"by,omitempty"`
-	Commit string `json:"commit,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Kind            string   `json:"kind"`
+	ID              string   `json:"id"`
+	Status          string   `json:"status"`
+	By              string   `json:"by,omitempty"`
+	Commit          string   `json:"commit,omitempty"`
+	Error           string   `json:"error,omitempty"`
+	SourceID        string   `json:"sourceId,omitempty"`
+	SourceCommit    string   `json:"sourceCommit,omitempty"`
+	TitleCollisions []string `json:"titleCollisions,omitempty"`
 }
 
 // FactAdd is an explicit human assertion, separate from proposal staging. Only
@@ -140,8 +143,15 @@ func (s *Store) DecisionAdd(ctx context.Context, opts DecisionAddOptions) (Human
 			return HumanMemoryResult{}, err
 		}
 	}
-	return s.humanMemoryWrite(ctx, opts.Actor, append(d.text(), opts.Source), "decision add", func(_ *sql.Conn) (HumanMemoryResult, []store.Statement, error) {
+	return s.humanMemoryWrite(ctx, opts.Actor, append(d.text(), opts.Source), "decision add", func(conn *sql.Conn) (HumanMemoryResult, []store.Statement, error) {
 		result := HumanMemoryResult{Kind: "decision", ID: newID(), Status: "created"}
+		if s.globalRepo != nil {
+			var err error
+			result.TitleCollisions, err = globalDecisionCollisions(ctx, conn, d.Title)
+			if err != nil {
+				return result, nil, err
+			}
+		}
 		return result, []store.Statement{{
 			SQL:  "INSERT INTO decisions (id, title, rationale, summary, alternatives_rejected, evidence, status, source, decided_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)",
 			Args: []any{result.ID, d.Title, d.Rationale, nullable(d.Summary), nullable(d.AlternativesRejected), nullable(d.Evidence), opts.Source, time.Now().UTC().Truncate(time.Second)},
