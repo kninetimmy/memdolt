@@ -108,8 +108,11 @@ func TestRepoStatusOfflineNoRemoteAndSelection(t *testing.T) {
 
 func TestRepoStatusAncestryAndExactNullableDiff(t *testing.T) {
 	a, remote := transferFixture(t)
+	beforeText := strings.Repeat("café → 🌳\r\n", 1024) + "\x00before "
+	afterText := strings.Repeat("日本語\n", 1024) + "\x00after "
 	initial := statusCommit(t, a,
-		store.Statement{SQL: "INSERT INTO tasks (id, title, notes) VALUES ('modified', 'before', NULL), ('deleted', 'gone', '')"})
+		store.Statement{SQL: "INSERT INTO tasks (id, title, notes) VALUES ('modified', 'before', NULL), ('deleted', 'gone', '')"},
+		store.Statement{SQL: "INSERT INTO tasks (id, title, notes, status) VALUES ('text', '', ?, 'open')", Args: []any{beforeText}})
 	statusPush(t, a)
 	b := transferClone(t, a)
 	current := statusPreserved(t, b, remote, RepoStatusOptions{Diff: true}, "current")
@@ -119,13 +122,14 @@ func TestRepoStatusAncestryAndExactNullableDiff(t *testing.T) {
 	remoteHead := statusCommit(t, a,
 		store.Statement{SQL: "UPDATE tasks SET notes = '', title = NULL WHERE id = 'modified'"},
 		store.Statement{SQL: "DELETE FROM tasks WHERE id = 'deleted'"},
-		store.Statement{SQL: "INSERT INTO tasks (id, title) VALUES ('added', 'remote row')"})
+		store.Statement{SQL: "INSERT INTO tasks (id, title) VALUES ('added', 'remote row')"},
+		store.Statement{SQL: "UPDATE tasks SET notes = ?, status = NULL WHERE id = 'text'", Args: []any{afterText}})
 	statusPush(t, a)
 	behind := statusPreserved(t, b, remote, RepoStatusOptions{Diff: true}, "behind")
 	if behind.MainCommit != initial || behind.RemoteCommit != remoteHead || behind.MergeBase != initial || behind.Diff.Direction != "local-to-remote" || behind.Diff.FromCommit != initial || behind.Diff.ToCommit != remoteHead {
 		t.Fatalf("captured diff hashes = %+v", behind)
 	}
-	if len(behind.Diff.Tables) != 1 || behind.Diff.Tables[0].Table != "tasks" || len(behind.Diff.Tables[0].Rows) != 3 {
+	if len(behind.Diff.Tables) != 1 || behind.Diff.Tables[0].Table != "tasks" || len(behind.Diff.Tables[0].Rows) != 4 {
 		t.Fatalf("diff = %+v", behind.Diff)
 	}
 	rows := behind.Diff.Tables[0].Rows
@@ -137,6 +141,10 @@ func TestRepoStatusAncestryAndExactNullableDiff(t *testing.T) {
 	}
 	if len(rows[2].From) != 6 || len(rows[2].To) != 6 {
 		t.Fatal("a NULL column was omitted instead of retained")
+	}
+	if rows[3].Type != "modified" || interopValue(rows[3].From, "notes") != beforeText || interopValue(rows[3].To, "notes") != afterText ||
+		interopValue(rows[3].From, "status") != "open" || rows[3].To["status"] != nil || rows[3].To["title"] == nil || *rows[3].To["title"] != "" {
+		t.Fatal("text materialization changed Unicode, NUL, whitespace, NULL ENUM or empty string")
 	}
 	if ordinary := statusPreserved(t, b, remote, RepoStatusOptions{}, "behind"); ordinary.Diff != nil {
 		t.Fatal("ordinary status exposed row bodies")

@@ -48,6 +48,62 @@ before-images differing from exported main refuse before output/import writes.
 An older conflicting base cannot be silently rebased: reconcile it in the
 retained source and export again. Interop does not transport the original graph.
 
+## Re-export after reopening (issue #153)
+
+Before #153, the native round-trip contract above had a cold-process failure:
+an imported pending decision could re-export with `error processing column 12:
+context canceled`, despite a live caller context. The existing in-process
+round-trip test passed because Dolt shares its warmed node cache across stores.
+After #153, the same reopened import exports through both a fresh direct CLI
+process and a fresh authenticated owner, preserving all committed rows, exact
+NULLs, and unaccepted proposal payloads. Export still changes no memory or refs.
+
+The pinned driver v1.88.1 calls `TextStorage.Value` after advancing the SQL row
+iterator. In `repoDiffRows`, SQL `ORDER BY` drains the underlying
+`prollyDiffIter`, whose `Close` cancels the child context stored in deferred
+TEXT values. `CAST(... AS CHAR)` can preserve those wrappers. Reading uncached
+`to_rationale` later therefore fails at column 12; cached text masks the error.
+`CONCAT(CAST(... AS CHAR), '')` materializes text during SQL evaluation using
+the caller's query context, retaining NULLs and the existing NULL ENUM cast.
+It adds no length limit and propagates materialization errors.
+
+Complete structural inventory:
+
+- `internal/store/localdolt/repo_status.go`: only `repoDiffRows` changes its
+  projected row cells. Its validated revision-qualified tables, bound hashes,
+  SQL sorting, added/modified/deleted classifications, complete nullable images,
+  query cancellation and close/error handling remain. Materialization applies
+  to this helper alone, not every SQL reader. Its two callers, `captureInterop`
+  and `repoDiff`, retain their captures, schema checks and output formats;
+  export and repository status inherit the correction. Review's `tableChanges`
+  and main/import/promotion's `readInteropRows` remain unchanged. No lock,
+  path/publication, review, import, dependency or schema policy changes.
+- `cmd/memdolt/interop_test.go`: new
+  `TestInteropCLIReexportPendingDecision`, `interopRepoSnapshot`,
+  `interopAssertBundle`, `interopProcess` and `TestInteropHelperProcess` add
+  isolated synthetic export/import/reopen/re-export/reimport coverage. Both
+  direct and production-owner processes exercise pending and no-pending cases,
+  complete rows/nulls, proposal identities/payloads, immutable main/proposal/
+  working roots, source preservation and invalid/protected/foreign destinations.
+  Existing CLI tests and helpers retain their behavior; no live store is used.
+- `internal/store/localdolt/interop_test.go`: new
+  `TestInteropExportCancellationRemainsVisible` cancels after branch capture,
+  checks refused export without output/lock, and verifies the shared diff reader
+  reports cancellation without changing repository state. Existing tests remain.
+- `internal/store/localdolt/repo_status_test.go`:
+  `TestRepoStatusAncestryAndExactNullableDiff` retains its previous assertions
+  and adds long Unicode TEXT, NUL, whitespace, empty-string and NULL ENUM checks
+  on both row images. Existing snapshot, dirty-DDL and preservation tests remain.
+- This guide, `AGENTS.md` and PRD §15 retain the prior interop claims and add
+  this before/after correction. The optional migration and physical hub gates
+  remain unchanged; no frozen golden data or assertion changes.
+
+The regression command is `go test -tags gms_pure_go ./cmd/memdolt -run
+'^TestInteropCLIReexportPendingDecision$' -count=1 -v`. With the prior projection,
+both pending cases fail at column 12 and both no-pending controls pass. With
+the corrected projection, all four pass. Merely closing and reopening stores
+in one process is insufficient to reproduce the cold-cache failure.
+
 ## Actual legacy-v1 fields and intentional dispositions
 
 `--from-memhub` reads the tagged v0.2.0 `src/export/v1.rs` contract plus only

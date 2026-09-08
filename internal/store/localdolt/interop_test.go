@@ -495,6 +495,38 @@ func TestInteropExportPinsMainAndProposalHeadsBeforeReads(t *testing.T) {
 	}
 }
 
+func TestInteropExportCancellationRemainsVisible(t *testing.T) {
+	s := renderStore(t)
+	pending, err := s.ProposeDecision(context.Background(), Proposal{Actor: s.cfg.Actor, Target: TargetRepo, Rationale: "keep pending"}, Decision{Title: "cancelled export", Rationale: "read with caller context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := statusSnapshot(t, s)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	file := filepath.Join(interopTempDir(t), "cancelled.json")
+	result, err := s.exportMemory(ctx, ExportMemoryOptions{File: file}, interopHooks{afterCapture: cancel})
+	if ctx.Err() != context.Canceled || err == nil || result.Written || result.Status != "refused" {
+		t.Fatalf("cancelled export=%+v, %v", result, err)
+	}
+	for _, path := range []string{file, filepath.Join(filepath.Dir(file), ".cancelled.json.memdolt-export.lock")} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("cancelled export left output/lock %s: %v", path, err)
+		}
+	}
+	conn, err := s.db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes, err := repoDiffRows(ctx, conn, "decisions", transferMain(t, s), pending.Commit)
+	if closeErr := conn.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "context canceled") || len(changes) != 0 || statusSnapshot(t, s) != before {
+		t.Fatalf("cancelled diff lost error or changed repository: %+v, %v", changes, err)
+	}
+}
+
 func TestInteropNativeSupersedeAndAcceptedMetadata(t *testing.T) {
 	ctx := context.Background()
 	s := renderStore(t)

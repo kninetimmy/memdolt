@@ -2577,6 +2577,16 @@ from numeric-ID memhub v1, is not reverse-compatible with it and is not sync.
 Documents/chunks, indexes, config, ownership credentials, transcript archives/
 pointers and repository/host identity are excluded.
 
+Before #153, this native round-trip contract had a cold-process failure when
+re-exporting an imported pending decision: sorted diff rows could retain lazy
+TEXT whose iterator context had already been canceled. After #153, the shared
+`repoDiffRows` materializes those cells with the caller's query context. Fresh
+direct and authenticated-owner exports retain complete rows, exact NULLs and
+pending proposals, including after another import. SQL ordering, immutable
+hashes, caller cancellation and all import/review/file guards remain unchanged.
+This correction binds that export/status helper alone; the [migration guide](../migration.md#re-export-after-reopening-issue-153)
+records the cause, full structural inventory and cold-process regression.
+
 Legacy input follows actual tagged v0.2.0 `src/export/v1.rs`, plus only
 v0.2.2's five nullable note fields; declared source schemas 1-24 are supported.
 Older absent optional arrays/fields use original serde defaults. Only
