@@ -220,16 +220,26 @@ func commandOutput(ctx context.Context, binary string, args ...string) (_ []byte
 			return nil, openErr
 		}
 		defer func() { err = errors.Join(err, root.Close()) }()
-		if err := root.Mkdir(".dolt", 0o700); err != nil {
+		if err := root.Mkdir("home", 0o700); err != nil {
 			return nil, err
 		}
-		defer func() { err = errors.Join(err, root.Remove(".dolt")) }()
-		if err := root.WriteFile(".dolt/config_global.json", []byte(`{"metrics.disabled":"true","versioncheck.disabled":"true"}`), 0o600); err != nil {
+		defer func() { err = errors.Join(err, root.Remove("home")) }()
+		if err := root.Mkdir("home/.dolt", 0o700); err != nil {
 			return nil, err
 		}
-		defer func() { err = errors.Join(err, root.Remove(".dolt/config_global.json")) }()
-		cmd.Dir = dir
-		cmd.Env = append(cmd.Env, "HOME="+dir, "DOLT_ROOT_PATH="+dir)
+		defer func() { err = errors.Join(err, root.Remove("home/.dolt")) }()
+		if err := root.WriteFile("home/.dolt/config_global.json", []byte(`{"metrics.disabled":"true","versioncheck.disabled":"true"}`), 0o600); err != nil {
+			return nil, err
+		}
+		defer func() { err = errors.Join(err, root.Remove("home/.dolt/config_global.json")) }()
+		// The global .dolt must not also be cwd's repository metadata: native
+		// startup otherwise treats that directory as a database to discover.
+		if err := root.Mkdir("work", 0o700); err != nil {
+			return nil, err
+		}
+		defer func() { err = errors.Join(err, root.Remove("work")) }()
+		cmd.Dir = filepath.Join(dir, "work")
+		cmd.Env = append(cmd.Env, "HOME="+filepath.Join(dir, "home"), "DOLT_ROOT_PATH="+filepath.Join(dir, "home"))
 	}
 	var out boundedOutput
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
