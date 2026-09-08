@@ -97,9 +97,8 @@ func decodeMemhubExport(data []byte) (InteropBundle, []InteropIdentity, legacyHi
 	if _, err := memhubTimestamp(*source.ExportedAt); err != nil {
 		return bundle, nil, history, errors.New("invalid memhub exported_at timestamp")
 	}
-	version, err := strconv.Atoi(*source.Schema)
-	if err != nil || version < 1 || version > 24 {
-		return bundle, nil, history, errors.New("unsupported memhub source_schema_version; tagged v0.2.0/v0.2.2 cover versions 1-24")
+	if !supportedMemhubSchema(*source.Schema) {
+		return bundle, nil, history, errors.New("unsupported memhub source_schema_version; require numeric 1-24 or an exact tagged v0.2.0/v0.2.2 migration identifier")
 	}
 	if _, err := memhubTimestamp(*source.Project.Created); err != nil {
 		return bundle, nil, history, errors.New("invalid memhub project.created_at timestamp")
@@ -257,6 +256,44 @@ func decodeMemhubExport(data []byte) (InteropBundle, []InteropIdentity, legacyHi
 		history.PendingMetadata = append(history.PendingMetadata, legacyPending{id, proposalID, memhubString(row, "actor_raw"), memhubString(row, "provenance_json")})
 	}
 	return bundle, identities, history, validateInteropMemory(bundle)
+}
+
+func supportedMemhubSchema(schema string) bool {
+	// Keep the numeric compatibility form. Tagged exporters instead copy the
+	// exact migration ID from projects.schema_version; never trust a prefix.
+	if version, err := strconv.Atoi(schema); err == nil && version >= 1 && version <= 24 {
+		return true
+	}
+	// Tagged src/db/migrations.rs lists; provenance: testdata/README.md.
+	switch schema {
+	case "0001_initial",
+		"0002_git_search",
+		"0003_pending_writes",
+		"0004_pending_write_provenance",
+		"0005_pending_write_reviewed_at",
+		"0006_session_notes",
+		"0007_project_narrative",
+		"0008_decisions_source",
+		"0009_retrieval_indexes",
+		"0010_embeddings_delete_triggers",
+		"0011_decision_summary",
+		"0012_metrics_tables",
+		"0013_session_turn_metrics",
+		"0014_documents",
+		"0015_known_projects",
+		"0016_global_accept_markers",
+		"0017_session_baseline",
+		"0018_supersede",
+		"0019_metrics_maintenance_debounce",
+		"0020_recall_metrics_surface",
+		"0021_fact_kind",
+		"0022_source_type_note",
+		"0023_session_transcripts",
+		"0024_session_note_provenance":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateMemhubRow(table string, row memhubRow) error {

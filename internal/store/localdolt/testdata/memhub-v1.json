@@ -2,7 +2,7 @@
   "memhub_export_version": 1,
   "exported_at": "2026-08-01 12:00:00",
   "exported_by": "memhub 0.2.2",
-  "source_schema_version": "24",
+  "source_schema_version": "0024_session_note_provenance",
   "project": {"root_path_at_export": "C:/synthetic-old-host/project", "created_at": "2020-01-01 00:00:00"},
   "facts": [
     {"id": 11, "key": "build.command", "value": "old build command", "confidence": 0.3, "source": "agent:codex", "verified_at": null, "created_at": "2020-02-01 01:02:03", "superseded_by": 12, "kind": "command"},

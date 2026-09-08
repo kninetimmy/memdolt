@@ -439,6 +439,25 @@ and import/proposal semantics remain. The [migration guide](docs/migration.md#re
 records the proven cause, complete touched-element inventory and fresh-process
 direct/owner regression; no dependency, migration or frozen golden changes.
 
+Before #159, the #140 tagged-export claim above and PRD §15's supported source
+schemas 1-24 had a numeric-only header exception: `decodeMemhubExport` parsed
+only numeric strings, and the synthetic fixture's `"24"` masked the actual
+tagged exporter's migration identifier. After #159, `supportedMemhubSchema`
+retains numeric 1-24 (including prior leading-zero/optional-plus spellings) and
+admits only the 24 exact tagged names, through `0023_session_transcripts` and
+`0024_session_note_provenance`. The original declaration stays in the genesis
+annotation; unknown/malformed/newer identifiers still refuse before memory/ref
+changes. This check binds the legacy decoder and `Store.ImportMemory` paths,
+including the authenticated owner, not native headers or all Store writes.
+The [migration guide](docs/migration.md#tagged-source-schema-headers-issue-159)
+records every touched symbol/file, retained behavior, tagged provenance and
+fresh-process synthetic direct/owner import/reopen/export evidence. Its existing
+command/supersession/global refusals remain. An unchanged real export now clears
+the header check through both routes but still refuses duplicate command kinds
+without source/destination changes; explicit source command reconciliation and
+the optional real migration remain outstanding. No review acceptance, force-wipe,
+dependency, migration or frozen retrieval golden change is introduced.
+
 **Local code-index delivery (issue #138).** Before this delivery, `code`,
 `locate`, `eval locate` and the real MCP `locate` tool were deferred. After
 it, `memdolt code index|status|rm`, `memdolt locate <query>` and `memdolt eval
