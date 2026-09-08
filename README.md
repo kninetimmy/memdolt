@@ -34,9 +34,10 @@ compiler: GCC or Clang on Linux/macOS, or MinGW-w64 on Windows. Both
 `CGO_ENABLED=1` and the `gms_pure_go` build tag are required; the tag removes
 the ICU requirement, but does not remove cgo.
 
-These prompts install a **client**, initialize local memory, and connect your
-agent. Models, global memory, and a remote hub are separate opt-ins. If the
-project already has memory on a remote, use `clone` instead of `init`.
+These prompts install a **client**, connect your agent, and offer
+[guided project bootstrap](#guided-project-bootstrap). Models, global memory,
+and a remote hub are separate opt-ins. If the project already has memory on a
+remote, use `clone` instead of `init`.
 
 <details>
 <summary><b>Install with Claude Code</b></summary>
@@ -53,21 +54,25 @@ https://github.com/kninetimmy/memdolt/blob/main/README.md.
    discarding edits. Set CGO_ENABLED=1 for the build and run:
    go install -tags gms_pure_go ./cmd/memdolt
    from that source checkout. Verify the installed memdolt version.
-2. Keep .memdolt/ out of this project's Git history. With no existing
-   remote memory to clone, run memdolt init, doctor, and render here.
-   Do not migrate or replace an existing memory system.
+2. Select this project's absolute root and authoritative memory system.
+   Follow the shared onboarding procedure's fresh init/existing clone
+   choice before connecting MCP. Inspect existing memory; do not reseed,
+   migrate or replace it. Preserve ignore rules and keep .memdolt/ local.
 3. Merge the memdolt entry from the source .mcp.json into this project's
    Claude MCP configuration. Preserve every other entry and let Claude
    handle its own trust/approval prompts. Use serve --dir with this
    project's absolute path if the launch directory is not guaranteed.
-4. Offer the six templates in templates/skills/claude/*.md for
-   ~/.claude/commands/. Inspect destinations first; preserve existing
-   commands and ask me to resolve name collisions, including memhub.
+4. Offer the seven memdolt-* templates in templates/skills/claude/ for
+   ~/.claude/commands/, plus templates/skills/memdolt-resources/ for
+   ~/.claude/memdolt-resources/. Follow the MCP and hosts copy layout.
+   Preserve existing commands, including memhub, and report old aliases
+   for human review without deletion. Resolve destination collisions.
 5. Reconnect MCP and verify status and tool discovery. Report failures
    accurately; do not claim a live check that you could not perform.
-6. Explain how to enable verified local models and hybrid recall later.
-   Ask before model downloads, document ingestion, or global/remote
-   setup. Do not deploy a hub or write sample facts as me.
+6. Run memdolt-init-project using its installed shared procedure. Ask
+   only for missing project context; show state/architecture drafts for
+   separate approval. Offer FTS/hybrid, code, docs, global and remote
+   choices explicitly. Do not deploy a hub or write sample facts as me.
 ~~~
 
 </details>
@@ -87,22 +92,26 @@ https://github.com/kninetimmy/memdolt/blob/main/README.md.
    discarding edits. Set CGO_ENABLED=1 for the build and run:
    go install -tags gms_pure_go ./cmd/memdolt
    from that source checkout. Verify the installed memdolt version.
-2. Keep .memdolt/ out of this project's Git history. With no existing
-   remote memory to clone, run memdolt init, doctor, and render here.
-   Do not migrate or replace an existing memory system.
+2. Select this project's absolute root and authoritative memory system.
+   Follow the shared onboarding procedure's fresh init/existing clone
+   choice before connecting MCP. Inspect existing memory; do not reseed,
+   migrate or replace it. Preserve ignore rules and keep .memdolt/ local.
 3. Inspect ~/.codex/config.toml and merge a memdolt MCP server entry
    using command = "memdolt" and args = ["serve", "--dir", <this
    project's absolute path as a TOML string>]. Preserve all other
    settings. Resolve an existing server name before changing it.
    Let Codex handle project trust; do not silently mark paths trusted.
-4. Offer the six directories in templates/skills/codex/ for
-   ~/.codex/skills/. Inspect destinations first; preserve existing
-   skills and ask me to resolve name collisions, including memhub.
+4. Offer the seven memdolt-* directories in templates/skills/codex/ for
+   ~/.codex/skills/, plus templates/skills/memdolt-resources/ for
+   ~/.codex/memdolt-resources/. Follow the MCP and hosts copy layout.
+   Preserve existing skills, including memhub, and report old aliases
+   for human review without deletion. Resolve destination collisions.
 5. Reconnect MCP and verify status and tool discovery. Report failures
    accurately; do not claim a live check that you could not perform.
-6. Explain how to enable verified local models and hybrid recall later.
-   Ask before model downloads, document ingestion, or global/remote
-   setup. Do not deploy a hub or write sample facts as me.
+6. Run memdolt-init-project using its installed shared procedure. Ask
+   only for missing project context; show state/architecture drafts for
+   separate approval. Offer FTS/hybrid, code, docs, global and remote
+   choices explicitly. Do not deploy a hub or write sample facts as me.
 ~~~
 
 </details>
@@ -122,24 +131,29 @@ https://github.com/kninetimmy/memdolt/blob/main/README.md.
    discarding edits. Set CGO_ENABLED=1 for the build and run:
    go install -tags gms_pure_go ./cmd/memdolt
    from that source checkout. Verify the installed memdolt version.
-2. Keep .memdolt/ out of this project's Git history. With no existing
-   remote memory to clone, run memdolt init, doctor, and render here.
-   Do not migrate or replace an existing memory system.
+2. Select this project's absolute root and authoritative memory system.
+   Follow the shared onboarding procedure's fresh init/existing clone
+   choice before connecting MCP. Inspect existing memory; do not reseed,
+   migrate or replace it. Preserve ignore rules and keep .memdolt/ local.
 3. Inspect the installed OpenCode version and existing JSON/JSONC.
    The source opencode.json is a native V2 example: merge its
    mcp.servers.memdolt entry, commands, and a real skills path.
    Do not replace the whole configuration or copy a relative skills
    path that does not exist in this project. Preserve user settings.
-4. Offer templates/skills/opencode/ for ~/.config/opencode/skills/,
-   preserving existing skills and resolving name collisions first.
+4. Offer the seven memdolt-* directories in templates/skills/opencode/
+   for ~/.config/opencode/skills/, plus templates/skills/memdolt-resources/
+   for ~/.config/opencode/memdolt-resources/. Preserve existing skills,
+   including memhub; report old aliases for human review without deletion.
+   Resolve destination collisions and follow the MCP and hosts copy layout.
    Bind serve --dir to this project if the launch directory is unclear.
 5. Reconnect MCP and check status and tool discovery. Run doctor for
    its registration advisory. Before any OpenCode wrap-up, obtain the
    current session ID from host context and follow the shipped skill's
    session-info verification; never guess or discover another session.
-6. Explain verified models and hybrid recall. Ask before downloads,
-   document ingestion, or global/remote setup. Do not deploy a hub,
-   migrate existing memory, or write sample facts as me.
+6. Run memdolt-init-project using its installed shared procedure. Ask
+   only for missing project context; show state/architecture drafts for
+   separate approval. Offer FTS/hybrid, code, docs, global and remote
+   choices explicitly. Do not deploy a hub or write sample facts as me.
 ~~~
 
 </details>
@@ -206,6 +220,45 @@ Follow [MCP and hosts](#mcp-and-hosts) to connect an agent, and
 Use `--dir <repository>` when running store commands from elsewhere.
 
 </details>
+
+### Guided project bootstrap
+
+After installing the [host workflows](#mcp-and-hosts), invoke
+`memdolt-init-project`. Before #155, the install prompts primarily established
+an empty store and connection. Now the
+[shared onboarding procedure](templates/skills/memdolt-resources/onboarding.md)
+also guides project context and separately approved state/architecture drafts:
+
+1. Inspect the selected project root, instructions, manifests, host bindings and
+   existing memory. Explicitly choose the authoritative memory system; preserve
+   memhub when it remains authoritative. Inspect existing source narratives
+   instead of reseeding them.
+2. Choose fresh `init`, an existing remote `clone`, or continued local memory.
+   Optional migration requires a separately approved disposable rehearsal.
+3. Infer purpose, stack, build/test/run commands and constraints. Ask only for
+   missing information; show separate state and architecture drafts for review.
+4. Choose FTS or verified local hybrid models, optional code indexing, a selected
+   Markdown document, global memory and remote setup. Downloads, ingestion and
+   transfers remain explicit choices; preserve existing configuration tables.
+5. Write only approved changed narratives using stdin and the actual host actor.
+   For example, with a selected root and reviewed UTF-8 file, a Codex POSIX-shell
+   invocation is `memdolt state set --dir "$memdolt_repo" --actor codex --json < "$approved_state_file"`;
+   `arch set` uses the same stdin shape. Claude uses `--actor "Claude Code"` and
+   OpenCode uses `--actor opencode`. There is no `--from-file` flag. Read back
+   content/attribution, run approved project checks, and record only their
+   observed command outcomes. Follow the shared procedure for PowerShell.
+6. Render and inspect the generated narratives. Narratives are not recall
+   sources, so narrative-only memory can correctly return blank recall. Verify
+   recall/locate only against actual selected content. Separately check live
+   host workflow/tool discovery and the MCP `status` target; `doctor` is not
+   proof of live-agent behavior.
+
+Use `memdolt-wrap-up` to inspect and separately approve later state/architecture
+changes before rendering. Unchanged or rejected narratives need no write.
+Facts/decisions still use agent proposals and human review. A confirmed write
+is not replayed to repair a later render failure; inspect its ID/hash and the
+reported outputs first. This ships workflow guidance and package/CLI checks,
+without an installer, runtime wizard, automatic migration or live-host setup.
 
 ## How it works
 
@@ -389,10 +442,12 @@ Initialize memory in each project you choose. Each gets its own
 `.memdolt/` directory, review queue, and history; `--dir` selects the target.
 The shipped setup does not create a machine-wide known-project registry.
 
-One process owns a local Dolt store at a time. `memdolt serve` holds it while
-serving MCP; supported CLI operations reach that owner through authenticated
-local IPC. With no owner, the CLI opens the store directly. Stop the owner
-before initialization/migration, and inspect ownership errors with `doctor`.
+One process owns a local Dolt store at a time. Each `memdolt serve` opens and
+holds it while serving MCP; a second host's MCP server competes for that clone.
+Hand off by stopping the old host's owner cleanly before starting the next.
+Supported CLI operations reach the live owner through authenticated local IPC.
+With no owner, the CLI opens the store directly. Stop the owner before
+initialization/migration, and inspect ownership errors with `doctor`.
 
 ### Shared memory across projects
 
@@ -444,16 +499,20 @@ executing the transfer. When a live MCP owner handles it, that owner needs
 the environment value; the CLI does not forward its password. Keep passwords
 out of URLs, command arguments, and committed configuration.
 
-After a pull, run `index status` and `index rebuild` as needed, and refresh
-rendered views explicitly. A normal session is pull → work → review →
-render → push. Push publishes committed `main`, with no force option; it
+After an authorized pull/merge, run `index status` and approved `index rebuild`
+as needed, and refresh rendered views explicitly. A normal session is selected
+remote → pull/merge → refresh vectors/views → work → review → wrap-up/render
+and note flush → authorized push. Push publishes committed `main`, with no force option; it
 does not flush notes, accept proposals, or publish local indexes.
 
 `repo status --diff` shows committed local-to-remote differences;
 `repo status --local` stays offline. A conflicted `pull --json` reports the
 choices needed. Review the full result and supply a complete resolution with
 `pull --resolve <file>`, or use explicit human forms in a capable MCP host.
-There is no Drive snapshot adoption step. See the
+There is no Drive snapshot adoption step. Pending proposals/queued notes do
+not transfer; models, indexes, views and configuration remain local. Global
+memory uses separate remotes, explicit `--global` transfers and local refresh.
+Remote-aware status may fetch and also needs transfer authorization. See the
 [transfer and conflict contract](docs/prd/memdolt-prd.md).
 
 ### Self-host a hub
@@ -570,18 +629,44 @@ names for separately bound projects. Reconnect the host and verify its live
 tool discovery. `doctor` checks store health and recognizes OpenCode
 registration; it does not validate all three hosts or grant trust.
 
-Six workflows ship for each host: **check-init, recall, wrap-up, locate,
-eval-locate, global**. Install only the ones you want, preserving same-name
-user skills:
+Before #155, six generic workflows shipped: **check-init, recall, wrap-up,
+locate, eval-locate, global**. After it, all seven shipped entry points use
+namespaced filenames/directories and frontmatter: **memdolt-check-init,
+memdolt-eval-locate, memdolt-global, memdolt-init-project, memdolt-locate,
+memdolt-recall, memdolt-wrap-up**. Install only selected workflows using this
+copy layout; copy the shared resource with onboarding:
 
 | Host | Source | User destination |
 | --- | --- | --- |
-| Claude Code | [`templates/skills/claude/*.md`](templates/skills/claude) | `~/.claude/commands/` |
-| Codex | [`templates/skills/codex/<name>/SKILL.md`](templates/skills/codex) | `~/.codex/skills/<name>/SKILL.md` |
-| OpenCode | [`templates/skills/opencode/<name>/SKILL.md`](templates/skills/opencode) | `~/.config/opencode/skills/<name>/SKILL.md` |
+| Claude Code | [`templates/skills/claude/memdolt-*.md`](templates/skills/claude) | `~/.claude/commands/memdolt-*.md` |
+| Codex | [`templates/skills/codex/memdolt-*/`](templates/skills/codex) | `~/.codex/skills/memdolt-*/` |
+| OpenCode | [`templates/skills/opencode/memdolt-*/`](templates/skills/opencode) | `~/.config/opencode/skills/memdolt-*/` |
+| Each selected host | [`templates/skills/memdolt-resources/`](templates/skills/memdolt-resources) | `~/.claude/memdolt-resources/`, `~/.codex/memdolt-resources/`, or `~/.config/opencode/memdolt-resources/` |
 
-The OpenCode example's `skills` array must point to a real installed source
-directory; its plural `commands` map provides the wrappers. OpenCode wrap-up
+Copy each selected file/directory with its name intact. The resource directory
+is a **sibling** of `commands/` or `skills/`, outside workflow discovery.
+Claude's onboarding link is `../memdolt-resources/onboarding.md`; Codex and
+OpenCode use `../../memdolt-resources/onboarding.md` from their `SKILL.md`.
+Resolve links relative to the installed entry point, not the project directory.
+This layout works with a target project that has no Memdolt source checkout.
+
+Inspect every destination before copying. Preserve existing generic memhub
+skills, unrelated host entries and trust settings. If a namespaced destination
+differs, present the specific collision for human resolution instead of
+overwriting it. Report old installed generic aliases and their paths/ownership
+for human review; do not delete them. Explicitly select the repository's
+authoritative memory system in its instructions, and bind MCP to its absolute
+root. Verify live `status.dataDir` is that root's `.memdolt/dolt` (the database
+is its `memory` child) before using tools, especially with multiple Codex server
+entries. Preserve host trust prompts; installation never grants trust.
+
+The OpenCode example's `skills` array points to this source checkout's
+`templates/skills/opencode`. For a copied installation, merge the actual
+absolute `~/.config/opencode/skills` path into the existing array; do not copy
+the example's relative path into an unrelated project. Its plural `commands`
+map uses the exact `memdolt-*` skill names; merge only selected wrappers and
+preserve unrelated commands. Reconnect and verify the new names in live host
+discovery. OpenCode wrap-up
 requires a host-provided current session ID and independently verified API
 metadata before writing.
 

@@ -10,29 +10,33 @@
     }
   },
   "commands": {
-    "global": {
+    "memdolt-init-project": {
+      "description": "Guide Memdolt project bootstrap and approved narratives",
+      "template": "Use the memdolt-init-project skill. Arguments: $ARGUMENTS"
+    },
+    "memdolt-global": {
       "description": "Inspect and manage the enabled global memory replica",
-      "template": "Use the memdolt global skill. Arguments: $ARGUMENTS"
+      "template": "Use the memdolt-global skill. Arguments: $ARGUMENTS"
     },
-    "eval-locate": {
+    "memdolt-eval-locate": {
       "description": "Evaluate the memdolt local code locator",
-      "template": "Use the memdolt eval-locate skill. Arguments: $ARGUMENTS"
+      "template": "Use the memdolt-eval-locate skill. Arguments: $ARGUMENTS"
     },
-    "locate": {
+    "memdolt-locate": {
       "description": "Locate local tracked source by intent",
-      "template": "Use the memdolt locate skill. Arguments: $ARGUMENTS"
+      "template": "Use the memdolt-locate skill. Arguments: $ARGUMENTS"
     },
-    "check-init": {
+    "memdolt-check-init": {
       "description": "Check memdolt project health",
-      "template": "Use the memdolt check-init skill. Arguments: $ARGUMENTS"
+      "template": "Use the memdolt-check-init skill. Arguments: $ARGUMENTS"
     },
-    "recall": {
+    "memdolt-recall": {
       "description": "Recall memdolt project memory",
-      "template": "Use the memdolt recall skill. Arguments: $ARGUMENTS"
+      "template": "Use the memdolt-recall skill. Arguments: $ARGUMENTS"
     },
-    "wrap-up": {
+    "memdolt-wrap-up": {
       "description": "Wrap up this memdolt session",
-      "template": "Use the memdolt wrap-up skill. Arguments: $ARGUMENTS"
+      "template": "Use the memdolt-wrap-up skill. Arguments: $ARGUMENTS"
     }
   },
   "skills": ["templates/skills/opencode"]

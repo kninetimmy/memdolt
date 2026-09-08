@@ -2274,14 +2274,20 @@ This is the narrow v0.2.2 supplement to the v0.2.0 parity baseline, not a claim 
     }
   },
   "commands": {
-    "wrap-up": {
+    "memdolt-wrap-up": {
       "description": "Wrap up this memdolt session",
-      "template": "Use the memdolt wrap-up skill. Arguments: $ARGUMENTS"
+      "template": "Use the memdolt-wrap-up skill. Arguments: $ARGUMENTS"
     }
   },
   "skills": ["templates/skills/opencode"]
 }
 ```
+
+Before #155 the example command was `wrap-up`, referring to the "memdolt wrap-up
+skill". After it, the key and reference are `memdolt-wrap-up`, matching the
+namespaced installed skill. The source-relative `skills` example still works
+in this checkout; copied installations use an actual installed absolute path
+as described in §11.5. The MCP registration shape is unchanged.
 
 `commands` is the plural command-object map and `skills` is a path array. Doctor recognizes a registration only after parsing a repo or user `opencode.json`/`opencode.jsonc`: native `mcp.servers.memdolt` and officially supported V1 `mcp.memdolt` count; JSONC comments and trailing commas are accepted before a real JSON parse; malformed files and similarly named unsupported paths do not count.
 
@@ -2334,8 +2340,8 @@ in their deny-list declarations (§6.1); these general lanes do not verify an
 OpenCode API identity. Authenticated owner routing, note batching, the sixteen
 MCP tools, and elicited human review retain their existing behavior.
 
-The committed core templates for Claude Code, Codex, and OpenCode offer only
-check-init, recall, and wrap-up using implemented M3 operations. OpenCode
+At M3, the committed core templates for Claude Code, Codex, and OpenCode offered
+only check-init, recall, and wrap-up using implemented M3 operations. OpenCode
 wrap-up verifies the host-context ID before any workflow write and re-verifies
 it when writing the approved summary; a failure stops later steps. Facts and
 decisions remain proposals for human review. Before issue #133, no template
@@ -2343,7 +2349,7 @@ added render, sync, transcript capture, wrapper installation, or the other
 deferred backends. After it, the three wrap-up templates add only render after
 approved writes and report its committed source and file effects. Before #145,
 Claude/Codex notes remained queued until their deadline/shutdown flush, so the
-summary was absent from earlier renders. After #145 step 6 flushes that owner's
+summary was absent from earlier renders. After #145 the then-step 6 flushes that owner's
 pending notes through either MCP or authenticated CLI before the snapshot;
 flush errors stop publication and confirmed/unknown outcomes require inspection.
 OpenCode's verified CLI summary is already committed. Their review, approval
@@ -2354,6 +2360,107 @@ outside these templates, and transcript/token-accounting gates are unchanged.
 **Transcript archive.** Transcript mode requires a separate explicit approval that warns the archive is unredacted. It reuses the already verified current id and never discovers or guesses another one. Before any process invocation, validate an OpenCode id as `ses` followed by a nonempty ASCII alphanumeric, underscore, or hyphen suffix. Invoke `opencode2 api v2.session.export --param sessionID=<id> --param sanitize=false` through argument-based process APIs (on Windows, fall back to `opencode2.cmd` only when the bare program is unavailable). Before opening the project or writing, require a JSON object `data`, object `data.info`, exact `data.info.id`, and array `data.messages`. Archive the exact complete, unsanitized response bytes as `.json.zst` and retain one replaceable local pointer per session. Archive and pointer data are excluded from recall, embeddings, and every export; `[wrap_up].transcript_retention_days` governs retention, and expiry removes the local archive and its pointer.
 
 **Skills and upgrade.** Hibernated `metrics` and `viz` may remain in source for feature builds but are absent from normal OpenCode `skills` and command discovery. Additive wrapper sync never creates an absent agent directory, overwrites an unowned file, or automatically deletes stale or hibernated wrappers. It reports stale or unowned wrappers as actionable orphans for manual review/removal and leaves user files unchanged.
+
+### 11.5 Guided onboarding and narrative continuity (issue #155)
+
+Before this slice, #138/#146 had expanded the three-host package to six generic
+workflows: check-init, eval-locate, global, locate, recall and wrap-up. README
+installation prompts primarily initialized an empty store and connection;
+wrap-up did not inspect or refresh project_state/project_arch. After it, seven
+`memdolt-*` entry points per host add guided project bootstrap and separately
+approved narrative updates. Existing store operations supply all behavior;
+there is no runtime wizard or installer. The complete touched structure is:
+
+- `README.md` Quickstart adds guided bootstrap and links the shared procedure;
+  MCP/hosts documents copying the resource beside the discovery root, explicit
+  authority/target selection and old-alias reporting. One-machine/transfer
+  guidance clarifies host handoff and explicit vector/view/global refresh.
+  Existing build, model verification, human review, secret handling and
+  runtime/acceptance limits remain. Existing memhub installations are preserved.
+- New `templates/skills/memdolt-resources/onboarding.md` owns the common
+  inspect → fresh/clone/existing/migration choice → missing-context questions
+  → separate narrative approvals → optional retrieval/code/docs/global/remote
+  choices → attributed stdin writes → verification procedure. It requires
+  inspecting existing source narratives instead of reseeding, distinguishes
+  narrative-only blank recall from failure, and describes partial/unknown
+  results without automatic replay. Migration is a separately approved
+  disposable rehearsal; hub deployment and new catch-up/audit/upgrade
+  workflows remain outside this delivery.
+- New `claude/memdolt-init-project.md`, `codex/memdolt-init-project/SKILL.md`
+  and `opencode/memdolt-init-project/SKILL.md` under `templates/skills/` load
+  that one procedure. Their relative links resolve from the installed file
+  to a sibling `memdolt-resources/onboarding.md`, independent of the target
+  project's cwd or presence of this source checkout. They supply actual host
+  actor spellings (`Claude Code`, `codex`, `opencode`); no human impersonation.
+- The eighteen existing entry points are renamed: each of **check-init,
+  eval-locate, global, locate, recall, wrap-up** gains the `memdolt-` prefix
+  in `templates/skills/claude/<name>.md` and
+  `templates/skills/{codex,opencode}/<name>/SKILL.md`, including frontmatter.
+  Check-init, eval-locate, global, locate and recall retain their prior
+  operating rules. Namespacing changes source discovery, not installed user
+  files; old generic aliases are reported for human review without deletion.
+- The three renamed `memdolt-wrap-up` templates now inspect narratives in
+  step 1, require separately approved changes in step 2, and write those changes
+  with attributed CLI `state set` / `arch set` and stdin in step 6 before
+  render in step 7. Unchanged/rejected narratives require no set call. The
+  task/command/proposal approval rules, human fact/decision gate, note flushing,
+  confirmed/unknown outcomes, no-replay and explicit transfer boundaries remain.
+  OpenCode still verifies the current host-context ID before later workflow
+  writes and makes its verified summary the first durable write in step 3.
+- `opencode.json` retains its native V2 MCP server and source-relative skills
+  root. Its six command keys/template references gain the exact `memdolt-`
+  names and the seventh wraps `memdolt-init-project`. The README describes
+  merging selected entries with a real absolute installed skills path while
+  preserving unrelated configuration and host trust choices.
+- `cmd/memdolt/host_templates_test.go` updates
+  `TestTrackedHostRegistrationsUseNativeCoexistingShapes` to check the seven
+  command keys and exact skill references while retaining native registrations.
+  `TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools` checks actual
+  names/frontmatter and narrative/identity/approval ordering. Before this
+  correction its deferred list erroneously included implemented `doc_add` and
+  `repo_status`; after it only `history` and `archive_transcript` stay forbidden.
+  New `TestInstalledOnboardingResourcesResolveOutsideCheckout` copies the
+  documented layout into isolated host roots, preserves a generic memhub
+  fixture and resolves the actual shared link from an unrelated project cwd.
+  `allSkillFiles` skips the shared resource directory because it is outside
+  workflow discovery; the other file/JSON enumeration helpers remain unchanged.
+- `cmd/memdolt/code_test.go` updates only the two template lookup paths in
+  `TestLocatorSkillTemplatesAndProtectedGoldenCommand` to their namespaced
+  names. Its existing locator language checks and exact protected golden CI
+  command assertion remain unchanged, as do all runtime code-index tests.
+- New `cmd/memdolt/onboarding_test.go` adds
+  `TestOnboardingNarrativeRecipePreservesMemoryAfterReopening`. Existing CLI
+  helpers initialize disposable replicas and close/reopen them across stdin
+  bootstrap/update/show/render calls for all three host actors. Checks retain
+  approved fixture bodies and earlier versions, row/commit attribution,
+  unrelated tasks/notes, pending proposal heads and render exclusion; rendering
+  without another approved update adds no narrative commit. FTS narrative-only
+  recall is empty. This is deterministic package/CLI evidence, not live-agent
+  approval or host compliance, OpenCode session verification, or cold-process
+  cache acceptance. No fixture touches live host directories or user memory.
+- This PRD updates §11.4's command example and historical template scope,
+  records the complete before/after here and adds the bounded §16 delivery
+  record. Its parity baseline and M3/M4/M5/M6 acceptance gates remain unchanged.
+
+Approval, authority selection and current-session provenance are obligations
+of these onboarding/wrap-up templates, not new runtime security enforcement on
+every CLI/MCP entry point. `newNarrativeSetCommand` still accepts stdin and
+explicit attribution through the existing direct lane; `Lanes.SetNarrative`
+still appends a version and does not enforce template approval. The
+`opencode.VerifySession` origin limitation in §11.4 remains scoped to that
+verifier and its two CLI callers, not all memory writers. `Toolset.Render`
+flushes that owner's queue; standalone store rendering has no session queue.
+`RegisterTools` still registers exactly 22 tools; no registration is added.
+
+The guidance distinguishes `doctor`'s five checks from actual host workflow/tool
+discovery and target verification: MCP `status.dataDir` reports
+`<root>/.memdolt/dolt`, whose `memory` child is the database. Each `serve` owns
+its local clone; supported CLI calls route through its authenticated owner,
+but a second MCP server does not. Executing-owner credentials, optional
+verified model downloads, separate global transfers, local-only artifacts,
+nontransferred proposals/queued notes and the still-refusing global proposal
+acceptance path retain their existing contracts. No runtime code, dependency,
+schema, auto-migration, live configuration or hub deployment changes.
 
 ---
 
@@ -2685,6 +2792,16 @@ Claude compatibility is expected from official host documentation and these
 checks; actual Claude recall, proposals, task operations, and human elicitation
 remain unverified. This replaces M3's acceptance evidence only; the phased tool
 surface in §11.1 is unchanged. At that gate replacement, M4–M6 remained deferred.
+
+**Host workflow subset (issue #155):** before this slice, the six generic
+workflow templates lacked guided project bootstrap and continuing narrative
+updates. After it, §11.5's seven namespaced entry points, portable shared
+procedure and approved narrative continuity ship. Copied-package and disposable
+CLI checks exercise content, attribution and preservation after reopening.
+They do not establish live three-host compliance, replace M3's acceptance
+record, complete the M5 parity matrix or change physical M4/M6 gates. Catch-up,
+optional user migration, global proposal acceptance and runtime upgrade/audit
+work remain separate.
 
 **M4 Linux hub subset (issue #147):** the historical subset records below left
 hub setup, authentication instructions and measured startup compatibility pending.
