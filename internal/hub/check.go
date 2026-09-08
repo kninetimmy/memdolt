@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -82,6 +83,13 @@ func inspect(ctx context.Context, config, mode string, filesOnly bool, platform 
 			return finish(report)
 		}
 	}
+	if mode == "ready" {
+		err = serviceUser(cfg.User)
+		report.add("service-user", err, "effective UID/GID match the configured unprivileged account/group")
+		if err != nil {
+			return finish(report)
+		}
+	}
 	err = executable(cfg.DoltPath)
 	if err == nil {
 		var raw []byte
@@ -149,6 +157,24 @@ func executable(p string) (err error) {
 	info, err := root.Lstat(filepath.Base(p))
 	if err != nil || !info.Mode().IsRegular() || unsafeLink(info) || !rootOwned(info) || info.Mode().Perm()&0o111 == 0 {
 		return errors.Join(errors.New("deployment executable must be a root-owned, non-writable, unlinked executable file"), err)
+	}
+	return nil
+}
+
+func serviceUser(name string) error {
+	if os.Geteuid() <= 0 || os.Getegid() <= 0 {
+		return errors.New("hub ready must run as the configured unprivileged account/group, not root or a root-ID alias")
+	}
+	account, err := user.Lookup(name)
+	if err != nil {
+		return errors.New("cannot resolve configured hub service account")
+	}
+	group, err := user.LookupGroup(name)
+	if err != nil {
+		return errors.New("cannot resolve configured hub service group")
+	}
+	if account.Uid != strconv.Itoa(os.Geteuid()) || group.Gid != strconv.Itoa(os.Getegid()) {
+		return errors.New("effective UID/GID do not match the configured hub service account/group")
 	}
 	return nil
 }

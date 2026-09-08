@@ -115,7 +115,8 @@ def verify(root, source_memdolt, source_dolt, uid):
         return process
 
     def report(mode, success, *extra):
-        result = ns(hub_ns, memdolt, "hub", mode, "--config", config, "--json", *extra, ok=False)
+        command = [memdolt, "hub", mode, "--config", config, "--json", *extra]
+        result = ns(hub_ns, *(as_user(command) if mode == "ready" else command), ok=False)
         document = json.loads(result.stdout)
         require(document["ok"] == success and (result.returncode == 0) == success,
                 f"unexpected {mode} result: {document}")
@@ -174,6 +175,9 @@ def verify(root, source_memdolt, source_dolt, uid):
         stop(listeners)
         print("PASS: permitted/denied SQL and remotes ingress on both IP families; unrelated rules and traffic preserved", flush=True)
 
+        root_ready = ns(hub_ns, memdolt, "hub", "ready", "--config", config, "--json", ok=False)
+        require(root_ready.returncode != 0 and any(c["name"] == "service-user" and c["status"] == "fail"
+                for c in json.loads(root_ready.stdout)["checks"]), "root identity passed service readiness")
         report("ready", False)  # privileges must be deliberately bootstrapped
         # Native first-start account bootstrap is isolated and loopback-only.
         # A random test credential exists only in this process environment.

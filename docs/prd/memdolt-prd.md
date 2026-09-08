@@ -2300,7 +2300,10 @@ Every generated server start checks trusted exact artifact bytes and the applied
 nftables table, refusing missing/unreadable/malformed/unapplied/dormant/weakened
 protection. The root check runs no Dolt command; native version, private privilege
 file existence and bounded address readiness run as the unprivileged service
-account before one native server. Explicit absolute paths/names/addresses are
+account before one native server. `ready` verifies the effective nonroot UID/GID
+against the configured account/group, including refusal of root-ID aliases;
+status and privileged preflight retain their distinct identities.
+Explicit absolute paths/names/addresses are
 validated before interpolation; no shell or password argument is used. The
 unit orders/binds after the boundary and selected private-network service and
 uses bounded visible failures/retries. No implicit install/firewall/account or

@@ -54,7 +54,9 @@ This does not install or change the user's hub. Complete structural blast radius
   binds to it and the chosen private-network service. Every start runs full
   privileged read-only preflight, then unprivileged version/credential-file/
   bounded address readiness, then one dedicated-user native Dolt process with
-  no capabilities. Generated units/probes disable native event flushing.
+  no capabilities. `ready` also verifies the effective UID/GID match the configured
+  nonroot account/group; root aliases refuse. This check binds `ready`, not status
+  or privileged preflight. Generated units/probes disable native event flushing.
   The files-only pre-application check never asserts enforced protection.
   Protection remains on stop. The guard is a startup snapshot, not a monitor
   against later privileged firewall changes; direct Dolt invocations do not

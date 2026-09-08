@@ -184,7 +184,9 @@ preflight` against the applied table; it does not run Dolt as root. Extra rules,
 chains, unsupported JSON semantics, a dormant table, wrong ports/families/addresses,
 or missing/unreadable/unapplied protection refuse. Its unprivileged `hub ready`
 then checks the root-owned native executable's observed version, private native
-privilege-file existence and both interface addresses. Readiness waits at most
+privilege-file existence and both interface addresses. `ready` also verifies the
+effective UID/GID match the configured nonroot account and group, refusing root
+aliases and wrong service identities. Readiness waits at most
 `ready-seconds` (1..120); failures are visible in the journal. Systemd retries
 after ten seconds and limits starts to three within five minutes. The Dolt
 process has no capabilities, runs with the dedicated user/group, and writes only
