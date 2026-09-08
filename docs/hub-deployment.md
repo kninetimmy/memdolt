@@ -120,9 +120,12 @@ privilege database; it does not reset credentials in an existing one. No credent
 is placed in the generated YAML/unit/manifest. The generated unit and native
 version probes disable native event flushing; they add no telemetry. The operator
 can also set Dolt's existing `metrics.disabled=true` for the dedicated account.
-Native version probes use an owned temporary home/cwd containing only native
-`metrics.disabled=true` and `versioncheck.disabled=true` settings, then remove
-their known temporary files. This prevents native update warnings/network checks
+Native version probes use an owned temporary home with native
+`metrics.disabled=true` and `versioncheck.disabled=true` settings and a separate
+empty working directory. Native 1.88.1 constructs its event emitter before
+disabling metrics, so the probe also owns its exact `eventsData/dolt.lock` file
+and directory, then removes its known temporary artifacts. This prevents native
+update warnings/network checks
 and avoids reading or changing the operator's global/repository configuration.
 Cleanup failures are reported; unexpected files are retained for inspection.
 

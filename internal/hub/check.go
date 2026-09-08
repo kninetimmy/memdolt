@@ -220,24 +220,26 @@ func commandOutput(ctx context.Context, binary string, args ...string) (_ []byte
 			return nil, openErr
 		}
 		defer func() { err = errors.Join(err, root.Close()) }()
-		if err := root.Mkdir("home", 0o700); err != nil {
-			return nil, err
-		}
-		defer func() { err = errors.Join(err, root.Remove("home")) }()
-		if err := root.Mkdir("home/.dolt", 0o700); err != nil {
-			return nil, err
-		}
-		defer func() { err = errors.Join(err, root.Remove("home/.dolt")) }()
-		if err := root.WriteFile("home/.dolt/config_global.json", []byte(`{"metrics.disabled":"true","versioncheck.disabled":"true"}`), 0o600); err != nil {
-			return nil, err
-		}
-		defer func() { err = errors.Join(err, root.Remove("home/.dolt/config_global.json")) }()
 		// The global .dolt must not also be cwd's repository metadata: native
 		// startup otherwise treats that directory as a database to discover.
-		if err := root.Mkdir("work", 0o700); err != nil {
-			return nil, err
+		for _, name := range []string{"home", "home/.dolt", "home/.dolt/eventsData", "work"} {
+			if err := root.Mkdir(name, 0o700); err != nil {
+				return nil, err
+			}
+			defer func() { err = errors.Join(err, root.Remove(name)) }()
 		}
-		defer func() { err = errors.Join(err, root.Remove("work")) }()
+		// Native 1.88.1 constructs FileEmitter before selecting NullEmitter,
+		// so its eventsData/dolt.lock exists even with metrics.disabled. Own
+		// those exact artifacts too; refuse cleanup of any unexpected entries.
+		for name, contents := range map[string]string{
+			"home/.dolt/config_global.json":   `{"metrics.disabled":"true","versioncheck.disabled":"true"}`,
+			"home/.dolt/eventsData/dolt.lock": "lockfile for dolt \n",
+		} {
+			if err := root.WriteFile(name, []byte(contents), 0o600); err != nil {
+				return nil, err
+			}
+			defer func() { err = errors.Join(err, root.Remove(name)) }()
+		}
 		cmd.Dir = filepath.Join(dir, "work")
 		cmd.Env = append(cmd.Env, "HOME="+filepath.Join(dir, "home"), "DOLT_ROOT_PATH="+filepath.Join(dir, "home"))
 	}

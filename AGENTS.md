@@ -51,7 +51,9 @@ This does not install or change the user's hub. Complete structural blast radius
   Probe errors withhold native output; no password is accepted or diagnosed.
   The native version probe uses an owned temporary home/cwd with native metrics
   and update checks disabled, preserving strict full-line version parsing and
-  the operator's configuration. Known temporary files are removed; unexpected
+  the operator's configuration. Native 1.88.1 still constructs its event emitter
+  before selecting NullEmitter; the probe owns its exact eventsData/dolt.lock
+  artifacts too. Known temporary files are removed; unexpected
   residue and cleanup failures are reported. Nft probes use no temporary home.
 - The generated root boundary oneshot validates files, applies only its newly
   created table with CAP_NET_ADMIN and checks the applied result. The server

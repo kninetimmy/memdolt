@@ -125,7 +125,7 @@ def verify(root, source_memdolt, source_dolt, uid):
             # version receives no credentials or caller configuration.
             for probe in set(Path(tempfile.gettempdir()).glob("memdolt-hub-version-*")) - previous_probes:
                 if not probe.is_symlink() and probe.stat().st_uid in (0, uid):
-                    for relative in (".", "home", "home/.dolt", "work"):
+                    for relative in (".", "home", "home/.dolt", "home/.dolt/eventsData", "work"):
                         directory = probe / relative
                         if directory.is_dir() and not directory.is_symlink():
                             print("retained probe entries", relative, json.dumps(sorted(p.name for p in directory.iterdir())), flush=True)

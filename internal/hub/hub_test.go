@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/servercfg"
+	"github.com/dolthub/dolt/go/libraries/events"
 )
 
 func fixtureConfig() Config {
@@ -279,6 +280,21 @@ func TestHubProbeOutputBound(t *testing.T) {
 	_, err := io.Copy(&out, io.LimitReader(strings.NewReader(strings.Repeat("x", 1<<20+1)), 1<<20+1))
 	if err == nil || out.buf.Len() > 1<<20 {
 		t.Fatalf("probe output exceeded its bound: %d %v", out.buf.Len(), err)
+	}
+}
+
+func TestHubNativeProbeArtifacts(t *testing.T) {
+	// The pinned CLI constructs this emitter before swapping in NullEmitter.
+	// Exercise the actual constructor to bind probe cleanup to its real files.
+	dir := fixtureDir(t)
+	_ = events.NewFileEmitter(dir, ".dolt")
+	entries, err := os.ReadDir(filepath.Join(dir, ".dolt", "eventsData"))
+	if err != nil || len(entries) != 1 || entries[0].Name() != "dolt.lock" {
+		t.Fatalf("native emitter artifacts changed: %v %v", entries, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".dolt", "eventsData", "dolt.lock"))
+	if err != nil || string(data) != "lockfile for dolt \n" {
+		t.Fatalf("native emitter lock changed: %q %v", data, err)
 	}
 }
 
