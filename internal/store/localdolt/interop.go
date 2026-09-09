@@ -174,43 +174,53 @@ func captureInterop(ctx context.Context, conn *sql.Conn, hooks interopHooks) (In
 		if commits != 1 {
 			return bundle, errors.New("export requires each pending proposal to be one commit off captured main ancestry")
 		}
-		parent, err := commitParent(ctx, conn, branch)
+		proposal, err := captureInteropProposal(ctx, conn, branch)
 		if err != nil {
 			return bundle, err
-		}
-		beforeSchema, err := statusSchema(ctx, conn, parent)
-		if err != nil {
-			return bundle, err
-		}
-		afterSchema, err := statusSchema(ctx, conn, branch.commit)
-		if err != nil || !maps.Equal(beforeSchema, afterSchema) {
-			return bundle, errors.Join(errors.New("proposal schema changes are not supported by memory interop"), err)
-		}
-		proposal := InteropProposal{ID: branch.id, Head: branch.commit, Parent: parent, Changes: []InteropChange{}}
-		for _, table := range transferTables {
-			changes, err := repoDiffRows(ctx, conn, table.name, parent, branch.commit)
-			if err != nil {
-				return bundle, err
-			}
-			for _, change := range changes {
-				delete(change.From, "live_key")
-				delete(change.To, "live_key")
-				switch table.name {
-				case "proposals":
-					if change.From != nil || interopValue(change.To, "id") != branch.id || proposal.Metadata != nil {
-						return bundle, errors.New("proposal must add exactly its own metadata row")
-					}
-					proposal.Metadata = change.To
-				case "facts", "decisions":
-					proposal.Changes = append(proposal.Changes, InteropChange{Table: table.name, From: change.From, To: change.To})
-				default:
-					return bundle, errors.New("proposal changes content outside the reviewed memory lane")
-				}
-			}
 		}
 		bundle.Proposals = append(bundle.Proposals, proposal)
 	}
 	return bundle, validateInteropMemory(bundle)
+}
+
+// Capture the complete fixed-schema commit, including NULLs and metadata.
+// Interop and global review retain their own target and ancestry checks.
+func captureInteropProposal(ctx context.Context, conn *sql.Conn, branch branchRecord) (InteropProposal, error) {
+	parent, err := commitParent(ctx, conn, branch)
+	if err != nil {
+		return InteropProposal{}, err
+	}
+	beforeSchema, err := statusSchema(ctx, conn, parent)
+	if err != nil {
+		return InteropProposal{}, err
+	}
+	afterSchema, err := statusSchema(ctx, conn, branch.commit)
+	if err != nil || !maps.Equal(beforeSchema, afterSchema) {
+		return InteropProposal{}, errors.Join(errors.New("proposal schema changes are not supported by memory interop or global review"), err)
+	}
+	proposal := InteropProposal{ID: branch.id, Head: branch.commit, Parent: parent, Changes: []InteropChange{}}
+	for _, table := range transferTables {
+		changes, err := repoDiffRows(ctx, conn, table.name, parent, branch.commit)
+		if err != nil {
+			return InteropProposal{}, err
+		}
+		for _, change := range changes {
+			delete(change.From, "live_key")
+			delete(change.To, "live_key")
+			switch table.name {
+			case "proposals":
+				if change.From != nil || interopValue(change.To, "id") != branch.id || proposal.Metadata != nil {
+					return InteropProposal{}, errors.New("proposal must add exactly its own metadata row")
+				}
+				proposal.Metadata = change.To
+			case "facts", "decisions":
+				proposal.Changes = append(proposal.Changes, InteropChange{Table: table.name, From: change.From, To: change.To})
+			default:
+				return InteropProposal{}, errors.New("proposal changes content outside the reviewed memory lane")
+			}
+		}
+	}
+	return proposal, nil
 }
 
 func readInteropRows(ctx context.Context, conn *sql.Conn, hash, table string) (result []InteropRow, err error) {

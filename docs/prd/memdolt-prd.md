@@ -970,8 +970,9 @@ sessions or raw stores opened at that directory. Global document guards and
 global `EmbeddingSources`/`RecallSources` filtering bind stores opened by that
 wrapper; ordinary repository readers remain unchanged. `CapturePromotion` and
 `CaptureRecall` are new authenticated owner reads, with no global write operation.
-Existing global-target proposal acceptance refusals and terminal remedies remain;
-no new accepting MCP path or fake success is added. AGENTS.md inventories every
+At #146, existing global-target proposal acceptance refusals and terminal remedies
+remained; #161 below replaces only the terminal refusal. No accepting MCP path or
+fake success is added. AGENTS.md inventories every
 changed structure. Isolated real replicas/local remote, CLI/owner/MCP, mixed
 model retrieval and the unchanged golden gates support this delivery; physical
 two-machine hub acceptance and full parity remain separately tracked.
@@ -993,6 +994,69 @@ then lose its change report on path, read/close or output failure. After it, the
 shared CLI path preflights config/global paths and preserves any confirmed flag
 change through later failures, including JSON/human inspection remedies. The
 rooted writer and every other global/native/MCP policy retain their boundaries.
+
+**Terminal global proposal acceptance (issue #161).** Before this delivery,
+`review accept` refused global targets despite §7.2's terminal remedy. After it,
+the trusted human can run `memdolt review accept <id> --dir <repository>` with
+human or JSON output. Direct and authenticated live-owner terminal routes use
+the calling repository's enabled, existing, current global replica. Only global
+main changes. MCP elicitation and ordinary `AcceptProposal` retain their global
+refusal, and expected-commit repository acceptance keeps its existing behavior.
+The full workflow and recovery contract are in
+[the global acceptance guide](../global-memory.md#terminal-proposal-acceptance-issue-161).
+
+The complete captured source commit must have one parent and be one commit
+past repository main ancestry, preserve the fixed schema, add exactly its own
+proposal metadata, and contain only an ordinary new fact, active decision,
+live-fact overwrite, or same-key fact supersede. Destination ids/live keys
+cannot collide; overwrite/supersede before-images must match complete global
+rows exactly, including NULLs. Repository-only references, changed destination
+rows, extra commits/schema/payload and disguised supersedes refuse. Stable
+source row/proposal ids, nullable fields, timestamps and agent provenance are
+copied into a real global staging commit authored by the original staging
+author, whose message names the immutable source commit. The human then authors
+a real native no-fast-forward merge. No history is fabricated and source
+metadata dates are not changed to new commit dates.
+
+Global enablement and the calling repository's deny-list are rechecked. The
+shared scorer probes durable global same-kind rows at 2.0 before staging;
+model/config/inference/close errors fail closed. Force bypasses only probing,
+as does a validated supersede. Path, owner credential, schema, clean/merge and
+exclusive-lock refusals remain. Lock order is repository `proposalMu`, a
+nonwaiting global file-lock attempt, then the private global `proposalMu`.
+Recall's reverse capture order cannot deadlock this path because that attempt
+never waits. The operation serializes cooperating repository writes and holds
+global ownership through model use and native writes. Foreign writers remain
+outside these locks; captured heads are rechecked and the immutable-hash merge
+retains native fail-closed semantics, not a distributed transaction or CAS.
+
+Confirmed source/global staging/acceptance hashes and row ids survive late
+native finalization, cancellation, owner envelopes and CLI close/output errors.
+Unobserved native results and lost owner replies remain explicitly unknown and
+never automatically replay. A repeated explicit accept verifies native
+two-parent reviewer history, the source-bound staging parent, and the exact
+staging/merge payloads before reporting the existing acceptance without a
+second merge. Different/incomplete residue or matching rows without that native
+history refuses. No `global_accept_markers`, other durable table, dependency,
+or migration is introduced.
+
+Acceptance retains both branches because Dolt has no atomic expected-head
+delete. Global merged residue follows existing reachability filtering; the
+source remains in repository pending lists/counts because repository main is
+unchanged. After inspecting current source content/hash and confirmed global
+history, the human can explicitly reject the retained source. Changed source
+content must be preserved for fresh review. Reject/expiry retain their existing
+best-effort cleanup boundaries, not a new deletion guarantee. These restrictions
+bind the terminal global acceptance seams, not all native SQL or Store writes.
+AGENTS.md records every touched structural element and preserved behavior.
+
+Isolated native tests cover exact payload/history, before-images, conflicts,
+probe failures, ownership, cancellation, partial/unknown outcomes and repeated
+acceptance. Fresh-process direct/live-owner CLI checks and a checksum-pinned
+model acceptance/global-recall check exercise the reached runtime surfaces.
+No test uses a live user global store, credentials, host installation or hub.
+Frozen golden assertions and all 22 MCP registrations stay unchanged. Broader
+M4/M5/M6 parity and physical two-client hub acceptance remain separate.
 
 ---
 

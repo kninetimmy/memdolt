@@ -357,7 +357,7 @@ hub acceptance or complete memhub parity.
 | --- | --- | --- |
 | Foundations and M0–M3 | Local Dolt, ownership/IPC, reviewed writes, retrieval gates, 22 MCP tools, host templates | M0's recorded GO has scoped limits. Live Claude acceptance was explicitly waived; deterministic compatibility and a real OpenCode provenance write supplied the replacement M3 evidence. |
 | M4: cross-machine memory | Clone, remotes, status/diff, push/pull, compatible merges, human conflict choices, Linux hub artifacts and isolated native ingress tests | Physical two-client/private-network acceptance, topology/project identity, and client version-skew acceptance. Live SQL-to-hub storage is still a stretch, not the shipped client path. |
-| M5: memory workflows | Documents, code locator and golden gates, rendering, human fact/decision commands, global replicas with combined recall, JSON import/export | Global-target proposal acceptance still refuses. Audit-md, Git/file-history ingestion, top-level status/stats/history, remaining wrap-up policy, and the full parity audit remain. |
+| M5: memory workflows | Documents, code locator and golden gates, rendering, human fact/decision commands, global replicas with combined recall, terminal global proposal acceptance, JSON import/export | Before #161 global-target proposal acceptance refused; it now ships through terminal human review. Audit-md, Git/file-history ingestion, top-level status/stats/history, remaining wrap-up policy, and the full parity audit remain. |
 | M6: operations | Existing scoped health checks and deployment runbook | Backups and restore drill, `doctor --hub`, retention/GC, upgrades, gated token accounting, and local transcript archives remain planned. |
 
 The maintainer still uses memhub; migration is optional and has not been
@@ -471,9 +471,14 @@ copy a repository row while retaining source commit evidence. Combined recall
 labels scope and captures one committed snapshot per scope. Global tasks,
 notes, narratives, and code are excluded.
 
-**Global proposal acceptance is not implemented.** A terminal remedy does
-not mean `review accept` will promote a global-target proposal; that path
-still refuses. Human global writes are separate, deliberate operations.
+**Before #161 global proposal acceptance was not implemented:** its terminal
+remedy still led to a refusal. Now a trusted human can inspect and run
+`memdolt review accept <id> --dir <repository>` to accept the exact payload
+into the enabled existing global replica. Repository main stays unchanged;
+source branches remain for inspection. Repeats verify native history without
+another merge. MCP review still excludes global proposals. Inspect both stores
+and reported hashes after partial/unknown outcomes; see the
+[global acceptance and recovery guide](docs/global-memory.md#terminal-proposal-acceptance-issue-161).
 The [global memory guide](docs/global-memory.md) covers enablement, locks,
 collisions, document defaults, sync, and recovery.
 

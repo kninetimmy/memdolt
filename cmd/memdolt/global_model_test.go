@@ -9,6 +9,7 @@ import (
 
 	"github.com/kninetimmy/memdolt/internal/embedding"
 	"github.com/kninetimmy/memdolt/internal/retrieval"
+	"github.com/kninetimmy/memdolt/internal/store/localdolt"
 )
 
 func TestGlobalProductionHybridRecallAndRebuild(t *testing.T) {
@@ -48,4 +49,40 @@ func TestGlobalProductionHybridRecallAndRebuild(t *testing.T) {
 			t.Fatal(hit)
 		}
 	}
+}
+
+func TestGlobalReviewProductionModelAcceptanceAndProvenance(t *testing.T) {
+	cache, err := embedding.DefaultCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, base := globalFixture(t)
+	if info, err := os.Stat(cache); err == nil && info.IsDir() {
+		if err := os.CopyFS(filepath.Join(home, ".memdolt", "models"), os.DirFS(cache)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A same-kind destination row forces the shipped checksum-verified scorer
+	// to run during acceptance. The unrelated subject should remain below 2.0.
+	runMemdolt(t, "fact", "add", "fixture.botany", "A cactus needs infrequent watering and bright sunlight", "--global", "--dir", base)
+	staged := stageGlobalCLI(t, base, false)
+	accepted := decodeJSON[localdolt.AcceptResult](t, runMemdolt(t, "review", "accept", staged.ID, "--dir", base, "--json"))
+	if accepted.Commit == "" || accepted.GlobalStageCommit == "" || accepted.Proposal.Commit != staged.Commit {
+		t.Fatal(accepted)
+	}
+	runMemdolt(t, "index", "rebuild", "--global", "--dir", base)
+	runMemdolt(t, "index", "rebuild", "--dir", base)
+	recalled := decodeJSON[retrieval.Response](t, runMemdolt(t, "recall", "How do I compile the application?", "--mode", "hybrid", "--source-type", "fact", "--provenance", "--dir", base, "--json"))
+	for _, hit := range recalled.Results {
+		if hit.SourceID == staged.RowID {
+			if hit.Scope != "global" || hit.SnapshotCommit != accepted.Commit || hit.LastChanged == nil || hit.RerankScore == nil || hit.VectorScore <= 0 {
+				t.Fatal(hit)
+			}
+			if hit.LastChanged.Hash != accepted.GlobalStageCommit || hit.LastChanged.Author != cliStagingActor.Name {
+				t.Fatalf("global recall lost native staging provenance: %+v", hit.LastChanged)
+			}
+			return
+		}
+	}
+	t.Fatalf("accepted global fact missing from actual-model recall: %+v", recalled)
 }

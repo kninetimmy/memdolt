@@ -2,10 +2,12 @@
 
 Before issue #146, the global replica and combined recall in PRD §10 were
 design-only. The human CLI, global documents and combined CLI/MCP recall now
-operate on a real Dolt replica. Global proposal acceptance remains separate:
-existing global-target proposals stay unaccepted and retain their terminal
-`memdolt review` remedy. This delivery does not establish physical two-machine
-hub acceptance or complete the parity matrix.
+operate on a real Dolt replica. Before issue #161, global proposal acceptance
+remained separate: existing global-target proposals stayed unaccepted despite
+their terminal `memdolt review` remedy. After #161, terminal human review can
+accept them into the enabled existing global replica as described below.
+Neither delivery establishes physical two-machine hub acceptance or completes
+the parity matrix.
 
 ## Layout and bootstrap
 
@@ -147,10 +149,106 @@ CLI or another repository's MCP owner refuses before opening a competing engine.
 They do not route global work through another repository's policy. Source-record
 and recall capture can use the repository's authenticated owner via two explicit
 read operations. Failed authentication or lost replies do not fall back/replay.
-No global promotion write or new accepting tool is registered over IPC/MCP.
+Before #161 no global promotion write was available through owner IPC. Now the
+existing authenticated terminal `review_accept` operation can accept a global
+proposal under its calling repository's policy. Its expected-commit elicitation
+variant still refuses global targets. No accepting MCP tool is added.
 
 Stop the active operation/owner before retrying a lock refusal. Inspect lists,
 local/remote status and reported hashes after any unknown/late outcome; retain
 confirmed progress. Foreign filesystem/Dolt writers do not share this mutex, and
 path checks retain the existing final-check/open interval limitations. Nothing
 here adds a filesystem compare-and-swap or distributed transaction.
+
+## Terminal proposal acceptance (issue #161)
+
+The trusted human runs:
+
+```sh
+memdolt review show <proposal-id> --dir <repository>
+memdolt review accept <proposal-id> --dir <repository> --json
+```
+
+No `--global` flag is needed: the captured proposal's `target=global` selects
+the destination. The CLI's default reviewer is `user`; an agent reviewer
+refuses. A live repository owner executes the same application operation once
+over authenticated IPC. MCP review continues to exclude global proposals and
+direct the human to this terminal command. Agents must not run it as a way to
+manufacture human approval.
+
+Acceptance supports a new fact, a new active decision, a live-fact overwrite,
+or a fact supersede with the same exact key. It validates the complete
+single-parent, single-commit source change and unchanged fixed schema. Only
+the fact/decision payload and its own proposal metadata may change. Every
+reviewed id, NULL versus empty string, timestamp, metadata field and source
+label survives. The original staging author authors a new real staging commit
+on global main's ancestry; its message records the exact source commit hash.
+A separate native `--no-ff` merge is authored by the human reviewer. New
+commit dates record the actual operations; source metadata dates stay intact.
+Repository main, its durable rows and unrelated proposals remain unchanged.
+
+Existing destination row/proposal identities and live fact keys refuse, even
+when inserted text matches. An overwrite or supersede must have an exact
+complete before-image already present globally. A repository-only reference,
+changed destination field, malformed payload, extra row/table/schema change,
+or extra proposal commit cannot be promoted. No key renaming or implicit
+overwrite/supersession occurs. Ordinary repository staging collisions and
+repository review retain their previous behavior.
+
+The calling repository's enablement and deny-list are read again before
+promotion. New/changed payload cells, metadata and copied native author identity
+are scanned. The shipped
+contradiction scorer checks durable global rows at the existing 2.0 threshold
+before any destination staging. Configuration, open, inference, nonfinite
+score and model-close failures refuse. `--force` bypasses only that probe;
+only a validated supersede receives its existing bypass. Missing, unsupported,
+dirty, merging or contended replicas must be repaired explicitly, never
+initialized, migrated or reset by acceptance.
+
+Results keep `proposal.commit` as the source staging hash and expose
+`sourceMainCommit`, `rowIds`, `globalStageCommit`, the global acceptance
+`commit`, `sourceRetained`, and optional `alreadyAccepted`/`unknown`. A
+nonempty stage hash proves staging only; a nonempty acceptance hash proves
+promotion even with a later error. Human/JSON output preserves this evidence
+through finalization, cancellation, source inspection, store close and output
+failure. An owner reply lost before observation reports unknown and claims no
+unobserved hashes. No client automatically resubmits an uncertain operation.
+
+After any partial or unknown result, inspect both stores, the source proposal,
+and native global history before explicitly retrying. An unchanged, validated
+global staging branch can be resumed. A native two-parent acceptance whose
+staging parent names this exact source commit and whose complete staging and
+merge diffs match the source proves prior acceptance. A subsequent explicit
+accept reports the existing hashes without another staging or merge commit,
+even if durable rows were edited later. Matching rows alone do not prove
+acceptance; ambiguous history or different/incomplete branch residue refuses.
+No SQLite marker, fabricated commit, or new durable schema is used.
+
+Both proposal branches are retained. The destination branch is reachable from
+global main and uses the existing merged-residue listing rule. The repository
+source remains in `review list` and pending counts because it never entered
+repository main. This is deliberate: Dolt has no atomic expected-head branch
+delete, so acceptance never risks removing a changed source. After verifying
+the current `review show` commit against the reported source hash and global
+acceptance, the human may explicitly run `review reject <id> --dir <repository>`
+to remove the retained source. Reject keeps its existing best-effort head check;
+it does not acquire an atomic deletion guarantee. Preserve changed source
+content for fresh review instead. Expiry likewise retains its existing scope.
+
+Lock order is the owning repository's `proposalMu`, a nonwaiting attempt at
+the global file lock, then the private global store's `proposalMu`. A recall
+that already owns the global lock can wait for a repository capture; acceptance
+immediately refuses that lock and releases the repository mutex, so there is
+no cross-store wait cycle. The global lock is held through validation, model
+use, staging, merge, native inspection and closing. Cooperating repository
+writes serialize; foreign Dolt/filesystem writers do not share these locks.
+Captured heads are rechecked, the merge names the immutable staging hash, and
+later conflicts retain native fail-closed merge semantics. There is no atomic
+cross-database snapshot, foreign-writer monitor, or stronger filesystem CAS.
+
+The complete changed-element inventory is in AGENTS.md's #161 record. These
+new rules bind `AcceptTerminalProposal` and the empty-expected-commit terminal
+application/owner route, not arbitrary native SQL, all Store writes, ordinary
+`AcceptProposal`, or an MCP elicitation. Global import/export exclusions,
+born-global operations, promotion with fresh ids, recall scoring/filters, host
+registrations, all 22 MCP registrations, dependencies and migrations remain.

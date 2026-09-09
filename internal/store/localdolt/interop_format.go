@@ -367,14 +367,20 @@ func validateInteropReferences(indexed map[string]map[string]InteropRow) error {
 }
 
 func validateInteropProposal(p InteropProposal, main map[string]map[string]InteropRow) error {
+	if interopValue(p.Metadata, "target") != string(TargetRepo) {
+		return errors.New("global-target import is unsupported; resolve it in the source's human review before exporting again")
+	}
+	return validateProposalPayload(p, main)
+}
+
+// validateProposalPayload is the fixed-schema shape shared by interop and
+// terminal global review. Each caller separately enforces its allowed target.
+func validateProposalPayload(p InteropProposal, main map[string]map[string]InteropRow) error {
 	if !validInteropID(p.ID) || interopValue(p.Metadata, "id") != p.ID {
 		return errors.New("proposal ID and metadata must name the same ULID")
 	}
 	if err := validateInteropRow("proposals", p.Metadata); err != nil {
 		return err
-	}
-	if interopValue(p.Metadata, "target") != string(TargetRepo) {
-		return errors.New("global-target import is unsupported; resolve it in the source's human review before exporting again")
 	}
 	if strings.TrimSpace(interopValue(p.Metadata, "rationale")) == "" || p.Metadata["created_at"] == nil {
 		return errors.New("proposal requires its original rationale and creation time")

@@ -463,12 +463,13 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		accepted, acceptErr := h.reviewAccept(ctx, args.ID, args.ExpectedCommit, args.Reviewer, args.Force)
-		if acceptErr != nil && accepted.Commit == "" {
+		if acceptErr != nil && accepted.Commit == "" && accepted.Proposal.Target != localdolt.TargetGlobal {
 			err = acceptErr
 			break
 		}
 		result = reviewAcceptResult{Result: accepted}
 		if acceptErr != nil {
+			accepted.Unknown = errors.Is(acceptErr, store.ErrCommitUnknown)
 			result = reviewAcceptResult{Result: accepted, CleanupError: acceptErr.Error()}
 		}
 	default:

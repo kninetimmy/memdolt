@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -219,36 +220,71 @@ func changeLines(change localdolt.ProposalChange) []string {
 }
 
 func newReviewAcceptCommand() *cobra.Command {
+	return newReviewAcceptCommandWithRun((*storeFlags).runStore)
+}
+
+func newReviewAcceptCommandWithRun(run func(*storeFlags, *cobra.Command, func(context.Context, commandStore, memory.Actor) error) error) *cobra.Command {
 	var flags storeFlags
 	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "accept <id>",
-		Short: "Merge a proposal into main and delete its branch",
-		Long: "Merge a proposal into main, making the row it proposes durable, and delete the\n" +
-			"branch. What merges is the one commit the proposal was staged with — the commit\n" +
+		Short: "Accept a proposal into its reviewed repository or global destination",
+		Long: "For a repository proposal, merge into main and delete its branch.\n" +
+			"What merges is the one commit the proposal was staged with — the commit\n" +
 			"`review show` renders — so a branch carrying anything else is refused rather\n" +
 			"than merged past review. Facts and decisions are compared with durable reviewed\n" +
 			"rows by the shipped cross-encoder; --force explicitly bypasses only that probe.\n" +
 			"The merge is fail-closed (PRD §6.3): a data conflict, a\n" +
 			"constraint violation that verification shows is real, or a row memdolt cannot\n" +
-			"attribute leaves main exactly where it was and the proposal still pending.",
+			"attribute leaves main exactly where it was and the proposal still pending.\n\n" +
+			"Global proposals require the trusted user at a terminal and an enabled, existing\n" +
+			"current global replica. Only global main receives the exact reviewed payload;\n" +
+			"repository main stays unchanged. Source branches are retained because Dolt has\n" +
+			"no atomic expected-head delete. Repeated acceptance verifies native history\n" +
+			"without another merge. Inspect both stores and all reported hashes after a late\n" +
+			"or unknown outcome; never automatically replay. See docs/global-memory.md.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.runStore(cmd, func(ctx context.Context, st commandStore, actor memory.Actor) error {
-				result, err := st.ReviewAccept(ctx, args[0], actor.CommitAuthor(), force)
-				if err != nil {
-					return err
-				}
-				lines := []string{fmt.Sprintf("accepted %s %s as %s, reviewed by %s",
-					result.Proposal.Kind, result.Proposal.ID, result.Commit, actor.Name)}
-				for _, cleared := range result.Cleared {
-					lines = append(lines, fmt.Sprintf(
-						"  cleared %d already-satisfied %s record(s) on %s after verifying the constraint holds",
-						len(cleared.Rows), cleared.Constraint, cleared.Table))
-				}
-				return emit(cmd, result, lines)
+			var result localdolt.AcceptResult
+			var reviewer string
+			err := run(&flags, cmd, func(ctx context.Context, st commandStore, actor memory.Actor) error {
+				var err error
+				reviewer = actor.Name
+				result, err = st.ReviewAccept(ctx, args[0], actor.CommitAuthor(), force)
+				return err
 			})
+			if err != nil && result.Commit == "" && result.Proposal.Target != localdolt.TargetGlobal && !result.Unknown {
+				return err
+			}
+			lines := []string{fmt.Sprintf("accepted %s %s as %s, reviewed by %s",
+				result.Proposal.Kind, result.Proposal.ID, result.Commit, reviewer)}
+			if result.Commit == "" {
+				lines = []string{"acceptance unconfirmed for proposal " + args[0]}
+			}
+			if result.Proposal.Target == localdolt.TargetGlobal {
+				lines = append(lines, fmt.Sprintf("  global staging %s; source %s retained; repository main %s", result.GlobalStageCommit, result.Proposal.Commit, result.SourceMainCommit))
+				if result.AlreadyAccepted {
+					lines = append(lines, "  already accepted in global native history; no new merge")
+				}
+			}
+			for _, cleared := range result.Cleared {
+				lines = append(lines, fmt.Sprintf(
+					"  cleared %d already-satisfied %s record(s) on %s after verifying the constraint holds",
+					len(cleared.Rows), cleared.Constraint, cleared.Table))
+			}
+			if err != nil {
+				lines = append(lines, "error: "+err.Error())
+			}
+			reported := struct {
+				localdolt.AcceptResult
+				Error string `json:"error,omitempty"`
+			}{result, laneError(err)}
+			err = errors.Join(err, emit(cmd, reported, lines))
+			if result.Proposal.Target == localdolt.TargetGlobal {
+				return result.RecoveryError(err)
+			}
+			return memory.ConfirmedWriteError(err, result.Commit, "proposal "+args[0]+" and Dolt history")
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false,
