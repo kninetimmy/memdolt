@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -20,7 +21,12 @@ func newServeCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve memdolt tools over MCP stdio",
-		Args:  cobra.NoArgs,
+		Long: "Serve the configured local/clone repository over MCP stdio. live topology\n" +
+			"is unsupported. Opt-in [repo] auto_pull_on_session_start runs existing pull\n" +
+			"once before publishing this owner; unresolved conflicts or failures stop\n" +
+			"startup with an inspection remedy. No automatic retries or approvals occur.\n" +
+			"Protocol stdout carries MCP only. Restart the owner after changing topology.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			transport := &mcp.IOTransport{
 				Reader: struct {
@@ -60,10 +66,20 @@ func runServe(
 	if err := st.Open(ctx); err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, st.Close()) }()
+	var startup localdolt.TransferResult
+	defer func() {
+		err = errors.Join(err, st.Close())
+		if err != nil && startup.Changed {
+			err = fmt.Errorf("session-start pull confirmed main %s; inspect history before retrying startup: %w", startup.MainCommit, err)
+		}
+	}()
 
 	owner := &localCommandStore{Store: st, baseDir: baseDir}
 	if err := requireCurrentSchema(ctx, owner); err != nil {
+		return err
+	}
+	startup, err = st.PullOnSessionStart(ctx)
+	if err != nil {
 		return err
 	}
 	tools := mcpserver.RegisterTools(server, baseDir, owner)

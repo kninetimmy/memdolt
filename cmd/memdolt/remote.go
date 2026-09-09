@@ -24,7 +24,8 @@ func newRepoRemoteCommand() *cobra.Command {
 				"An empty configuration is reported explicitly. No remote is contacted.\n" +
 				"Use the authenticated owner when running; never initialize or migrate a\n" +
 				"missing or unsupported store. Dirty memory and proposals remain untouched.\n" +
-				"Unsafe legacy URLs or parameters refuse without exposing rejected values.",
+				"Unsafe legacy URLs or parameters refuse without exposing rejected values.\n" +
+				"A TOML [repo] remote_url default is separate and is not a native list entry.",
 			RunE: func(cmd *cobra.Command, args []string) error {
 				var remote *localdolt.Remote
 				if add {
@@ -61,7 +62,9 @@ func newRepoRemoteCommand() *cobra.Command {
 				"Never initialize/migrate a missing or unsupported store, replace a remote,\n" +
 				"commit/discard dirty memory, or change proposals, tags or local artifacts.\n" +
 				"Submit once; if completion is uncertain, inspect `memdolt repo remote list`\n" +
-				"before retrying. Remote status/diff, merges and hub setup remain separate."
+				"before retrying. Remote status/diff, merges and hub setup remain separate.\n" +
+				"Adding origin refuses a conflicting [repo] remote_url default; other\n" +
+				"explicit names retain their independent selection. Neither config is rewritten."
 			child.Flags().StringVar(&user, "user", "", "SQL username to store; no password is needed or stored for configuration")
 		}
 		flags.bindGlobal(child)

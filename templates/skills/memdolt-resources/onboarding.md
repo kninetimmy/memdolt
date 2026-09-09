@@ -45,6 +45,15 @@ Use argument-based process APIs and stdin; shell examples below quote variables.
 
 ## Choose the starting memory
 
+Before #163 init did not persist Git-derived identity and `[repo]` was ignored.
+Now inspect the target root's Git origin before bootstrap. Supported HTTPS/SSH
+spellings share an ID; local-only/no-origin use stays available. New init
+records identity with terminal attribution. Existing unidentified stores need
+deliberate `init --adopt-identity` with the owner stopped and clean main.
+Changed/nonempty conflicting identities refuse: preserve the store and report
+the remedy. Never adopt as an unapproved repair, rewrite identity or substitute
+a host path. Clone preserves and checks the existing native identity/history.
+
 Present the applicable choice before any bootstrap write:
 
 - **Fresh local memory:** only when no store or selected existing remote should
@@ -100,6 +109,17 @@ is the default for an existing store:
 | Documents | Offer one explicitly selected Markdown source, inspect it for sensitive content, then use `doc add <path> --actor <host-actor>` or the repository MCP `doc_add`. Ingestion commits document text. First ingestion enables repository default docs, whose automatic inclusion requires hybrid reranking. Explicit `recall <query> --mode fts --source-type doc_chunk` also works; `doc ls/show` checks the selected content. |
 | Global memory | Default is off per repository. Offer `global enable`, then an explicit `global init` or `global clone <remote-url>` only if the shared replica is missing. Inspect `global status` first. Existing shared memory is reused, not reseeded. Human global facts/decisions/docs are deliberate terminal operations; agents never impersonate the human. Before #161 global proposal acceptance refused even at the terminal. Now present `memdolt review show <id> --dir <repository>` and `memdolt review accept <id> --dir <repository>` to the human. MCP still excludes these proposals; inspect both stores and reported hashes after partial/unknown outcomes. Source branches remain for explicit inspection/cleanup; see `docs/global-memory.md`. |
 | Remote | Optional for solo local work. Select a configured endpoint and named remote before `repo remote add <name> <url> --user <sql-user>`; this saves configuration without contacting the remote. Clone/pull/status-with-remote/push need explicit transfer intent. Do not deploy a hub from this workflow. |
+
+Before #163 that remote row described native settings alone. After it,
+`repo configure --topology local|clone` applies explicit repository routing
+with the owner stopped. Local keeps ordinary status offline; explicit transfers
+and named remote status remain. Optional `--remote-url` supplies origin when
+absent and must exactly match native origin when present. Clone accepts its
+URL from TOML when omitted; conflicting destinations refuse. Live is unsupported.
+Offer `--auto-pull-on-session-start` separately, off by default and requiring
+clone: it authorizes one existing pull before each owner startup, never conflict
+choices or uncertain retries. Preserve other settings and inspect confirmed
+changes after later errors. Global operations retain separate policy.
 
 All table commands take the selected `--dir <repository>`; use `--json` for
 structured evidence. CLI memory writers use the host actor from the entry point.

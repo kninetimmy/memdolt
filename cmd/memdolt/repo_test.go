@@ -77,9 +77,9 @@ func TestRepoStatusPreservesLocalStateDirectAndOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// A configured hub does not change what this local-only command
-			// inspects. There is no server at this deliberately unusable URL.
-			writeTestFile(t, pathsFor(t, base).ConfigFile(), "[repo]\nremote_url = 'http://127.0.0.1:0/memory'\ntopology = 'live'\n")
+			// Before #163 this fixture used ignored live/invalid-port settings.
+			// They now refuse; valid local topology retains offline inspection.
+			writeTestFile(t, pathsFor(t, base).ConfigFile(), "[repo]\nremote_url = 'http://127.0.0.1:1/memory'\ntopology = 'local'\n")
 			directJSON := runMemdolt(t, "repo", "status", "--local", "--dir", filepath.Join(base, "."), "--json")
 			direct := decodeJSON[localdolt.RepoStatusReport](t, directJSON)
 			if strings.Count(strings.TrimSpace(directJSON), "\n") != 0 {

@@ -68,7 +68,7 @@ func TestClonePreservesMainHistoryAndRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"config.toml", "embeddings.sqlite", "code_index.sqlite"} {
-		if err := os.WriteFile(filepath.Join(base, ".memdolt", name), []byte("preserve "+name), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(base, ".memdolt", name), []byte("# preserve "+name), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,7 +110,7 @@ func TestClonePreservesMainHistoryAndRows(t *testing.T) {
 	}
 	for _, name := range []string{"config.toml", "embeddings.sqlite", "code_index.sqlite"} {
 		data, err := os.ReadFile(filepath.Join(base, ".memdolt", name))
-		if err != nil || string(data) != "preserve "+name {
+		if err != nil || string(data) != "# preserve "+name {
 			t.Fatalf("changed %s: %q, %v", name, data, err)
 		}
 	}

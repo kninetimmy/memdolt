@@ -397,7 +397,9 @@ func TestDocumentValidationAndConfigurationRefuseBeforeDurability(t *testing.T) 
 			if err == nil || !strings.Contains(err.Error(), tc.want) || result.Commit != "" {
 				t.Fatalf("result=%+v error=%v, want %s", result, err, tc.want)
 			}
-			if internalCount(t, st, "SELECT COUNT(*) FROM documents") != 0 || internalCount(t, st, "SELECT COUNT(*) FROM dolt_log") != before || internalCount(t, st, "SELECT COUNT(*) FROM dolt_status") != 0 {
+			// #163 also refuses ordinary reads with malformed repository TOML;
+			// inspect native fixture state directly to prove refusal left no effects.
+			if countInternal(t, st, "SELECT COUNT(*) FROM documents") != 0 || countInternal(t, st, "SELECT COUNT(*) FROM dolt_log") != before || countInternal(t, st, "SELECT COUNT(*) FROM dolt_status") != 0 {
 				t.Fatal("refusal left data or dirty state")
 			}
 		})

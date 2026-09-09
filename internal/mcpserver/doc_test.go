@@ -175,6 +175,7 @@ func TestDocumentMCPSymlinkEscapeAndConfirmedError(t *testing.T) {
 		if err := os.Symlink(outside, config); err != nil {
 			t.Fatal(err)
 		}
-		callError(t, client, "doc_add", map[string]any{"file": file}, "configuration must be a regular file")
+		// #163's shared operation guard now rejects this before document reads.
+		callError(t, client, "doc_add", map[string]any{"file": file}, "links or reparse points")
 	})
 }

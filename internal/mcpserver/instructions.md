@@ -1,6 +1,18 @@
 # memdolt server instructions v1
 
 - On turn one, read `.memdolt/rendered/PROJECT.md` once for project context.
+- Before #163 repository identity/topology were deferred. Now CLI and MCP share
+  validated local/clone policy and committed Git-origin identity. Live topology
+  refuses. Existing unidentified stores need explicit terminal init adoption
+  with the owner stopped; never reassign a different identity or bypass refusal.
+  Default origin comes from native configuration or [repo] remote_url; both
+  must agree when present. Other explicitly named remotes retain their target.
+  Local topology keeps ordinary repo_status offline. Explicit transfers still
+  need operator intent. Startup pull defaults off; an enabled clone pulls once
+  before this owner is published. Conflicts and unknown outcomes stop startup
+  with an inspection remedy, not manufactured approval or automatic replay.
+  Global stores keep separate identity/policy. Report confirmed hashes through
+  later failures; changing topology deliberately requires an owner restart.
 - Recall relevant memory before reading `PROJECT_LEDGER.md`; use the ledger only
   when recall is empty or the user explicitly asks for it.
   Before issue #146 recall used repository memory only. After it, enabled

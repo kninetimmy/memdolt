@@ -359,6 +359,17 @@ This is more machinery than memhub needed (SQLite WAL handles multi-process nati
 
 `project_id` derives from the git remote, exactly as memhub — hub database names are `proj_<project_id>` (sanitized). **[design]**
 
+Before #163 that identity was design-only. After it, explicit initialization
+records `meta.project_id` and credential-free canonical `meta.project_origin`
+in one user-attributed commit. The short ID matches tagged memhub; full-origin
+comparison distinguishes hash collisions. Hub names replace ID hyphens with
+underscores; the embedded database stays `memory`. Missing origin allows local
+use without a host-path identity; Git/configuration failures refuse. Existing
+stores require explicit `init --adopt-identity`; reopen never adopts, and
+nonempty identities never auto-reassign. Global identity remains separate.
+[The topology guide](../repository-topology.md) specifies supported origins,
+explicit adoption, native transfer transitions and the full structural inventory.
+
 ---
 
 ## 6. Data model
@@ -2320,6 +2331,30 @@ That project-topology configuration remains the planned surface. Issue #129
 stores remote entries only in Dolt's native configuration; it does not add
 or rewrite TOML `remote_url`, topology, auto-pull or machine hub settings.
 
+Before #163 the preceding planned-surface statement still applied. After it,
+`[repo]` has an independent protected reader and `repo configure` updates only
+supplied keys with the owner stopped, preserving other TOML values. Local and
+clone share the embedded format. Local suppresses implicit status network
+requests; explicit push/pull and named status remain available. Clone uses the
+existing native pipeline. Live refuses before local access. Absent settings
+preserve existing native-remote behavior. TOML remote_url supplies origin when
+absent; simultaneous native origin must match exactly, while another explicit
+name keeps its selected target. Clone can consume an omitted URL from TOML,
+but conflicting explicit URLs refuse. No native remote is silently rewritten.
+
+Startup pull is off by default and requires clone. It calls existing Pull once
+before MCP/IPC publication, using memdolt attribution for conflict-free startup
+merges. Conflicts require normal human terminal review; errors/cancellation and
+unknown outcomes stop startup with inspection remedies, never automatic replay.
+CLI opens never auto-pull. Current policy is rechecked per reached Store
+operation, including authenticated owner methods. Malformed TOML now refuses
+these operations; NoText retains its deny-regex exemption, not an exemption
+from routing-file parsing. Explicit global entry points retain separate native
+policy. Confirmed config/identity/migration/pull effects survive later failures.
+The [guide](../repository-topology.md) records every changed component, original
+guarantees and exact symbol scope. Machine defaults/registry and live SQL remain
+planned, and this introduces no new schema, dependency or host/hub installation.
+
 ### 11.4 OpenCode 2 compatibility supplement (memhub v0.2.2)
 
 This is the narrow v0.2.2 supplement to the v0.2.0 parity baseline, not a claim of general v0.2.1/v0.2.2 parity.
@@ -3000,6 +3035,16 @@ traffic, preservation and refusal cases. It does not install under PID 1 or touc
 the runner-host firewall. Ordinary/golden gates retain their existing contexts.
 The physical two-client round trip/off-network acceptance, topology/project
 identity, backups/retention and other M4–M6 requirements remain separate.
+
+**M4 repository identity/topology subset (issue #163):** the preceding records
+left identity and topology pending. After this slice, §§5.3/11.3's Git-derived
+identity, explicit existing-store adoption, protected local/clone configuration
+and opt-in owner startup pull ship. Disposable cross-root native transfers
+preserve rows, identity and real history; direct/owner/MCP refusals cover drift,
+collisions, invalid configuration and startup failure. This is not physical
+two-client/private-network acceptance or measured hub/client compatibility.
+Those M4 checks, optional live SQL, machine registry/upgrade, M5 and M6 remain
+separate; no current user's memory or live installation is changed.
 
 **M4 first subset (issue #123):** local-only `repo status` now ships as described
 in §11.2. Remotes configuration, remote status/diff, pull/push, conflict

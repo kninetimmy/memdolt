@@ -152,7 +152,7 @@ func OpenGlobal(ctx context.Context, repo string) (*Store, error) {
 	if err := RequireExistingTransferStore(paths.Base()); err != nil {
 		return nil, fmt.Errorf("global replica unavailable; explicitly run `memdolt global init` or `memdolt global clone <remote-url>`: %w", err)
 	}
-	st, err := New(Config{BaseDir: paths.Base(), Actor: memory.UserActor.CommitAuthor()})
+	st, err := New(Config{BaseDir: paths.Base(), Actor: memory.UserActor.CommitAuthor(), Global: true})
 	if err != nil {
 		return nil, err
 	}

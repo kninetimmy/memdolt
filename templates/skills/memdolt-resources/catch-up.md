@@ -9,6 +9,17 @@ authority, target, remote or authorization before the affected operation.
 
 ## Select and inspect
 
+Before #163 `[repo]` was ignored and identity was not enforced. After it,
+inspect repository TOML and the committed identity in local repo status as
+well as native remote entries. A TOML remote_url supplies default origin when
+absent from the native list; conflicting defaults refuse. Local topology keeps
+ordinary status offline, but an explicit remote requests remote inspection.
+Live is unsupported. Existing unidentified stores require a separately approved
+terminal `init --adopt-identity` with the owner stopped; never reassign identity
+or use init to bypass a mismatch. Optional startup pull runs once before owner
+publication; it does not prove freshness for this later catch-up or authorize
+retrying an unknown result. Global identity and transfers remain separate.
+
 1. Resolve the intended project's absolute root from the request and repository
    instructions. Establish its authoritative memory system. If memhub remains
    authoritative, preserve it and require an explicit Memdolt adoption/rehearsal

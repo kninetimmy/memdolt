@@ -39,6 +39,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	// Registers the "dolt" database/sql driver.
 	_ "github.com/dolthub/driver"
@@ -71,6 +72,10 @@ type Config struct {
 	// Logger receives the loud stale-lock warning of PRD §5.2.3. Defaults
 	// to slog.Default().
 	Logger *slog.Logger
+
+	// Global is supplied only by explicit global entry points. They retain
+	// native remote policy and must never derive identity from a Git ancestor.
+	Global bool
 }
 
 // Store is PRD §5.1's LocalStore: the M0 subset of store.Store backed by
@@ -82,6 +87,7 @@ type Store struct {
 	// Only OpenGlobal supplies the active repository's policy. Disk ownership
 	// and derived artifacts always remain at paths, including for global reads.
 	globalRepo *layout.Paths
+	identity   ProjectIdentity // validated at Open or explicit initialization
 
 	mu         sync.Mutex
 	proposalMu sync.Mutex
@@ -138,6 +144,12 @@ func (s *Store) Open(ctx context.Context) error {
 	if s.opened {
 		return errors.New("localdolt: store is already open")
 	}
+	if _, err := s.repoConfig(); err != nil {
+		return err
+	}
+	if _, err := s.resolvedIdentity(ctx); err != nil {
+		return err
+	}
 
 	dataDir := s.paths.DoltDataDir()
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -162,6 +174,15 @@ func (s *Store) Open(ctx context.Context) error {
 		db := s.db
 		s.db = nil
 		return errors.Join(err, db.Close(), lock.Release())
+	}
+	version, identityErr := schemaVersion(ctx, s.db)
+	if identityErr == nil && version != 0 {
+		s.identity, identityErr = s.checkProjectIdentity(ctx, s.db, MainBranch, false)
+	}
+	if identityErr != nil {
+		db := s.db
+		s.db = nil
+		return errors.Join(identityErr, db.Close(), lock.Release())
 	}
 
 	s.lock = lock
@@ -457,6 +478,23 @@ func (s *Store) handle() (*sql.DB, error) {
 	defer s.mu.Unlock()
 	if !s.opened || s.db == nil {
 		return nil, fmt.Errorf("localdolt: %w", store.ErrNotOpen)
+	}
+	if _, err := s.repoConfig(); err != nil {
+		return nil, err
+	}
+	// Recheck owner policy for every reached operation, including authenticated
+	// raw Commit and MCP tools. The stored identity is immutable for ordinary
+	// operations; transfers additionally verify their captured committed rows.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	expected, err := s.resolvedIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if expected.ProjectID != "" && s.identity.ProjectID != "" {
+		if err := matchProjectIdentity(expected, s.identity); err != nil {
+			return nil, err
+		}
 	}
 	return s.db, nil
 }

@@ -126,6 +126,11 @@ func setDocumentConfigBool(root *os.Root, table, key string, value bool) (change
 		return false, nil
 	}
 	retrieval[key] = value
+	return replaceConfig(root, raw, mode, values)
+}
+
+// Shared rooted publication; callers validate their own consumed tables first.
+func replaceConfig(root *os.Root, raw []byte, mode os.FileMode, values map[string]any) (changed bool, err error) {
 	var encoded bytes.Buffer
 	if err := toml.NewEncoder(&encoded).Encode(values); err != nil {
 		return false, fmt.Errorf("encode document recall configuration: %w", err)
@@ -148,7 +153,7 @@ func setDocumentConfigBool(root *os.Root, table, key string, value bool) (change
 	// Refuse a detected concurrent edit. This is not a lock on foreign config
 	// editors in the final read/rename interval; cooperating ingests share Store's
 	// mutation mutex through finalization.
-	_, current, _, err := readDocumentConfig(root)
+	current, _, err := readConfigBytes(root)
 	if err != nil {
 		return false, err
 	}
