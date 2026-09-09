@@ -31,6 +31,14 @@ validation. Global identity and transfers remain separate. See
 Native history, review/ownership/credential boundaries and all 22 MCP tools
 remain; physical M4 acceptance and M5/M6 work are not completed by this slice.
 
+Before #163's first review correction, configuration case aliases could override
+routing and dirty identity rows could be mistaken for committed metadata. Now
+the shared repository reader uses exact map keys, and Open/InitializeIdentity
+read only captured immutable commits. The origin parser also rejects Windows
+drive-relative paths and non-ASCII before normalization. Existing metadata,
+unrelated configuration and native history remain preserved; the linked guide
+records the exact symbol boundaries and complete branch scope.
+
 Go module at the repo root: `github.com/kninetimmy/memdolt`, Go ≥1.26.2
 (the minimum `github.com/dolthub/driver` requires).
 

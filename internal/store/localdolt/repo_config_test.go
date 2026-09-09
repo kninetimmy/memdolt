@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestRepoConfigValidationAndProtectedReplacement(t *testing.T) {
 	if _, err := s.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	original := "project_name='preserve name'\n[retrieval]\ninclude_docs_in_default=true\n[unknown]\nitems=['one','two']\n"
+	original := "project_name='preserve name'\n[retrieval]\ninclude_docs_in_default=true\n[unknown]\nitems=['one','two']\nTopology='live'\n[unknown.Repo]\nremote_url='preserve unrelated value'\n"
 	if err := os.WriteFile(s.paths.ConfigFile(), []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +43,14 @@ func TestRepoConfigValidationAndProtectedReplacement(t *testing.T) {
 	var values map[string]any
 	if _, err := toml.DecodeFile(s.paths.ConfigFile(), &values); err != nil || values["project_name"] != "preserve name" || values["unknown"] == nil || values["retrieval"] == nil {
 		t.Fatalf("unrelated config lost = %+v, %v", values, err)
+	}
+	var originalValues map[string]any
+	if _, err := toml.Decode(original, &originalValues); err != nil {
+		t.Fatal(err)
+	}
+	delete(values, "repo")
+	if !reflect.DeepEqual(originalValues, values) {
+		t.Fatalf("unrelated case-distinct TOML semantics changed: got %+v want %+v", values, originalValues)
 	}
 	if changed, err := SetRepoConfig(s.paths.Base(), cfg); err != nil || changed {
 		t.Fatalf("repeat config = %t, %v", changed, err)
@@ -68,6 +77,46 @@ func TestRepoConfigValidationAndProtectedReplacement(t *testing.T) {
 				t.Fatalf("protected config = %v", err)
 			}
 		})
+	}
+}
+
+func TestRepoConfigRejectsCaseAliases(t *testing.T) {
+	for _, tc := range []struct{ name, raw string }{
+		{"topology alias", "[repo]\nTopology='local'"},
+		{"live shadowed", "[repo]\ntopology='live'\nTopology='local'"},
+		{"live shadowed reversed", "[repo]\nTopology='local'\ntopology='live'"},
+		{"URL alias", "[repo]\nRemote_URL='http://example.invalid/other'"},
+		{"URL shadowed", "[repo]\nremote_url='http://example.invalid/intended'\nRemote_URL='http://example.invalid/other'"},
+		{"URL shadowed reversed", "[repo]\nRemote_URL='http://example.invalid/other'\nremote_url='http://example.invalid/intended'"},
+		{"startup alias", "[repo]\ntopology='clone'\nAuto_Pull_On_Session_Start=true"},
+		{"startup shadowed", "[repo]\ntopology='clone'\nauto_pull_on_session_start=false\nAuto_Pull_On_Session_Start=true"},
+		{"table alias", "[Repo]\ntopology='local'"},
+		{"table shadowed", "[repo]\ntopology='live'\n[Repo]\ntopology='local'"},
+		{"table shadowed reversed", "[Repo]\ntopology='local'\n[repo]\ntopology='live'"},
+		{"upper table", "[REPO]\ntopology='local'"},
+		{"inline alias", "repo={topology='live', Topology='local'}"},
+		{"dotted alias", "repo.topology='live'\nrepo.Topology='local'"},
+		{"nested consumed key", "[repo.topology]\nname='local'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, err := decodeRepoConfig([]byte(tc.raw)); err == nil {
+				t.Fatalf("case-distinct routing accepted: %+v", got)
+			}
+		})
+	}
+	s := openInternalTestStore(t)
+	if _, err := s.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw := "[repo]\ntopology='local'\nTopology='local'\n[unrelated]\nkeep=true\n"
+	if err := os.WriteFile(s.paths.ConfigFile(), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := SetRepoConfig(s.paths.Base(), RepoConfig{Topology: "clone"}); err == nil || changed {
+		t.Fatalf("setter accepted case aliases: changed=%t, %v", changed, err)
+	}
+	if after, err := os.ReadFile(s.paths.ConfigFile()); err != nil || string(after) != raw {
+		t.Fatalf("refused config replacement changed source: %q, %v", after, err)
 	}
 }
 

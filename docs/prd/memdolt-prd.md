@@ -370,6 +370,14 @@ nonempty identities never auto-reassign. Global identity remains separate.
 [The topology guide](../repository-topology.md) specifies supported origins,
 explicit adoption, native transfer transitions and the full structural inventory.
 
+Before #163's first review correction, branch-qualified identity reads could
+mistake dirty native rows for committed identity. After it, Open and explicit
+initialization capture main's immutable hash; readProjectIdentity requires that
+hash for all its callers. Dirty rows remain preserved and cannot satisfy
+adoption. The same correction rejects drive-relative Git paths and non-ASCII before folding, so
+Windows paths and Unicode case folds cannot create shared project aliases.
+Supported ASCII identity, full-origin collision checks and attribution remain.
+
 ---
 
 ## 6. Data model
@@ -2354,6 +2362,13 @@ policy. Confirmed config/identity/migration/pull effects survive later failures.
 The [guide](../repository-topology.md) records every changed component, original
 guarantees and exact symbol scope. Machine defaults/registry and live SQL remain
 planned, and this introduces no new schema, dependency or host/hub installation.
+
+Before #163's first review correction, struct case folding could let `Topology`
+or `[Repo]` override correctly named configuration. After it, exact map lookups
+consume only `[repo]` and its exact lowercase keys with their declared types;
+aliases and mixed-case collisions refuse. Unrelated TOML semantics survive.
+This restriction binds the shared repository reader/setter and their reached
+CLI/owner/MCP callers, not every configuration reader in the application.
 
 ### 11.4 OpenCode 2 compatibility supplement (memhub v0.2.2)
 

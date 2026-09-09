@@ -73,7 +73,7 @@ func TestRepositoryConfigurePreservesLateChangesAndRefusesLive(t *testing.T) {
 	if err := cmd.Execute(); !errors.Is(err, late) || !strings.Contains(err.Error(), "change confirmed") || !strings.Contains(out.String(), "true") {
 		t.Fatalf("late config = %q, %v", &out, err)
 	}
-	for _, raw := range []string{"[repo]\ntopology='live'\n", "[repo]\nremote_url='https://token:secret@host/db'\n", "[repo]\nunknown=true\n"} {
+	for _, raw := range []string{"[repo]\ntopology='live'\n", "[repo]\nremote_url='https://token:secret@host/db'\n", "[repo]\nunknown=true\n", "[repo]\ntopology='live'\nTopology='local'\n", "[Repo]\ntopology='local'\n", "[repo]\nremote_url='http://example.invalid/intended'\nRemote_URL='http://example.invalid/other'\n"} {
 		writeTestFile(t, pathsFor(t, base).ConfigFile(), raw)
 		for _, args := range [][]string{{"task", "list"}, {"repo", "status", "--local"}, {"init"}, {"serve"}} {
 			root := newRootCommand()
@@ -165,12 +165,14 @@ func TestRepositoryOwnerStartupPullOnceAndMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, configPath, "[repo]\ntopology='live'\n")
-	if got, err := owner.Commit(ctx, request); err == nil || got.Hash != "" || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("raw owner bypassed changed topology = %+v, %v", got, err)
-	}
-	if response, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "task_add", Arguments: map[string]any{"title": "must not persist"}}); err == nil && !response.IsError {
-		t.Fatal("MCP ignored live topology")
+	for _, raw := range []string{"[repo]\ntopology='live'\n", "[repo]\ntopology='live'\nTopology='local'\n", "[Repo]\ntopology='local'\n"} {
+		writeTestFile(t, configPath, raw)
+		if got, err := owner.Commit(ctx, request); err == nil || got.Hash != "" {
+			t.Fatalf("raw owner bypassed invalid topology/config = %+v, %v", got, err)
+		}
+		if response, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "task_add", Arguments: map[string]any{"title": "must not persist"}}); err == nil && !response.IsError {
+			t.Fatal("MCP ignored invalid topology/config")
+		}
 	}
 	writeTestFile(t, configPath, string(saved))
 	if err := session.Close(); err != nil {

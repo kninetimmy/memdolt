@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -39,21 +40,45 @@ func (cfg RepoConfig) Validate() error {
 }
 
 func decodeRepoConfig(raw []byte) (RepoConfig, error) {
-	var decoded struct {
-		Repo RepoConfig `toml:"repo"`
-	}
-	metadata, err := toml.Decode(string(raw), &decoded)
+	// Struct decoding folds case and can let an alias override an exact key.
+	// Decode maps so only the three exact keys under the exact repo table bind.
+	var values map[string]any
+	_, err := toml.Decode(string(raw), &values)
 	if err != nil {
 		// TOML diagnostics can echo a URL containing a password. Only report the
 		// consumed surface; operators can inspect their file locally.
 		return RepoConfig{}, errors.New("cannot parse repository configuration; inspect .memdolt/config.toml")
 	}
-	for _, key := range metadata.Undecoded() {
-		if len(key) > 0 && key[0] == "repo" {
-			return RepoConfig{}, errors.New("unknown [repo] configuration key; use remote_url, topology or auto_pull_on_session_start")
+	for key := range values {
+		if key != "repo" && strings.EqualFold(key, "repo") {
+			return RepoConfig{}, errors.New("repository configuration table must use the exact spelling [repo]; case aliases are unsupported")
 		}
 	}
-	return decoded.Repo, decoded.Repo.Validate()
+	var cfg RepoConfig
+	value, present := values["repo"]
+	if !present {
+		return cfg, nil
+	}
+	repo, ok := value.(map[string]any)
+	if !ok {
+		return cfg, errors.New("repository configuration requires a [repo] table")
+	}
+	for key, value := range repo {
+		switch key {
+		case "remote_url":
+			cfg.RemoteURL, ok = value.(string)
+		case "topology":
+			cfg.Topology, ok = value.(string)
+		case "auto_pull_on_session_start":
+			cfg.AutoPullOnSessionStart, ok = value.(bool)
+		default:
+			return RepoConfig{}, errors.New("unknown [repo] configuration key; use remote_url, topology or auto_pull_on_session_start")
+		}
+		if !ok {
+			return RepoConfig{}, errors.New("invalid [repo] value type; remote_url and topology require strings, auto_pull_on_session_start requires a boolean")
+		}
+	}
+	return cfg, cfg.Validate()
 }
 
 func ReadRepoConfig(base string) (cfg RepoConfig, err error) {

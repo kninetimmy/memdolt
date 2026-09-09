@@ -83,6 +83,104 @@ func TestProjectIdentityOfflineCompatibilityAndRefusals(t *testing.T) {
 	})
 }
 
+func TestProjectIdentityRejectsAmbiguousDriveAndUnicodeOrigins(t *testing.T) {
+	for _, origin := range []string{"C:owner/repo", "c:owner/repo.git", "Z:/owner/repo", `C:\owner\repo`, "https://github.com/owner/K", "https://K.example/owner/repo", "ssh://git@host/owner/K", "git@K.example:owner/repo"} {
+		t.Run(origin, func(t *testing.T) {
+			if got, err := projectIdentity(origin); err == nil {
+				t.Fatalf("ambiguous origin accepted: %+v", got)
+			}
+		})
+	}
+}
+
+func TestProjectIdentityRejectsUncommittedIdentityAdoption(t *testing.T) {
+	ctx := context.Background()
+	s := openInternalTestStore(t)
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	identityGit(t, s.paths.Base(), "https://github.com/kninetimmy/memdolt")
+	expected, err := ResolveProjectIdentity(ctx, s.paths.Base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.ProposeFact(ctx, Proposal{Actor: s.cfg.Actor, Rationale: "preserve pending", Target: TargetRepo}, Fact{Key: "pending.identity", Value: "pending"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := transferMain(t, s)
+	if _, err := s.db.Exec("INSERT INTO meta (k,v) VALUES (?,?), (?,?)", "project_id", expected.ProjectID, "project_origin", expected.Origin); err != nil {
+		t.Fatal(err)
+	}
+	cfg := s.cfg
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if s.identity != (ProjectIdentity{}) {
+		t.Errorf("open cached uncommitted identity: %+v", s.identity)
+	}
+	committed := "SELECT COUNT(*) FROM " + quoteIdentifier(DatabaseName+"/"+before) + ".meta WHERE k IN ('project_id','project_origin')"
+	for _, adopt := range []bool{false, true} {
+		got, err := s.InitializeIdentity(ctx, adopt)
+		if err == nil || got.ProjectID != "" || got.Commit != "" {
+			t.Errorf("dirty identity reported durable (adopt=%t): %+v, %v", adopt, got, err)
+		}
+		if transferMain(t, s) != before || countInternal(t, s, committed) != 0 || countInternal(t, s, "SELECT COUNT(*) FROM meta WHERE k IN ('project_id','project_origin')") != 2 {
+			t.Fatal("refusal changed committed or dirty identity")
+		}
+	}
+	if _, err := s.db.Exec("DELETE FROM meta WHERE k IN ('project_id','project_origin')"); err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := s.InitializeIdentity(ctx, true)
+	if err != nil || adopted.ProjectIdentity != expected || adopted.Commit == "" {
+		t.Fatalf("explicit clean adoption = %+v, %v", adopted, err)
+	}
+	var author string
+	if err := s.db.QueryRow("SELECT committer FROM dolt_log WHERE commit_hash=?", adopted.Commit).Scan(&author); err != nil || author != s.cfg.Actor.Name {
+		t.Fatalf("adoption attribution = %s, %v", author, err)
+	}
+	if again, err := s.InitializeIdentity(ctx, true); err != nil || again.Commit != "" || again.ProjectIdentity != expected || transferMain(t, s) != adopted.Commit {
+		t.Fatalf("repeated adoption = %+v, %v", again, err)
+	}
+	if diff, err := s.ProposalDiff(ctx, pending.ID); err != nil || diff.Proposal.Commit != pending.Commit {
+		t.Fatalf("pending proposal changed: %+v, %v", diff, err)
+	}
+	// Once committed, dirty shadow rows must not replace the durable identity
+	// returned by an idempotent call or cached when reopening the same store.
+	other, err := projectIdentity("https://github.com/other/repository")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("UPDATE meta SET v=CASE k WHEN 'project_id' THEN ? ELSE ? END WHERE k IN ('project_id','project_origin')", other.ProjectID, other.Origin); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.InitializeIdentity(ctx, true); err != nil || again.Commit != "" || again.ProjectIdentity != expected || transferMain(t, s) != adopted.Commit {
+		t.Fatalf("dirty shadow replaced committed identity: %+v, %v", again, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Open(ctx); err != nil || s.identity != expected {
+		t.Fatalf("open used dirty shadow instead of committed identity: %+v, %v", s.identity, err)
+	}
+	if cloneRows(t, s.db, "SELECT v FROM meta WHERE k='project_origin'") != cloneRows(t, s.db, "SELECT 'github.com/other/repository'") {
+		t.Fatal("identity inspection discarded dirty shadow")
+	}
+}
+
 func TestProjectIdentityAdoptionPreservesPendingAndConfirmedResults(t *testing.T) {
 	ctx := context.Background()
 	s := openInternalTestStore(t)

@@ -51,6 +51,18 @@ registrations, frozen golden gates and native history remain. Synthetic
 direct/owner/MCP checks use disposable stores; no live hub, installation,
 dependency, schema migration, physical M4 acceptance or M5/M6 completion is added.
 
+Before #163's first review correction, TOML struct decoding could let case
+aliases override routing, branch-qualified identity reads included dirty rows,
+and the origin parser admitted Windows drive-relative paths and Unicode folds.
+After correction, repository maps enforce exact table/keys and value types;
+Open/InitializeIdentity capture committed main and readProjectIdentity requires
+immutable hashes for all callers; origin parsing rejects non-ASCII before
+folding and leading drive-letter/colon forms everywhere. Dirty rows and
+unrelated TOML survive.
+These restrictions bind the shared repository configuration/identity helpers and
+their callers, not every TOML reader or arbitrary native SQL. The topology
+guide retains the complete branch inventory and focused before/after evidence.
+
 **Terminal global proposal acceptance (issue #161).** Before this delivery,
 the #146 global-target refusal and terminal remedy below still excluded actual
 acceptance. After it, `memdolt review accept <id> --dir <repository>` accepts a

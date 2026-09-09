@@ -26,7 +26,19 @@ type ProjectIdentity struct {
 var gitOriginPattern = regexp.MustCompile(`^(?:https://|ssh://(?:[A-Za-z0-9_.-]+@)?|(?:[A-Za-z0-9_.-]+@)?)([A-Za-z0-9][A-Za-z0-9.-]*)([:/])([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+)/*$`)
 
 func projectIdentity(raw string) (ProjectIdentity, error) {
+	// Validate before folding: Unicode simple folds (for example Kelvin sign)
+	// are not memhub's ASCII normalization and must not create shared aliases.
+	for _, char := range raw {
+		if char > 127 {
+			return ProjectIdentity{}, errors.New("git origin must use ASCII; Unicode identity aliases are unsupported")
+		}
+	}
 	raw = strings.ToLower(raw)
+	// Git for Windows treats a leading drive letter and colon as a local path,
+	// including drive-relative C:owner/repo. Refuse it on every platform.
+	if len(raw) >= 2 && raw[0] >= 'a' && raw[0] <= 'z' && raw[1] == ':' {
+		return ProjectIdentity{}, errors.New("git origin must not be a drive-qualified local path; use an explicit HTTPS or SSH origin")
+	}
 	match := gitOriginPattern.FindStringSubmatch(raw)
 	if match == nil || (strings.Contains(raw, "://") && match[2] != "/") ||
 		(!strings.Contains(raw, "://") && match[2] != ":") {
@@ -111,7 +123,9 @@ func identityFromMetadata(values map[string]string) (ProjectIdentity, error) {
 }
 
 func readProjectIdentity(ctx context.Context, q rowQuerier, revision string) (ProjectIdentity, error) {
-	if revision != MainBranch && !transferHash.MatchString(revision) {
+	// A branch-qualified database includes its working set in native Dolt.
+	// Every caller must capture a committed hash before deciding durable identity.
+	if !transferHash.MatchString(revision) {
 		return ProjectIdentity{}, errors.New("invalid identity revision")
 	}
 	values := map[string]string{}
@@ -190,7 +204,11 @@ func (s *Store) initializeIdentity(ctx context.Context, allowAdoption bool, fina
 		return result, err
 	}
 	defer func() { err = errors.Join(err, conn.Close()) }()
-	result.ProjectIdentity, err = s.checkProjectIdentity(ctx, conn, MainBranch, false)
+	head, err := branchHead(ctx, conn, MainBranch)
+	if err != nil {
+		return result, err
+	}
+	result.ProjectIdentity, err = s.checkProjectIdentity(ctx, conn, head, false)
 	if err != nil || result.ProjectID != "" || s.cfg.Global {
 		return result, err
 	}
@@ -202,10 +220,6 @@ func (s *Store) initializeIdentity(ctx context.Context, allowAdoption bool, fina
 		return result, errors.New("existing store has no project identity; review Git origin, then run `memdolt init --adopt-identity --dir <repository>`; no identity was written")
 	}
 	if err := requireTransferClean(ctx, conn); err != nil {
-		return result, err
-	}
-	head, err := branchHead(ctx, conn, MainBranch)
-	if err != nil {
 		return result, err
 	}
 	if err := validateTransferSchema(ctx, conn, head); err != nil {

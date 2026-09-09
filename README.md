@@ -492,6 +492,11 @@ the owner stopped; changed origins and conflicting identities refuse. Local
 use without a Git origin remains available. See the
 [identity, topology and recovery guide](docs/repository-topology.md).
 
+The first #163 review correction closes three gaps: configuration case aliases
+now refuse, identity checks read captured commits rather than dirty native rows,
+and drive-relative/non-ASCII origins cannot become shared identities. Existing
+working data and unrelated configuration remain preserved.
+
 `repo configure --topology local` keeps ordinary status offline; explicit
 transfers and named remote status remain available. `--topology clone` uses
 the existing native transfer path. Optional `--remote-url` supplies default

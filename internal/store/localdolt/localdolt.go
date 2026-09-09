@@ -177,7 +177,11 @@ func (s *Store) Open(ctx context.Context) error {
 	}
 	version, identityErr := schemaVersion(ctx, s.db)
 	if identityErr == nil && version != 0 {
-		s.identity, identityErr = s.checkProjectIdentity(ctx, s.db, MainBranch, false)
+		var head string
+		head, identityErr = branchHead(ctx, s.db, MainBranch)
+		if identityErr == nil {
+			s.identity, identityErr = s.checkProjectIdentity(ctx, s.db, head, false)
+		}
 	}
 	if identityErr != nil {
 		db := s.db

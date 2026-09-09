@@ -23,6 +23,13 @@ filesystem origins refuse. Origin resolution reads the selected root's local
 Git configuration offline; it does not resolve SSH aliases, Git URL rewrites
 or repository redirects. It ignores inherited `GIT_*` process overrides.
 
+Before #163's first review correction, the SCP grammar admitted the Windows
+drive-relative path `C:owner/repo`, and Unicode lowercasing could alias `K` to
+ASCII `k`. After correction, every origin rejects non-ASCII before folding and
+rejects leading drive-letter/colon forms on every platform. Explicit supported
+ASCII HTTPS/SSH spellings retain their tagged memhub identity. These rules
+bind the shared origin parser and its resolver/metadata callers, not Git itself.
+
 The ID is memhub's ASCII repository slug (at most 32 characters), a hyphen,
 and the first eight hexadecimal SHA-256 characters of `host/owner/repo`.
 For example, `github.com/kninetimmy/memdolt` gives `memdolt-414c4f88` and the
@@ -55,6 +62,17 @@ collisions refuse reassignment. Restore the intended origin or select the
 correct memory store; there is no force/reassign flag. An intentionally renamed
 Git remote requires a separately reviewed native history repair, outside this
 delivery. Inspect `meta` and Dolt history with the owner stopped before repair.
+
+Before the same correction, Open and InitializeIdentity read `memory/main.meta`,
+which includes native Dolt's working set: a dirty matching pair could appear
+durable without an adoption commit. After correction, both capture main's
+immutable commit hash, and `readProjectIdentity` requires one for all its
+callers. Dirty identity rows stay uncommitted and preserved; they neither bypass explicit
+adoption nor its clean guard. For an already identified store, idempotent reads
+report the committed identity even when dirty rows shadow it. Native commit
+attribution, late-result evidence and proposal preservation remain unchanged.
+This binds Open, adoption and transfer/status identity decisions; arbitrary
+Store.Query and native SQL keep their existing behavior.
 
 An explicit native fast-forward push may publish an adopted identity to a
 previously unidentified remote. Existing nonempty remote identity must match;
@@ -112,6 +130,14 @@ compare-and-swap against foreign writers in the final check/rename interval.
 Malformed TOML, unknown `[repo]` keys and invalid consumed values fail visibly.
 Valid unrelated tables keep their own independent validation rules.
 
+Before #163's first review correction, TOML struct decoding could accept case
+aliases and let `Topology` override `topology`, or `[Repo]` override `[repo]`.
+After correction, exact map lookups consume only `[repo]` and its three exact
+lowercase keys. Root table case aliases and all unknown/case-varied consumed
+keys refuse, including mixed, dotted and inline forms. Unrelated tables retain
+their case-sensitive values and semantics. This binds the shared repository
+reader/setter and reached CLI/owner/MCP paths; other TOML readers are unchanged.
+
 ## Owner startup and recovery
 
 Startup pull defaults off and requires explicit `clone`. `serve` calls existing
@@ -151,10 +177,17 @@ inspect captured committed metadata. No caching framework or watcher is added.
   restrictions bind its callers, not arbitrary native SQL or caller-authored
   `Store.Commit` statements. Full-origin equality binds checked store opens,
   adoption and transfers; it is not a global registry or an authentication check.
+  The first review correction rejects drive-relative/Unicode parser aliases
+  and makes `readProjectIdentity` require an immutable hash. Open and explicit
+  initialization now capture committed main before their identity decisions;
+  working/staged metadata never becomes durable identity evidence.
 - `localdolt/repo_config.go`: adds the independent `[repo]` reader, validated
   setter and one-invocation startup-pull adapter. The setter owns syntax/path
   policy; CLI configure also checks native-origin conflicts while owning the
   store. Transfer selection independently refuses conflicting configurations.
+  Before the first review correction, struct decoding allowed case aliases to
+  override routing; after it, exact map keys and exact value types refuse them.
+  URL policy, independent unrelated tables and rooted publication remain.
 - `document_file.go`: extracts `replaceConfig` from the existing bool writer.
   Document/global callers retain their validation and bool semantics; all
   replacement callers retain temporary-file sync, semantic preservation,
@@ -167,6 +200,9 @@ inspect captured committed metadata. No caching framework or watcher is added.
   all reached repository Store operations refuse it. NoText still skips deny
   regex evaluation; it no longer bypasses repository routing-file parsing.
   `Close` always remains available to release ownership after policy refusal.
+  Open's identity cache now comes from a captured committed hash, preserving
+  dirty native identity rows instead of treating them as committed or replacing
+  a valid committed identity with their uncommitted values.
 - `global.go`: `OpenGlobal` supplies the explicit global flag. Its enabled
   calling-repository policy, checked global paths, exclusive lock, credentials,
   global recall and human/review write boundaries remain. This exclusion binds
@@ -212,6 +248,9 @@ inspect captured committed metadata. No caching framework or watcher is added.
   assumptions or earlier-refusal diagnostics. Native state checks still prove
   unchanged rows/history; frozen golden assertions and production protections
   remain. No live user home, credentials, stores, installation or hub is changed.
+  Review regressions reproduce case aliases across native/CLI/owner/MCP paths,
+  dirty identity pairs before and after adoption/reopen, Windows drive-relative
+  origins and Kelvin-sign aliases; the existing collision/attribution checks stay.
 - README, AGENTS, CLAUDE, PRD, server instructions and shared onboarding/catch-up
   guidance add matching before/after records, precedence and recovery. Host
   registrations, generic workflows, human approvals and existing milestone
