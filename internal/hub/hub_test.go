@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/servercfg"
@@ -250,26 +251,98 @@ func TestVersionAndBoundedReadiness(t *testing.T) {
 			t.Fatalf("version %q: %s %v", input, got, err)
 		}
 	}
-	c := fixtureConfig()
-	c.ReadySeconds = 1
-	calls := 0
-	if err := waitReady(context.Background(), c, func(Config) error {
-		calls++
-		if calls == 1 {
-			return errors.New("boot race")
+	synctest.Test(t, func(t *testing.T) {
+		c := fixtureConfig()
+		c.ReadySeconds = 1
+		first, latest := errors.New("boot race"), errors.New("still absent")
+		calls := 0
+		start := time.Now()
+		if err := waitReady(context.Background(), c, func(Config) error {
+			calls++
+			if calls == 1 {
+				return first
+			}
+			return nil
+		}); err != nil || calls != 2 || time.Since(start) != 250*time.Millisecond {
+			t.Fatalf("readiness retry: %d after %s: %v", calls, time.Since(start), err)
 		}
-		return nil
-	}); err != nil || calls != 2 {
-		t.Fatalf("readiness retry: %d %v", calls, err)
-	}
-	start := time.Now()
-	if err := waitReady(context.Background(), c, func(Config) error { return errors.New("still absent") }); err == nil || !strings.Contains(err.Error(), "still absent") || time.Since(start) > 3*time.Second {
-		t.Fatalf("readiness did not visibly bound failure: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := waitReady(ctx, c, func(Config) error { return errors.New("absent") }); !errors.Is(err, context.Canceled) {
-		t.Fatalf("readiness ignored cancellation: %v", err)
+		calls, start = 0, time.Now()
+		err := waitReady(context.Background(), c, func(Config) error {
+			if elapsed := time.Since(start); elapsed != time.Duration(calls)*250*time.Millisecond {
+				t.Fatalf("readiness probe %d at %s", calls, elapsed)
+			}
+			calls++
+			if calls == 1 {
+				return first
+			}
+			return latest
+		})
+		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, latest) || errors.Is(err, first) || time.Since(start) != time.Second {
+			t.Fatalf("readiness did not retain its latest bounded failure after %s: %v", time.Since(start), err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := waitReady(ctx, c, func(Config) error {
+			t.Fatal("already canceled readiness probed addresses")
+			return nil
+		}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("readiness ignored cancellation: %v", err)
+		}
+		ctx, cancel = context.WithCancel(context.Background())
+		defer cancel()
+		time.AfterFunc(100*time.Millisecond, cancel)
+		calls, start = 0, time.Now()
+		err = waitReady(ctx, c, func(Config) error {
+			calls++
+			return latest
+		})
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, latest) || calls != 1 || time.Since(start) != 100*time.Millisecond {
+			t.Fatalf("readiness cancellation during retry: %d after %s: %v", calls, time.Since(start), err)
+		}
+	})
+}
+
+func TestReadinessRetainsFailureAfterLateProbe(t *testing.T) {
+	first, latest := errors.New("interface absent"), errors.New("IPv6 absent")
+	for _, tc := range []struct {
+		name   string
+		expire bool
+		result error
+		cause  error
+	}{
+		{"canceled success", false, nil, context.Canceled},
+		{"canceled failure", false, latest, context.Canceled},
+		{"expired success", true, nil, context.DeadlineExceeded},
+		{"expired failure", true, latest, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := fixtureConfig()
+				c.ReadySeconds = 1
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				calls := 0
+				err := waitReady(ctx, c, func(Config) error {
+					calls++
+					if calls == 1 {
+						return first
+					}
+					if tc.expire {
+						time.Sleep(time.Second)
+					} else {
+						cancel()
+					}
+					return tc.result
+				})
+				want := first
+				if tc.result != nil {
+					want = tc.result
+				}
+				if calls != 2 || !errors.Is(err, tc.cause) || !errors.Is(err, want) || (tc.result != nil && errors.Is(err, first)) {
+					t.Fatalf("late probe lost readiness failure or cancellation: %d %v", calls, err)
+				}
+			})
+		})
 	}
 }
 

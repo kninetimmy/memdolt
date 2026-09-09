@@ -201,6 +201,23 @@ process has no capabilities, runs with the dedicated user/group, and writes only
 its data directory under the unit's filesystem restrictions. No shell is used
 for these commands.
 
+Before issue #165, a retry timer winning as the context expired could leave only
+the context error in the journal, losing the last address failure. A probe that
+returned success after cancellation could also pass readiness. After #165,
+`waitReady` retains the most recent failed probe on every timeout/cancellation
+exit, and `errors.Is` recognizes `context.Canceled` or `context.DeadlineExceeded`.
+An already canceled context makes no probe; successful readiness and the 250ms
+pause after each failed probe remain. A late successful probe cannot clear a
+cancellation or erase a prior failure.
+
+`waitReady` owns this error-identity and retry policy. Its only production caller
+is `inspect` in `ready` mode, which retains the diagnostic in its
+`private-addresses` check; `finish` still returns its generic failed-check error.
+Status still makes one direct address probe, and preflight, native version and
+TCP checks keep their separate behavior. Address probes remain synchronous: the
+context stops retries and rejects late success, but does not interrupt an
+in-flight interface query.
+
 `hub preflight --files-only` is solely the boundary unit's pre-application file
 check. A successful result **does not** assert applied protection or authorize a
 server start. The server unit always invokes the full preflight first.
@@ -280,6 +297,25 @@ not been installed, changed or accepted by this delivery.
   retrieval/locator gates remain intact. No Go dependency or durable migration
   changes. Help, this runbook, AGENTS and PRD §§11/13/16 record the before/after
   correction and these boundaries; older SQL-bind-only prose is preserved.
+
+The issue #165 readiness correction touches only these structures:
+
+- `internal/hub/check.go:waitReady` consolidates cancellation exits and keeps the
+  latest probe error as described above. Its signature, configured timeout and
+  retry cadence remain. `inspect`, `Report.add`, `finish` and the CLI still
+  report failed readiness and refuse startup through their existing paths;
+  configuration, native release, service identity, credentials, ingress checks
+  and generated artifacts are unchanged.
+- `internal/hub/hub_test.go:TestVersionAndBoundedReadiness` keeps the native
+  version assertions and replaces wall-clock readiness allowances with standard
+  library `testing/synctest` checks of exact retry/deadline timing and cancellation.
+  New `TestReadinessRetainsFailureAfterLateProbe` checks prior/latest diagnostic
+  retention after canceled or expired probes return success or failure. These
+  tests use the real helper; no production timer seam or live environment is
+  added. The Linux ingress rig, ordinary CI and golden gates remain unchanged.
+- This runbook adds the before/after and scope record while retaining the earlier
+  bounded-readiness and journal statements. No CLI interface, dependency, schema,
+  credential, service or firewall setting changes.
 
 The native binding and privilege observations above are grounded in the pinned
 [Dolt sql-server source](https://github.com/dolthub/dolt/blob/v1.88.1/go/cmd/dolt/commands/sqlserver/server.go)

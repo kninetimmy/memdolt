@@ -287,20 +287,22 @@ func privateReady(c Config) error {
 func waitReady(ctx context.Context, c Config, probe func(Config) error) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(c.ReadySeconds)*time.Second)
 	defer cancel()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	var lastErr error
+	for ctx.Err() == nil {
 		err := probe(c)
 		if err == nil {
-			return nil
+			break
 		}
+		lastErr = err
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("private-address readiness failed within %ds: %w", c.ReadySeconds, errors.Join(ctx.Err(), err))
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("private-address readiness failed within %ds: %w", c.ReadySeconds, errors.Join(err, lastErr))
+	}
+	return nil
 }
 
 func listening(ctx context.Context, address string) error {
