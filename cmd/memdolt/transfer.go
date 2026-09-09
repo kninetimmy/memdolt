@@ -61,7 +61,12 @@ func newTransferCommand(operation string) *cobra.Command {
 			"Configure a remote with `memdolt repo remote add <name> <absolute-url>\n" +
 			"--dir <repository> [--user <sql-user>]`; inspect `memdolt repo remote list`,\n" +
 			"or clone into a fresh --dir. Transfers are submitted once. A lost response\n" +
-			"can leave an unknown outcome: inspect local and remote main before retrying.",
+			"can leave an unknown outcome: inspect local and remote main before retrying.\n\n" +
+			"[repo] remote_url supplies missing origin; if native origin exists both\n" +
+			"must match exactly. Other explicitly named remotes keep their target.\n" +
+			"local and clone use this same explicit native transfer; live refuses.\n" +
+			"Project identity is checked before promotion; existing unidentified stores\n" +
+			"with a Git origin need explicit init --adopt-identity with the owner stopped.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 && args[0] == "" {

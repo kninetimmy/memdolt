@@ -44,6 +44,8 @@ type RepoTableChange struct {
 }
 
 type RepoStatusReport struct {
+	ProjectIdentity
+	Topology         string            `json:"topology,omitempty"`
 	LocalOnly        bool              `json:"localOnly"`
 	Store            string            `json:"store"`
 	MainCommit       string            `json:"mainCommit"`
@@ -107,6 +109,17 @@ func (s *Store) repoStatus(ctx context.Context, opts RepoStatusOptions, hooks re
 	if err := opts.Validate(); err != nil {
 		return report, err
 	}
+	cfg, err := s.repoConfig()
+	if err != nil {
+		return report, err
+	}
+	report.Topology = cfg.Topology
+	if cfg.Topology == "local" && opts.Remote == "" {
+		if opts.User != "" || opts.Diff {
+			return report, errors.New("local topology requires an explicit remote name for remote status options")
+		}
+		opts.Local, report.LocalOnly = true, true
+	}
 	// ponytail: hold the existing mutation lock through fetch and rollback.
 	// Split this only if remote latency warrants a more complex capture protocol.
 	// Foreign Dolt processes do not participate in this Store's mutex.
@@ -137,6 +150,10 @@ func (s *Store) repoStatus(ctx context.Context, opts RepoStatusOptions, hooks re
 	if err := readLocalRepoStatus(ctx, conn, &report); err != nil {
 		return report, err
 	}
+	report.ProjectIdentity, err = s.checkProjectIdentity(ctx, conn, report.MainCommit, false)
+	if err != nil {
+		return report, err
+	}
 	if opts.Local {
 		report.Status, report.Assessment = "offline", "not-requested"
 		return report, nil
@@ -155,7 +172,7 @@ func (s *Store) repoStatus(ctx context.Context, opts RepoStatusOptions, hooks re
 	if report.Remote == "" {
 		report.Remote = "origin"
 	}
-	if !slices.ContainsFunc(configured.remotes, func(remote Remote) bool { return remote.Name == report.Remote }) {
+	if (report.Remote != "origin" || cfg.RemoteURL == "") && !slices.ContainsFunc(configured.remotes, func(remote Remote) bool { return remote.Name == report.Remote }) {
 		if opts.Remote != "" {
 			return report, errors.New("the explicitly selected remote is not configured; inspect `memdolt repo remote list` or add it with `memdolt repo remote add`")
 		}
@@ -163,7 +180,7 @@ func (s *Store) repoStatus(ctx context.Context, opts RepoStatusOptions, hooks re
 		report.Remedy = "Configure origin with `memdolt repo remote add origin <absolute-url>`, or select a configured remote by name."
 		return report, nil
 	}
-	remoteURL, selectedUser, err := configuredTransferRemote(ctx, conn, TransferOptions{Remote: report.Remote, User: opts.User})
+	remoteURL, selectedUser, err := s.configuredTransferRemote(ctx, conn, TransferOptions{Remote: report.Remote, User: opts.User})
 	user = selectedUser
 	if err != nil {
 		return report, err
@@ -174,7 +191,7 @@ func (s *Store) repoStatus(ctx context.Context, opts RepoStatusOptions, hooks re
 	if hooks.afterCapture != nil {
 		hooks.afterCapture()
 	}
-	if _, err := runEngineTransfer(ctx, conn, "pull", report.Remote, remoteURL, user, report.MainCommit); err != nil {
+	if _, err := runEngineTransfer(ctx, conn, "pull", report.Remote, remoteURL, user, report.MainCommit, report.ProjectIdentity); err != nil {
 		return report, fmt.Errorf("fetch remote main; check its main branch, connectivity and owner credentials: %w", err)
 	}
 	if err := conn.QueryRowContext(ctx, "SELECT hash FROM dolt_remote_branches WHERE name = ?", "remotes/"+report.Remote+"/main").Scan(&report.RemoteCommit); err != nil {
@@ -183,6 +200,13 @@ func (s *Store) repoStatus(ctx context.Context, opts RepoStatusOptions, hooks re
 	remoteSchema, err := statusSchema(ctx, conn, report.RemoteCommit)
 	if err != nil {
 		return report, fmt.Errorf("incompatible incoming committed schema; repair/migrate the remote with a compatible client before retrying: %w", err)
+	}
+	incoming, err := readProjectIdentity(ctx, conn, report.RemoteCommit)
+	if err != nil {
+		return report, err
+	}
+	if err := matchProjectIdentity(report.ProjectIdentity, incoming); err != nil {
+		return report, err
 	}
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_MERGE_BASE(?, ?)", report.MainCommit, report.RemoteCommit).Scan(&report.MergeBase); err != nil {
 		return report, fmt.Errorf("cannot establish committed-main ancestry; inspect and reconcile the histories with Dolt: %w", err)

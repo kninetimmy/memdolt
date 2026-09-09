@@ -356,7 +356,7 @@ hub acceptance or complete memhub parity.
 | Area | Delivered | Remaining boundary |
 | --- | --- | --- |
 | Foundations and M0–M3 | Local Dolt, ownership/IPC, reviewed writes, retrieval gates, 22 MCP tools, host templates | M0's recorded GO has scoped limits. Live Claude acceptance was explicitly waived; deterministic compatibility and a real OpenCode provenance write supplied the replacement M3 evidence. |
-| M4: cross-machine memory | Clone, remotes, status/diff, push/pull, compatible merges, human conflict choices, Linux hub artifacts and isolated native ingress tests | Physical two-client/private-network acceptance, topology/project identity, and client version-skew acceptance. Live SQL-to-hub storage is still a stretch, not the shipped client path. |
+| M4: cross-machine memory | Clone, remotes, status/diff, push/pull, compatible merges, human conflict choices, Linux hub artifacts, isolated native ingress tests, repository identity and local/clone topology | Before #163 topology/project identity remained pending; they now ship. Physical two-client/private-network and client version-skew acceptance remain. Live SQL-to-hub storage is unsupported. |
 | M5: memory workflows | Documents, code locator and golden gates, rendering, human fact/decision commands, global replicas with combined recall, terminal global proposal acceptance, JSON import/export | Before #161 global-target proposal acceptance refused; it now ships through terminal human review. Audit-md, Git/file-history ingestion, top-level status/stats/history, remaining wrap-up policy, and the full parity audit remain. |
 | M6: operations | Existing scoped health checks and deployment runbook | Backups and restore drill, `doctor --hub`, retention/GC, upgrades, gated token accounting, and local transcript archives remain planned. |
 
@@ -483,6 +483,33 @@ The [global memory guide](docs/global-memory.md) covers enablement, locks,
 collisions, document defaults, sync, and recovery.
 
 ## Moving between machines
+
+Before #163, `[repo]` TOML was ignored and init did not record project identity.
+Now equivalent supported Git SSH/HTTPS origins produce one memhub-compatible
+project ID and safe hub database name, recorded in an attributed init commit.
+Existing unidentified stores require deliberate `init --adopt-identity` with
+the owner stopped; changed origins and conflicting identities refuse. Local
+use without a Git origin remains available. See the
+[identity, topology and recovery guide](docs/repository-topology.md).
+
+The first #163 review correction closes three gaps: configuration case aliases
+now refuse, identity checks read captured commits rather than dirty native rows,
+and drive-relative/non-ASCII origins cannot become shared identities. Existing
+working data and unrelated configuration remain preserved.
+
+`repo configure --topology local` keeps ordinary status offline; explicit
+transfers and named remote status remain available. `--topology clone` uses
+the existing native transfer path. Optional `--remote-url` supplies default
+origin if absent, and must match a native origin exactly when both exist.
+Other explicitly named remotes retain their own target. Configure with the
+owner stopped; only supplied keys change and unrelated TOML values survive.
+`live` now refuses instead of silently using local data.
+
+`repo configure --auto-pull-on-session-start` is an opt-in requiring clone.
+It runs pull once before `serve` publishes MCP/IPC, never on CLI opens. Startup
+merges are attributed to memdolt; conflicts and failures stop startup with
+inspection remedies. No approvals or uncertain operations are replayed. The
+default remains off; global memory retains separate explicit transfers.
 
 For an existing local repository, invoke `memdolt-catch-up` after installing
 the [host workflows](#mcp-and-hosts). Its

@@ -19,6 +19,50 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Repository identity and topology (issue #163).** Before this slice, native
+transfers shipped but `[repo]` was ignored and `meta.project_id` was absent.
+After it, explicit init records a memhub-compatible Git-origin identity, with
+full canonical origin evidence for collision refusal. Existing unidentified
+stores require `init --adopt-identity`; repeated init and reopen do not add
+identity commits. Clean-main/schema/deny checks, honest attribution, native
+late-result reporting and pending-ref preservation apply. Global identity
+remains separate. The complete changed-element inventory, exact symbol scopes,
+precedence and recovery are in [the topology guide](docs/repository-topology.md).
+
+`repo configure` updates supplied machine-local keys with the owner stopped,
+using the existing protected rooted config replacement. `local` keeps ordinary
+status offline; explicit transfers and named remote status remain. `clone`
+uses native transfers; `live` refuses instead of falling back. An optional TOML
+default must match native origin exactly; other explicit names remain supported.
+Malformed repository TOML and unknown consumed keys now refuse reached Store
+operations, including direct authenticated owner requests. Before this delivery
+NoText could avoid reading any config; afterward it still skips deny-regex
+evaluation but not repository routing-file validation. Other valid tables keep
+their independent readers. `Close` still releases ownership after refusal.
+
+Startup pull is off by default, clone-only when enabled, and runs existing Pull
+once before owner publication. Errors/conflicts stop startup; real confirmed
+hashes survive later failures and unknown outcomes never trigger replay. The
+shared handle rechecks policy/identity per Store operation; captured native
+transfer identities are checked separately. This does not constrain arbitrary
+native SQL or turn caller-written Commit SQL into an identity immutability API.
+Existing credentials, ownership, review/queue/provenance behavior, all 22 MCP
+registrations, frozen golden gates and native history remain. Synthetic
+direct/owner/MCP checks use disposable stores; no live hub, installation,
+dependency, schema migration, physical M4 acceptance or M5/M6 completion is added.
+
+Before #163's first review correction, TOML struct decoding could let case
+aliases override routing, branch-qualified identity reads included dirty rows,
+and the origin parser admitted Windows drive-relative paths and Unicode folds.
+After correction, repository maps enforce exact table/keys and value types;
+Open/InitializeIdentity capture committed main and readProjectIdentity requires
+immutable hashes for all callers; origin parsing rejects non-ASCII before
+folding and leading drive-letter/colon forms everywhere. Dirty rows and
+unrelated TOML survive.
+These restrictions bind the shared repository configuration/identity helpers and
+their callers, not every TOML reader or arbitrary native SQL. The topology
+guide retains the complete branch inventory and focused before/after evidence.
+
 **Terminal global proposal acceptance (issue #161).** Before this delivery,
 the #146 global-target refusal and terminal remedy below still excluded actual
 acceptance. After it, `memdolt review accept <id> --dir <repository>` accepts a

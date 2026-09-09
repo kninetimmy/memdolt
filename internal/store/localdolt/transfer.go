@@ -154,7 +154,11 @@ func (s *Store) transfer(ctx context.Context, operation string, opts TransferOpt
 	if err := validateTransferSchema(ctx, conn, result.LocalCommit); err != nil {
 		return result, fmt.Errorf("unsupported local store; inspect or explicitly initialize/upgrade it before transfer: %w", err)
 	}
-	remoteURL, selectedUser, err := configuredTransferRemote(ctx, conn, opts)
+	identity, err := s.checkProjectIdentity(ctx, conn, result.LocalCommit, true)
+	if err != nil {
+		return result, err
+	}
+	remoteURL, selectedUser, err := s.configuredTransferRemote(ctx, conn, opts)
 	user = selectedUser
 	if err != nil {
 		return result, err
@@ -169,8 +173,11 @@ func (s *Store) transfer(ctx context.Context, operation string, opts TransferOpt
 		if err := s.scanTransfer(ctx, conn, "", result.LocalCommit); err != nil {
 			return result, fmt.Errorf("refuse upload: %w", err)
 		}
-		call, transferErr := runEngineTransfer(ctx, conn, operation, opts.Remote, remoteURL, user, result.LocalCommit)
+		call, transferErr := runEngineTransfer(ctx, conn, operation, opts.Remote, remoteURL, user, result.LocalCommit, identity)
 		if !call.completed {
+			if !call.attempted {
+				return result, transferErr
+			}
 			result.Status = "unknown"
 			return result, fmt.Errorf("push did not confirm completion for captured main %s; remote outcome may be unknown; inspect remote main before retrying (non-fast-forward history must be reconciled manually): %w", result.LocalCommit, transferErr)
 		}
@@ -178,7 +185,7 @@ func (s *Store) transfer(ctx context.Context, operation string, opts TransferOpt
 		result.Changed = call.changed
 		err = transferErr
 	} else {
-		if _, err := runEngineTransfer(ctx, conn, operation, opts.Remote, remoteURL, user, result.LocalCommit); err != nil {
+		if _, err := runEngineTransfer(ctx, conn, operation, opts.Remote, remoteURL, user, result.LocalCommit, identity); err != nil {
 			return result, fmt.Errorf("fetch remote main; check remote main, connectivity and owner credentials: %w", err)
 		}
 		if err := conn.QueryRowContext(ctx, "SELECT hash FROM dolt_remote_branches WHERE name = ?", "remotes/"+opts.Remote+"/main").Scan(&result.RemoteCommit); err != nil {
@@ -186,6 +193,13 @@ func (s *Store) transfer(ctx context.Context, operation string, opts TransferOpt
 		}
 		if !transferHash.MatchString(result.RemoteCommit) {
 			return result, errors.New("fetched main is not an immutable Dolt commit hash")
+		}
+		incoming, err := readProjectIdentity(ctx, conn, result.RemoteCommit)
+		if err != nil {
+			return result, err
+		}
+		if err := matchProjectIdentity(identity, incoming); err != nil {
+			return result, err
 		}
 		if opts.Resolution != nil && (opts.Resolution.LocalCommit != result.LocalCommit || opts.Resolution.RemoteCommit != result.RemoteCommit) {
 			return result, errors.New("local or remote main changed since conflict review; run `memdolt pull --json` for a fresh review; no choices were applied")
@@ -265,9 +279,21 @@ func requireTransferClean(ctx context.Context, conn *sql.Conn) error {
 	return nil
 }
 
-func configuredTransferRemote(ctx context.Context, conn *sql.Conn, opts TransferOptions) (remoteURL, user string, err error) {
+func (s *Store) configuredTransferRemote(ctx context.Context, conn *sql.Conn, opts TransferOptions) (remoteURL, user string, err error) {
+	cfg, err := s.repoConfig()
+	if err != nil {
+		return "", "", err
+	}
+	// Refresh native state using its protected reader before selecting a target.
+	configured := engineRemotes{base: s.paths.Base()}
+	if _, err := conn.ExecContext(context.WithValue(ctx, remoteContextKey{}, &configured), "CALL memdolt_remotes()"); err != nil {
+		return "", "", err
+	}
 	var rawParams sql.NullString
 	err = conn.QueryRowContext(ctx, "SELECT url, params FROM dolt_remotes WHERE name = ?", opts.Remote).Scan(&remoteURL, &rawParams)
+	if errors.Is(err, sql.ErrNoRows) && opts.Remote == "origin" && cfg.RemoteURL != "" {
+		remoteURL, err = cfg.RemoteURL, nil
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", errors.New("no remote: configure one with `memdolt repo remote add <name> <absolute-url> --dir <repository>`, or use `memdolt clone` in a fresh --dir")
 	}
@@ -283,6 +309,9 @@ func configuredTransferRemote(ctx context.Context, conn *sql.Conn, opts Transfer
 		return "", "", err
 	}
 	remoteURL, user = remote.URL, remote.User
+	if opts.Remote == "origin" && cfg.RemoteURL != "" && cfg.RemoteURL != remoteURL {
+		return "", "", errors.New("native origin conflicts with [repo] remote_url; inspect both configurations and choose one intended destination; neither was contacted")
+	}
 	if opts.User != "" {
 		user = opts.User
 	}

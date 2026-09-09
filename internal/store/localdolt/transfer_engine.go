@@ -23,6 +23,8 @@ type engineTransfer struct {
 	remote    env.Remote
 	push      bool
 	captured  string
+	identity  ProjectIdentity
+	attempted bool
 	completed bool
 	changed   bool
 }
@@ -39,12 +41,12 @@ func init() {
 	})
 }
 
-func runEngineTransfer(ctx context.Context, conn *sql.Conn, operation, name, rawURL, user, captured string) (call *engineTransfer, err error) {
+func runEngineTransfer(ctx context.Context, conn *sql.Conn, operation, name, rawURL, user, captured string, identity ProjectIdentity) (call *engineTransfer, err error) {
 	params := map[string]string{}
 	if user != "" {
 		params[dbfactory.GRPCUsernameAuthParam] = user
 	}
-	call = &engineTransfer{remote: env.NewRemote(name, rawURL, params), push: operation == "push", captured: captured}
+	call = &engineTransfer{remote: env.NewRemote(name, rawURL, params), push: operation == "push", captured: captured, identity: identity}
 	ctx = context.WithValue(ctx, transferContextKey{}, call)
 	_, err = conn.ExecContext(ctx, "CALL memdolt_transfer()")
 	return call, err
@@ -75,10 +77,40 @@ func transferProcedure(ctx *gmssql.Context) (iter gmssql.RowIter, err error) {
 		return nil, err
 	}
 	if call.push {
+		exists, err := remote.HasRef(ctx, ref.NewBranchRef(MainBranch))
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			main, err := remote.ResolveCommitRef(ctx, ref.NewBranchRef(MainBranch))
+			if err != nil {
+				return nil, err
+			}
+			root, err := main.GetRootValue(ctx)
+			if err != nil {
+				return nil, err
+			}
+			metadata, err := cloneMetadata(ctx, root)
+			if err != nil {
+				return nil, err
+			}
+			identity, err := identityFromMetadata(metadata)
+			if err != nil {
+				return nil, err
+			}
+			// An explicit fast-forward push may publish initial identity adoption;
+			// a nonempty existing identity must never be changed or removed.
+			if identity.ProjectID != "" {
+				if err := matchProjectIdentity(call.identity, identity); err != nil {
+					return nil, err
+				}
+			}
+		}
 		tmp, err := data.Rsw.TempTableFilesDir()
 		if err != nil {
 			return nil, err
 		}
+		call.attempted = true
 		pull.WithDiscardingStatsCh(func(stats chan pull.Stats) {
 			err = actions.PushToRemoteBranch(ctx, data.Rsr, tmp, ref.UpdateMode{},
 				ref.NewBranchRef(call.captured), ref.NewBranchRef(MainBranch),

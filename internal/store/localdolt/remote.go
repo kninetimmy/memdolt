@@ -71,6 +71,13 @@ func (s *Store) AddRemote(ctx context.Context, remote Remote) (Remote, error) {
 	if err := ValidateRemote(remote); err != nil {
 		return Remote{}, err
 	}
+	cfg, err := s.repoConfig()
+	if err != nil {
+		return Remote{}, err
+	}
+	if remote.Name == "origin" && cfg.RemoteURL != "" && cfg.RemoteURL != remote.URL {
+		return Remote{}, errors.New("native origin would conflict with [repo] remote_url; inspect configuration before adding it")
+	}
 	call, err := s.remotes(ctx, &remote, nil)
 	return call.added, err
 }

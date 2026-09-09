@@ -136,6 +136,9 @@ func (f *storeFlags) runStore(cmd *cobra.Command, fn func(context.Context, comma
 // Dolt directly only when Probe proves there is no live owner. Probe failures
 // fail closed: guessing "no owner" would violate PRD §5.2's single-owner rule.
 func openCommandStore(ctx context.Context, baseDir string, actor store.Actor) (commandStore, error) {
+	if _, err := localdolt.ReadRepoConfig(baseDir); err != nil {
+		return nil, err
+	}
 	status, _, err := ipc.Probe(ctx, baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("check for a live store owner: %w", err)

@@ -34,6 +34,7 @@ import (
 
 // CloneResult is emitted only after the transfer, validation and all closes succeed.
 type CloneResult struct {
+	ProjectIdentity
 	Store         string `json:"store"`
 	MainCommit    string `json:"mainCommit"`
 	SchemaVersion int    `json:"schemaVersion"`
@@ -54,6 +55,18 @@ func Clone(ctx context.Context, cfg Config, remoteURL, user string) (result Clon
 }
 
 func clone(ctx context.Context, cfg Config, remoteURL, user string, release func(*singleowner.Lock) error) (result CloneResult, err error) {
+	policy := RepoConfig{}
+	if !cfg.Global {
+		policy, err = ReadRepoConfig(cfg.BaseDir)
+		if err != nil {
+			return result, err
+		}
+	}
+	if remoteURL == "" {
+		remoteURL = policy.RemoteURL
+	} else if policy.RemoteURL != "" && policy.RemoteURL != remoteURL {
+		return result, errors.New("clone URL conflicts with [repo] remote_url; inspect configuration and choose one intended destination")
+	}
 	if err := validateCloneRemote(remoteURL, user); err != nil {
 		return result, err
 	}
@@ -76,6 +89,10 @@ func clone(ctx context.Context, cfg Config, remoteURL, user string, release func
 		return result, fmt.Errorf("resolve clone repository: %w", err)
 	}
 	st.paths, err = layout.New(base)
+	if err != nil {
+		return result, err
+	}
+	expected, err := st.resolvedIdentity(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -121,7 +138,15 @@ func clone(ctx context.Context, cfg Config, remoteURL, user string, release func
 	oldOut, oldErr := cli.CliOut, cli.CliErr
 	cli.CliOut, cli.CliErr = io.Discard, io.Discard
 	defer func() { cli.CliOut, cli.CliErr = oldOut, oldErr }()
-	return cloneTransfer(ctx, st.DataDir(), remoteURL, user)
+	var required *ProjectIdentity
+	if expected.ProjectID != "" || cfg.Global {
+		required = &expected
+	}
+	result, err = cloneTransfer(ctx, st.DataDir(), remoteURL, user, required)
+	if err == nil && (expected.ProjectID != "" || cfg.Global) {
+		err = matchProjectIdentity(expected, result.ProjectIdentity)
+	}
+	return result, err
 }
 
 func validateCloneDestination(dataDir string, actor store.Actor) error {
@@ -248,7 +273,7 @@ func openCloneRemote(ctx context.Context, remote env.Remote) (db *doltdb.DoltDB,
 	return doltdb.DoltDBFromCS(source, DatabaseName)
 }
 
-func cloneTransfer(ctx context.Context, dataDir, remoteURL, user string) (result CloneResult, err error) {
+func cloneTransfer(ctx context.Context, dataDir, remoteURL, user string, expected *ProjectIdentity) (result CloneResult, err error) {
 	// Reserve memory exclusively before remote contact. No recursive cleanup runs
 	// if foreign content appears later, even while initialization is failing.
 	if err := os.Mkdir(filepath.Join(dataDir, DatabaseName), 0o700); err != nil {
@@ -298,6 +323,27 @@ func cloneTransfer(ctx context.Context, dataDir, remoteURL, user string) (result
 	if err := dest.InitRepoWithNoData(ctx, src.ValueReadWriter().Format()); err != nil {
 		return result, fmt.Errorf("prepare clone storage: %w", err)
 	}
+	sourceMain, err := src.ResolveCommitRef(ctx, ref.NewBranchRef(MainBranch))
+	if err != nil {
+		return result, fmt.Errorf("remote has no Dolt data on a main branch; select an initialized memdolt remote: %w", err)
+	}
+	sourceRoot, err := sourceMain.GetRootValue(ctx)
+	if err != nil {
+		return result, err
+	}
+	metadata, err := cloneMetadata(ctx, sourceRoot)
+	if err != nil {
+		return result, err
+	}
+	sourceIdentity, err := identityFromMetadata(metadata)
+	if err != nil {
+		return result, err
+	}
+	if expected != nil {
+		if err := matchProjectIdentity(*expected, sourceIdentity); err != nil {
+			return result, err
+		}
+	}
 	dest.RepoState, err = env.CloneRepoState(dest.FS, r)
 	if err != nil {
 		return result, fmt.Errorf("register clone origin: %w", err)
@@ -331,9 +377,21 @@ func inspectClone(ctx context.Context, dataDir string, db *doltdb.DoltDB) (resul
 	if err != nil {
 		return result, fmt.Errorf("read cloned committed root: %w", err)
 	}
-	result.SchemaVersion, err = cloneSchemaVersion(ctx, root)
+	metadata, err := cloneMetadata(ctx, root)
 	if err != nil {
 		return result, fmt.Errorf("invalid cloned memdolt metadata: %w", err)
+	}
+	rawVersion := metadata[store.SchemaVersionKey]
+	if rawVersion == "" {
+		rawVersion = "0"
+	}
+	result.SchemaVersion, err = strconv.Atoi(strings.TrimSpace(rawVersion))
+	if err != nil || result.SchemaVersion < 0 {
+		return result, errors.New("meta.schema_version is not a version number")
+	}
+	result.ProjectIdentity, err = identityFromMetadata(metadata)
+	if err != nil {
+		return result, err
 	}
 	if result.SchemaVersion == 0 {
 		return result, errors.New("remote is not an initialized memdolt store: meta.schema_version is missing or zero; choose a memdolt remote")
@@ -372,51 +430,55 @@ func inspectClone(ctx context.Context, dataDir string, db *doltdb.DoltDB) (resul
 	return result, ctx.Err()
 }
 
-func cloneSchemaVersion(ctx context.Context, root doltdb.RootValue) (version int, err error) {
+func cloneMetadata(ctx context.Context, root doltdb.RootValue) (values map[string]string, err error) {
+	values = map[string]string{}
 	meta, ok, err := root.GetTable(ctx, doltdb.TableName{Name: store.MetaTable})
 	if err != nil || !ok {
-		return 0, err
+		return values, err
 	}
 	sch, err := meta.GetSchema(ctx)
 	if err != nil {
-		return 0, err
+		return values, err
 	}
 	cols := sch.GetAllCols()
 	if cols.Size() != 2 || cols.GetByIndex(0).Name != "k" || cols.GetByIndex(1).Name != "v" {
-		return 0, errors.New("expected meta columns k and v")
+		return values, errors.New("expected meta columns k and v")
 	}
 	index, err := meta.GetRowData(ctx)
 	if err != nil {
-		return 0, err
+		return values, err
 	}
 	rows, err := table.NewTableIterator(ctx, sch, index)
 	if err != nil {
-		return 0, err
+		return values, err
 	}
 	defer func() { err = errors.Join(err, rows.Close(ctx)) }()
 	for {
 		row, err := rows.Next(ctx)
 		if errors.Is(err, io.EOF) {
-			return 0, nil
+			return values, nil
 		}
 		if err != nil {
-			return 0, err
+			return values, err
 		}
-		if row[0] != store.SchemaVersionKey {
+		key, ok, err := gmssql.Unwrap[string](ctx, row[0])
+		if err != nil || !ok {
+			return values, errors.New("meta key must be text")
+		}
+		if (strings.EqualFold(key, "project_id") || strings.EqualFold(key, "project_origin")) && key != strings.ToLower(key) {
+			return values, errors.New("project metadata keys must use their exact lowercase spelling")
+		}
+		if key != store.SchemaVersionKey && key != "project_id" && key != "project_origin" {
 			continue
 		}
 		raw, ok, err := gmssql.Unwrap[string](ctx, row[1])
 		if err != nil {
-			return 0, err
+			return values, err
 		}
 		if !ok {
-			return 0, errors.New("meta.schema_version must be text")
+			return values, errors.New("schema and project metadata must be text")
 		}
-		version, err := strconv.Atoi(strings.TrimSpace(raw))
-		if err != nil || version < 0 {
-			return 0, errors.New("meta.schema_version is not a version number")
-		}
-		return version, nil
+		values[key] = raw
 	}
 }
 

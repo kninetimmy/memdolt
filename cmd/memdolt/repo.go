@@ -15,7 +15,7 @@ func newRepoCommand() *cobra.Command {
 		Use:   "repo",
 		Short: "Inspect the memory repository and configure remotes",
 	}
-	cmd.AddCommand(newRepoStatusCommand(), newRepoRemoteCommand())
+	cmd.AddCommand(newRepoStatusCommand(), newRepoRemoteCommand(), newRepoConfigureCommand(localdolt.SetRepoConfig))
 	return cmd
 }
 
@@ -51,7 +51,12 @@ func newRepoStatusCommand() *cobra.Command {
 			"Only DOLT_REMOTE_PASSWORD in the executing owner's environment supplies a\n" +
 			"password. Restart an owner to change it; passwords never cross IPC and no\n" +
 			"personal Dolt credentials are loaded. Configure with repo remote add/list.\n" +
-			"This inspection does not resolve divergence or complete hub/M4 acceptance.",
+			"This inspection does not resolve divergence or complete hub/M4 acceptance.\n\n" +
+			"[repo] topology=local keeps ordinary status offline; select a remote name\n" +
+			"explicitly for remote inspection. clone uses the native workflow; live\n" +
+			"refuses. TOML remote_url supplies missing origin, and must match native\n" +
+			"origin when both exist. Output includes committed project identity and\n" +
+			"topology when present; incompatible incoming identity refuses assessment.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if err := cobra.MaximumNArgs(1)(cmd, args); err != nil {
 				return fmt.Errorf("%w; see `memdolt repo status --help`", err)

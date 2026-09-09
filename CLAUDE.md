@@ -19,6 +19,26 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+Before issue #163, repository topology TOML was ignored and init did not record
+Git-derived project identity. After it, `init` records new-store identity;
+existing unidentified stores require explicit `init --adopt-identity` with
+the owner stopped. `repo configure` supports local/clone policy and optional
+startup pull (off by default); live refuses. The same shared Store policy
+checks bind direct CLI, authenticated owner and MCP operations. NoText still
+skips deny-regex evaluation, but no longer skips repository routing-file
+validation. Global identity and transfers remain separate. See
+[the complete changed-element inventory and recovery guide](docs/repository-topology.md).
+Native history, review/ownership/credential boundaries and all 22 MCP tools
+remain; physical M4 acceptance and M5/M6 work are not completed by this slice.
+
+Before #163's first review correction, configuration case aliases could override
+routing and dirty identity rows could be mistaken for committed metadata. Now
+the shared repository reader uses exact map keys, and Open/InitializeIdentity
+read only captured immutable commits. The origin parser also rejects Windows
+drive-relative paths and non-ASCII before normalization. Existing metadata,
+unrelated configuration and native history remain preserved; the linked guide
+records the exact symbol boundaries and complete branch scope.
+
 Go module at the repo root: `github.com/kninetimmy/memdolt`, Go ≥1.26.2
 (the minimum `github.com/dolthub/driver` requires).
 

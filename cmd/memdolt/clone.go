@@ -12,7 +12,7 @@ import (
 func newCloneCommand() *cobra.Command {
 	var dir, user string
 	cmd := &cobra.Command{
-		Use:   "clone <remote-url>",
+		Use:   "clone [remote-url]",
 		Short: "Clone an existing main-branch memdolt store into this repository",
 		Long: "Clone committed main and its history into <dir>/.memdolt/dolt and register\n" +
 			"origin. Accepts explicit absolute http:// or https:// remotesapi URLs and\n" +
@@ -29,13 +29,24 @@ func newCloneCommand() *cobra.Command {
 			"a fresh destination to retry. Older schemas require explicit `memdolt init`;\n" +
 			"newer schemas require a newer binary. Clone never initializes or migrates\n" +
 			"memory. Success is printed only after validation and close. Progress is\n" +
-			"suppressed, including in --json mode. Push/pull and remote status are deferred.",
-		Args: cobra.ExactArgs(1),
+			"suppressed, including in --json mode. Before #127/#131 push/pull and remote\n" +
+			"status were deferred; they now use the same native history. Omit the URL to\n" +
+			"use [repo] remote_url; a conflicting explicit URL refuses. Clone preserves\n" +
+			"project identity and refuses a different Git origin; global identity is separate.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("user") && user == "" {
 				return errors.New("--user must not be empty; omit it for anonymous access")
 			}
-			info, err := localdolt.Clone(cmd.Context(), localdolt.Config{BaseDir: dir, Actor: cliActor}, args[0], user)
+			remoteURL := ""
+			if len(args) == 1 {
+				if args[0] == "" {
+					return errors.New("clone URL must not be empty; omit it to use [repo] remote_url")
+				}
+				remoteURL = args[0]
+			}
+			global := cmd.Parent() != nil && cmd.Parent().Name() == "global"
+			info, err := localdolt.Clone(cmd.Context(), localdolt.Config{BaseDir: dir, Actor: cliActor, Global: global}, remoteURL, user)
 			if err != nil {
 				return err
 			}

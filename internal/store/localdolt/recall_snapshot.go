@@ -36,7 +36,7 @@ func (s *Store) CaptureRecall(ctx context.Context, opts store.RecallSnapshotOpti
 	if opts.Provenance {
 		result.Provenance = map[string]*store.CommitProvenance{}
 		for _, source := range result.Sources {
-			changed, err := s.LastChanged(ctx, source.SourceType, source.SourceID)
+			changed, err := lastChanged(ctx, conn, source.SourceType, source.SourceID)
 			if err != nil {
 				return result, err
 			}

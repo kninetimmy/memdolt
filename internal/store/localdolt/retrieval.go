@@ -155,6 +155,17 @@ LIMIT ?`, query, query, limit)
 // dolt_blame table. The table switch is the allowlist; no caller text is ever
 // interpolated into SQL.
 func (s *Store) LastChanged(ctx context.Context, sourceType, sourceID string) (*store.CommitProvenance, error) {
+	conn, err := s.committedMainConn(ctx, "recall provenance")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	return lastChanged(ctx, conn, sourceType, sourceID)
+}
+
+// A scope capture already owns a checked connection. Reuse it for blame rows
+// rather than reopening and rerunning repository/Git policy for every source.
+func lastChanged(ctx context.Context, q rowQuerier, sourceType, sourceID string) (*store.CommitProvenance, error) {
 	table, ok := map[string]string{
 		"fact":      "dolt_blame_facts",
 		"decision":  "dolt_blame_decisions",
@@ -164,13 +175,8 @@ func (s *Store) LastChanged(ctx context.Context, sourceType, sourceID string) (*
 	if !ok {
 		return nil, fmt.Errorf("localdolt: unsupported provenance source type %q", sourceType)
 	}
-	conn, err := s.committedMainConn(ctx, "recall provenance")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = conn.Close() }()
 	var changed store.CommitProvenance
-	err = conn.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		"SELECT commit, committer, commit_date FROM "+table+" WHERE id = ?", sourceID).
 		Scan(&changed.Hash, &changed.Author, &changed.Date)
 	if errors.Is(err, sql.ErrNoRows) {
