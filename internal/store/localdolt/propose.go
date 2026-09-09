@@ -406,6 +406,7 @@ type stagedWrite struct {
 	id           string
 	commitAuthor *store.Actor
 	imported     *InteropProposal
+	globalReview bool
 
 	// rowID is the ULID of the facts or decisions row being proposed.
 	rowID string
@@ -475,7 +476,7 @@ func (s *Store) stage(ctx context.Context, w stagedWrite) (StagedProposal, error
 }
 
 // stageLocked also serves a complete import already holding proposalMu.
-func (s *Store) stageLocked(ctx context.Context, w stagedWrite) (StagedProposal, error) {
+func (s *Store) stageLocked(ctx context.Context, w stagedWrite) (staged StagedProposal, err error) {
 	db, err := s.handle()
 	if err != nil {
 		return StagedProposal{}, err
@@ -508,7 +509,12 @@ func (s *Store) stageLocked(ctx context.Context, w stagedWrite) (StagedProposal,
 	if err != nil {
 		return StagedProposal{}, fmt.Errorf("localdolt: acquire connection: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() {
+		closeErr := conn.Close()
+		if w.globalReview {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 
 	origin, err := activeBranch(ctx, conn)
 	if err != nil {
@@ -538,7 +544,7 @@ func (s *Store) stageLocked(ctx context.Context, w stagedWrite) (StagedProposal,
 	}
 
 	result, stageErr := s.stageOnBranch(ctx, conn, w, statements)
-	if w.id != "" && result.Hash != "" {
+	if w.globalReview || w.id != "" && result.Hash != "" {
 		// Imported proposals retain confirmed commits even on a late error.
 		// Never delete this branch and turn durable partial progress into loss.
 		// Ordinary staging below keeps its established cleanup/residue contract.
@@ -583,7 +589,17 @@ func (s *Store) stageLocked(ctx context.Context, w stagedWrite) (StagedProposal,
 // stageOnBranch writes the proposal on the branch conn is checked out to.
 func (s *Store) stageOnBranch(ctx context.Context, conn *sql.Conn, w stagedWrite, statements []store.Statement) (store.CommitResult, error) {
 	if w.imported != nil {
-		if err := validateInteropStage(ctx, conn, *w.imported); err != nil {
+		var err error
+		if w.globalReview {
+			var head string
+			err = conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&head)
+			if err == nil {
+				err = validateGlobalDestination(ctx, conn, head, *w.imported)
+			}
+		} else {
+			err = validateInteropStage(ctx, conn, *w.imported)
+		}
+		if err != nil {
 			return store.CommitResult{}, err
 		}
 	}

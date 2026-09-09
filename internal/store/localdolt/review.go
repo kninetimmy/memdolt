@@ -200,6 +200,15 @@ type AcceptResult struct {
 	// Cleared lists the already-satisfied constraint-violation records the
 	// merge protocol removed, if any.
 	Cleared []ClearedViolation `json:"cleared_violations,omitempty"`
+
+	// Global-only progress: Proposal.Commit remains the captured repository
+	// commit; these hashes name actual destination commits, never replay markers.
+	GlobalStageCommit string   `json:"globalStageCommit,omitempty"`
+	SourceMainCommit  string   `json:"sourceMainCommit,omitempty"`
+	RowIDs            []string `json:"rowIds,omitempty"`
+	AlreadyAccepted   bool     `json:"alreadyAccepted,omitempty"`
+	SourceRetained    bool     `json:"sourceRetained,omitempty"`
+	Unknown           bool     `json:"unknown,omitempty"`
 }
 
 // ContradictionScorer is the shipped cross-encoder surface AcceptProposal
@@ -218,7 +227,8 @@ type ContradictionScorer interface {
 // nil callbacks fail closed. Supersede proposals and explicit Force accepts
 // deliberately skip both callbacks and still use the same merge flow.
 type AcceptOptions struct {
-	Force bool
+	Force          bool
+	terminalGlobal bool
 	// ExpectedCommit, when non-empty, is the staging commit an elicited
 	// reviewer saw. AcceptProposal compares it with the branch head inside its
 	// proposal-mutation critical section before any merge work starts and
@@ -424,6 +434,13 @@ func (s *Store) AcceptProposal(ctx context.Context, id string, reviewer store.Ac
 	return s.acceptProposal(ctx, id, reviewer, options, acceptHooks{})
 }
 
+// AcceptTerminalProposal enables the separate global destination only for an
+// unbound terminal review. Elicited expected-commit acceptance still refuses it.
+func (s *Store) AcceptTerminalProposal(ctx context.Context, id string, reviewer store.Actor, options AcceptOptions) (AcceptResult, error) {
+	options.terminalGlobal = options.ExpectedCommit == ""
+	return s.acceptProposal(ctx, id, reviewer, options, acceptHooks{})
+}
+
 type acceptHooks struct {
 	afterExpectedCommit func()
 	beforeCleanup       func()
@@ -436,7 +453,7 @@ func (s *Store) acceptProposal(
 	reviewer store.Actor,
 	options AcceptOptions,
 	hooks acceptHooks,
-) (AcceptResult, error) {
+) (accepted AcceptResult, err error) {
 	// One Store owns proposal-branch mutations. Accept, reject, expiry, and
 	// memdolt staging share this boundary so none can invalidate another's
 	// observed branch between validation and mutation.
@@ -459,7 +476,12 @@ func (s *Store) acceptProposal(
 	if err != nil {
 		return AcceptResult{}, fmt.Errorf("localdolt: acquire connection: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() {
+		closeErr := conn.Close()
+		if accepted.Proposal.Target == TargetGlobal && options.terminalGlobal {
+			err = accepted.RecoveryError(errors.Join(err, closeErr))
+		}
+	}()
 
 	// Accept merges into main, and this connection is the one that will do
 	// it. A session parked on another branch would merge the proposal
@@ -497,15 +519,14 @@ func (s *Store) acceptProposal(
 	if hooks.afterExpectedCommit != nil {
 		hooks.afterExpectedCommit()
 	}
-	// PRD §10 promotes a global proposal by copying it into the global
-	// database, which does not exist yet. Merging it into this repository's
-	// main instead would put the row in the wrong store under the name of a
-	// review that approved something else, so it is refused. Listing,
-	// showing, rejecting and expiring a global proposal all still work.
+	// Before #161 every global accept refused. Only the explicit terminal
+	// entry now transfers it; the ordinary/elicited gate never merges it here.
 	if proposal.Target == TargetGlobal {
+		if options.terminalGlobal {
+			return s.acceptGlobalProposal(ctx, conn, record, reviewer, options, globalAcceptHooks{})
+		}
 		return AcceptResult{}, fmt.Errorf(
-			"localdolt: proposal %s targets the global store, which memdolt does not have yet (PRD §10); "+
-				"accepting it here would promote it into this repository instead", id)
+			"localdolt: proposal %s targets the global store; use terminal `memdolt review accept %s --dir <repository>`; accepting it here would promote it into this repository instead", id, id)
 	}
 
 	// Everything below is about one commit: the one the proposal was staged
@@ -691,6 +712,13 @@ func requireNoContradiction(
 	if len(claims) == 0 {
 		return fmt.Errorf("localdolt: proposal %s is a %s proposal but its staging commit carries no fact or decision prose to check", proposal.ID, proposal.Kind)
 	}
+	return checkContradictionClaims(ctx, tx, claims, proposal, open)
+}
+
+// Global review supplies already-captured claims, before destination staging.
+// The scorer, durable candidate query, threshold and close gate stay shared.
+func checkContradictionClaims(ctx context.Context, tx *sql.Tx, claims []contradictionClaim, proposal PendingProposal, open func(context.Context) (ContradictionScorer, error)) error {
+	var err error
 
 	candidates := map[string][]contradictionCandidate{}
 	for _, claim := range claims {
@@ -955,10 +983,16 @@ func (s *Store) merge(ctx context.Context, tx *sql.Tx, proposal PendingProposal,
 	var hash string
 	row := tx.QueryRowContext(ctx,
 		"CALL DOLT_COMMIT('-A', '-m', ?, '--author', ?)", message, reviewer.String())
-	if err := row.Scan(&hash); err != nil {
-		return AcceptResult{}, fmt.Errorf("localdolt: commit the merge of %q: %w", proposal.Branch, err)
+	err = row.Scan(&hash)
+	if proposal.Target != TargetGlobal {
+		// Repository review keeps its existing refusal/finalization contract.
+		if err != nil {
+			return AcceptResult{}, fmt.Errorf("localdolt: commit the merge of %q: %w", proposal.Branch, err)
+		}
+		return AcceptResult{Proposal: proposal, Commit: hash, Cleared: cleared}, nil
 	}
-	return AcceptResult{Proposal: proposal, Commit: hash, Cleared: cleared}, nil
+	committed, err := nativeCommitResult(hash, 0, err)
+	return AcceptResult{Proposal: proposal, Commit: committed.Hash, Cleared: cleared}, err
 }
 
 // doltMerge runs the merge without concluding it. --no-ff is what gives the

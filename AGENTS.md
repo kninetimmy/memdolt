@@ -19,13 +19,94 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Terminal global proposal acceptance (issue #161).** Before this delivery,
+the #146 global-target refusal and terminal remedy below still excluded actual
+acceptance. After it, `memdolt review accept <id> --dir <repository>` accepts a
+global fact/decision proposal through direct or authenticated owner terminal
+review, preserving repository main. [The global guide](docs/global-memory.md#terminal-proposal-acceptance-issue-161)
+and PRD §10 specify supported shapes, ownership, outcomes and manual recovery.
+Full changed-element inventory and preserved boundaries:
+
+- New `localdolt/global_review.go` owns source capture, exact source/destination
+  validation, native prior-acceptance verification, destination staging and
+  reviewer merge, source/head checks and progress/error reporting. It accepts
+  ordinary new facts/active decisions, exact live-fact overwrites and same-key
+  supersedes. Metadata, ids, NULLs and source timestamps/provenance survive;
+  new native commit dates are real. Destination ids/keys, changed before-images,
+  malformed/extra changes or commits, invalid stores and uncertain history
+  refuse. Copied native author names/emails also enter the deny scan. Repository
+  main and unrelated proposals stay unchanged. Source-bound
+  staging and two-parent review history establish idempotency, never row equality
+  alone. Both refs remain; source pending counts remain honest about repository
+  ancestry. No automatic source deletion is attempted because native Dolt has no
+  expected-head delete. Manual reject/expiry retain their existing best-effort
+  rules. This policy binds terminal global review, not all native SQL/Store writes.
+- `localdolt/review.go` adds `AcceptTerminalProposal`, a private terminal opt-in,
+  and optional global progress on `AcceptResult`. Before #161 `AcceptProposal`
+  refused every global target; now only that explicit terminal entry diverts to
+  the new destination. Ordinary/expected-commit acceptance still refuses global
+  and retains repository count, deny, supersede, merge and cleanup behavior.
+  `checkContradictionClaims` extracts the shared scorer loop without changing
+  durable candidate queries, threshold, model-close checks or ordinary input
+  shapes. `merge` reuses `nativeCommitResult` only for global results; repository
+  result handling remains as before. The outer source-connection close is
+  reported for global acceptance only. Existing review verbs and list counts
+  are unchanged.
+- `localdolt/interop.go` extracts `captureInteropProposal` from the existing
+  complete fixed-schema diff reader. `interop_format.go` extracts target-neutral
+  `validateProposalPayload`; `validateInteropProposal` still enforces repo-only
+  import/export. Column/NULL/Unicode/provenance/relationship checks, immutable
+  materialized diff reads, bundle formats, interop target exclusions and import
+  behavior remain. Global callers add their own target/same-key/destination
+  constraints; these do not loosen interop policy.
+- `localdolt/propose.go` lets only private `globalReview` staging reuse validated
+  imported identities/statements while checking the destination after branch
+  cut. Confirmed and unknown global staging residue survives restoration/close
+  failures and is not automatically removed. Ordinary staging and imported
+  proposal validation, author override, collision and cleanup rules remain.
+  `OpenGlobal`, its path/owner guards and `requireTransferClean` are reused,
+  not rewritten. Global acceptance's new lock order is source proposalMu,
+  nonwaiting global file lock, destination proposalMu; recall contention refuses
+  rather than forming a cycle. No new native/foreign-writer coordination exists.
+- `internal/review/accept.go` routes only the empty-expected-commit terminal
+  application call into `AcceptTerminalProposal`; the existing owner callback
+  uses that same path. Nonempty expected commits still call the ordinary gate.
+  Production config and checksum-verified scorer setup remain. No model/config
+  override crosses IPC. `storeipc/operation.go` retains captured global results
+  even before a confirmed merge, using its existing result/error envelope;
+  `owner_store.go` preserves native unknown markers and reports unobserved
+  terminal replies without fallback/replay. Expected-commit repository replies,
+  authenticated ownership, allow-list and every other operation stay unchanged.
+- `cmd/memdolt/review.go` collects the result until store close, then emits
+  compatible success fields plus optional global progress/error information.
+  Confirmed hashes survive close/output failures; unknown responses never imply
+  rollback. The private runner constructor supports those CLI regression seams.
+  Help explains both destinations and retained source refs. CLI flags, actor
+  normalization, repo-only success wording and other review commands remain.
+- New localdolt/CLI/storeipc `global_review_test.go` files exercise isolated
+  native payload/history, explicit destination before-images, malformed/collision
+  refusal, actual unknown native results, confirmed cancellation/finalization,
+  concurrency and authenticated loss/late results. CLI helper processes reopen
+  both direct and live-owner paths. `cmd/memdolt/global_model_test.go` adds
+  real checksum-pinned model acceptance and resulting global recall/provenance.
+  Existing fixtures and frozen golden assertions are unchanged; tests touch no
+  live user stores, credentials, host installations or hub.
+- README, this record, PRD §10, `docs/global-memory.md`, server instructions,
+  the Claude/Codex/OpenCode global templates and shared onboarding retain matching
+  before/after records and the terminal human gate. MCP still excludes global
+  review; all 22 registrations, input schemas, session queues, recall scoring,
+  global human/docs/promote operations, host registrations and installation
+  behavior remain. No dependency, schema/migration or broader M4/M5/M6/physical
+  two-client hub acceptance is introduced.
+
 **Shared global memory (issue #146).** Before this delivery, PRD §10's global
 replica, human operations and combined recall were design-only; earlier #132,
 #138–140 records below accurately excluded them. After it, the CLI global
 operations and merged CLI/MCP recall ship. The complete commands, exact layout,
 metadata and recovery contract are in [the global memory guide](docs/global-memory.md).
-Global-target proposal acceptance still refuses with its existing terminal
-remedy. No complete parity or physical two-machine hub acceptance is claimed.
+At #146, global-target proposal acceptance still refused with its existing
+terminal remedy; #161 above replaces that terminal refusal. No complete parity
+or physical two-machine hub acceptance is claimed.
 The complete structural blast radius is:
 
 - New `localdolt/global.go` and `global_path_windows.go`/`global_path_other.go`

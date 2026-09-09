@@ -44,7 +44,7 @@ func accept(
 	reviewer store.Actor,
 	force bool,
 ) (localdolt.AcceptResult, error) {
-	return st.AcceptProposal(ctx, id, reviewer, localdolt.AcceptOptions{
+	options := localdolt.AcceptOptions{
 		Force:          force,
 		ExpectedCommit: expectedCommit,
 		ValidateContradictionConfig: func() error {
@@ -54,5 +54,11 @@ func accept(
 		OpenContradictionScorer: func(ctx context.Context) (localdolt.ContradictionScorer, error) {
 			return embedding.Open(ctx, embedding.Options{})
 		},
-	})
+	}
+	// The authenticated terminal operation uses an empty expected commit too.
+	// Every MCP elicitation supplies its displayed commit and keeps the refusal.
+	if expectedCommit == "" {
+		return st.AcceptTerminalProposal(ctx, id, reviewer, options)
+	}
+	return st.AcceptProposal(ctx, id, reviewer, options)
 }

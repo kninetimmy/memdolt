@@ -9,8 +9,11 @@
   freshness warnings; a missing replica or competing owner is a visible error.
   Disabled global recall preserves the repository-only output. Human global
   CLI writes and promotion now exist; this grants no new agent write authority.
-  Global-target proposals still refuse acceptance with the existing terminal
-  remedy. Never turn that refusal into a direct write or claim acceptance.
+  Before #161 global-target acceptance refused even at the terminal. Now a
+  trusted human can run `memdolt review accept <id> --dir <repository>` there.
+  MCP elicitation still excludes global proposals. Never impersonate approval
+  or replace review with a direct global write. Report native source/staging/
+  acceptance hashes and retained source branches; inspect before any retry.
 - Use `render` to refresh these local files at the configured output directory
   (default `.memdolt/rendered`). Before issue #145 it did not flush queued notes.
   Now it flushes this owner's session notes before reading one committed main

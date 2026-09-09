@@ -18,9 +18,16 @@ Human-only commands are `fact add --global`, `decision add --global`, and
 `fact/decision promote <id> --global`. Present their exact terminal commands
 for the human; never impersonate approval with `--actor user`. Promotion copies
 committed live records; existing global fact keys refuse and decision title
-collisions retain both rows with a notice. Global proposal acceptance remains
-a separate follow-up. Inspect `memdolt review`; never claim a global proposal
-was accepted or bypass its terminal refusal.
+collisions retain both rows with a notice. Before #161 global proposal acceptance
+was a separate follow-up and refused at the terminal. Now present
+`memdolt review show <id> --dir <repository>` and
+`memdolt review accept <id> --dir <repository>` for the trusted human.
+MCP review still excludes global proposals; never impersonate that approval.
+Acceptance preserves reviewed identities, requires exact global before-images
+for overwrite/supersede, and retains the source branch. Report source/staging/
+acceptance hashes; inspect both stores before an explicit retry, which verifies
+native acceptance history without another merge. Unknown outcomes never replay.
+See `docs/global-memory.md` before manual cleanup of a retained source branch.
 
 Human global `doc add/list/show/remove --global` stays scoped. Each successful
 add flips only this repository's [global] include_docs_in_default, even for an

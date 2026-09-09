@@ -376,9 +376,15 @@ func (s *OwnerStore) ReviewAcceptExpected(ctx context.Context, id, expectedCommi
 		ID: id, ExpectedCommit: expectedCommit, Reviewer: reviewer, Force: force,
 	}, &wire)
 	if err != nil {
+		if expectedCommit == "" && !IsOwnerRefusal(err) {
+			return localdolt.AcceptResult{Proposal: localdolt.PendingProposal{ID: id}, Unknown: true}, errors.Join(fmt.Errorf("review accept outcome unknown after lost/unavailable owner reply; inspect source proposal %s, repository and global rows/history before retrying; never automatically replay: %w", id, err), store.ErrCommitUnknown)
+		}
 		return localdolt.AcceptResult{}, err
 	}
 	if wire.CleanupError != "" {
+		if wire.Result.Unknown {
+			return wire.Result, errors.Join(errors.New(wire.CleanupError), store.ErrCommitUnknown)
+		}
 		return wire.Result, errors.New(wire.CleanupError)
 	}
 	return wire.Result, nil
