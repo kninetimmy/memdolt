@@ -273,6 +273,139 @@ tailnet/off-network probes, project topology/identity, backup/retention and the
 complete M4 acceptance gate remain separately tracked. The user's live hub has
 not been installed, changed or accepted by this delivery.
 
+## Doctor compatibility (issue #167)
+
+Before #167, doctor had five local checks and no executable-release evidence or
+explicit hub/remote selection. After #167 these commands expose the existing
+inspection paths and their limits:
+
+```sh
+memdolt doctor --dir /path/to/repository --json
+memdolt doctor --remote origin --dir /path/to/repository --json
+sudo memdolt doctor --hub --config /etc/memdolt-hub/hub.json --json
+```
+
+Ordinary doctor remains offline apart from local owner IPC. It adds
+`embedded-dolt-version`, sourced from the pinned dependency's
+`github.com/dolthub/dolt/go/cmd/dolt/doltversion.Version`, currently **1.88.1**.
+That identifies the Dolt release embedded in the running doctor binary. It does
+not inspect an installed native binary or a separately running owner binary.
+The measured baseline is exactly **1.88.1**; a different or unobservable embedded
+release fails. There is no measured compatible range. The driver's environment
+version label (default `0.40.17`) and the embedded SQL `DOLT_VERSION()` default
+`SET_BY_INIT` are not release evidence. No dependency or build setting changes.
+
+Hub selection uses the existing `hub.Inspect(..., "status", false)` path. It
+does not resolve/open repository memory, even when the working directory has a
+store. The same absolute generated manifest, matching bundle, Linux platform,
+trusted deployment paths and permission to inspect nftables are required. Its
+configured native executable is probed with the existing isolated version
+environment. The JSON `hub` report retains `observed_dolt_version`, including
+unsupported observed releases; doctor also lists each check with a `hub-` prefix
+in human and JSON output. Missing/invalid configuration, unsupported platforms
+and failed hub checks exit nonzero. Unknown native evidence is never replaced
+by the embedded release. The listener/process, grant and off-network limits of
+`hub status` above still hold; this does not inspect a remote host over SSH.
+
+Explicit remote selection requires an existing initialized repository and uses
+the same `storeFlags.open` direct/authenticated-owner route and `RepoStatus`
+operation as `repo status <name>`. It honors the configured remote name even
+with `topology='local'`. It fetches only remote main and validates the captured
+committed schema/identity through that operation; it never promotes a commit or
+resolves a conflict. `remote-compatibility` reports the captured hashes and
+current/ahead/behind/divergence result. A missing remote, invalid schema/identity,
+transport refusal, failed owner call or close error fails. Both absent committed
+identities and conflicted/unassessed divergence warn with inspection remedies;
+legacy RepoStatus acceptance and merge-preview rules remain unchanged.
+
+The optional `--user <username>` overrides the remote's stored SQL username.
+Without either username the existing anonymous route remains. Passwords come
+only from `DOLT_REMOTE_PASSWORD` in the executing process's environment. A live
+owner uses its own environment, so restart it to change the password; the CLI's
+environment does not replace it over IPC. No personal Dolt credentials are
+loaded. Existing remote URL validation and diagnostic redaction remain.
+
+Successful fetch/schema/identity checks do **not** observe the remote executable
+release. `remote-dolt-version` always warns that it is unobserved and names the
+on-hub doctor command above. Storage/wire-format matches, the local release and
+successful transfers cannot prove that release. Warnings exit zero; a green
+overall report therefore does not mean every compatibility fact was observed.
+
+JSON's optional `remote` field contains the RepoStatus observations that actually
+returned, retained even if close later fails. Failure details also retain captured
+main hashes in both formats, with empty hashes explicitly unobserved. A refused
+direct call may retain partial observations with `status='refused'`; a failed authenticated owner call
+may return none. The failed check remains authoritative: absence/zero values are
+not successful observations, and a lost reply is never replayed. Main, proposal
+branches, tags, staged/working memory, derived indexes and config stay unchanged.
+Fetched objects and the selected tracking ref may remain on success or refusal,
+exactly as documented for RepoStatus; inspect local main before retrying.
+
+`--hub` cannot combine with explicit `--dir`, `--remote` or `--user`.
+`--config` requires `--hub`, and `--user` requires a nonempty `--remote`.
+Missing/empty/conflicting selections refuse before inspection and print a failed
+`selection` check in both formats. `--global`, `--diff` and password flags are
+not doctor inputs. These selection restrictions bind `newDoctorCommand`, not
+every CLI command; the underlying hub and repository APIs retain their own
+validation. `runDoctor` performs the existing-store remote guard before the
+schema reader, preventing its existing Open behavior from creating a partial
+store. Ordinary doctor's absent-store/ownership behavior remains unchanged.
+
+The isolated Linux rig now also executes the actual doctor hub command in both
+formats against checksum-verified native 1.88.1, then an explicitly identified
+test executable reporting 1.88.2. It requires observed release/check failures,
+not just a nonzero process exit. The native startup, namespace-only firewall,
+read-only mounts, no external network and all previous assertions remain.
+This adds no physical two-client/private-network acceptance. Pi/Linux and two
+real clients must still perform the PRD §16 counts/hashes/reopen gate. M6's
+backup age, disk headroom/trend and restore drill remain separate.
+
+The complete #167 changed-element inventory is:
+
+- `cmd/memdolt/doctor.go:newDoctorCommand` adds only the explicit selectors,
+  validation and help above; root registration and all other commands remain.
+  `doctorReport` retains `ok`, `checks` and local `dir`, omits `dir` outside
+  repository reports, and adds optional original `hub`/`remote` evidence.
+  Existing `doctorCheck` fields remain. The status constants retain their
+  values; the warning comment now includes incomplete remote evidence.
+- `runDoctor` adds the embedded check, remote existing-store preflight and
+  optional remote inspection, preserving the original five checks and their
+  owner/direct ordering. `lockCheck`, `ownerCheck`, `schemaCheck`,
+  `readSchemaVersion`, `emptyRecallCheck` and OpenCode parsing are unchanged.
+  `embeddedDoltCheck` compares only its supplied pinned release with `hub.Version`;
+  its production callers pass `doltversion.Version`. This is not a version gate
+  on every Store/transfer/native SQL operation or a query of the owner binary.
+- New `runDoctorHub` reuses `hub.Inspect` status and keeps its checks/version and
+  error. No hub checker, generated artifact, path guard, native probe, firewall,
+  readiness policy, credential or service changes. `doctorRemoteCheck` reuses
+  one `RepoStatus` call, closes the opened store once and retains returned
+  observations through errors. `remoteDoltCheck` supplies the unobserved-release
+  advisory. Neither changes Store, IPC, transfer/schema/identity validation,
+  proposal mutex/foreign-writer limits, merge preview, credentials or replay.
+- New `finishDoctorReport` extracts the failed-check count and joins output
+  errors so failures remain nonzero. `writeDoctorReport` retains one JSON object
+  or one line per check, adding a hub target heading. Existing warning exits
+  remain zero. No new logging/telemetry or background diagnostic service exists.
+- `cmd/memdolt/doctor_test.go:TestDoctorHumanOutputNamesEveryCheck` additionally
+  expects the real embedded release; all original assertions remain. New
+  `doctor_compatibility_test.go` exercises supported/unknown/skew release reports,
+  selection/hub failures, absent/partial stores, offline defaults, actual
+  direct/live-owner native remote inspections, committed schema/identity
+  refusals, synthetic gRPC username/owner-password/redaction, and preservation
+  of branches, complete working/staged roots, tags, counters, indexes and config.
+  The late-close/output checks retain actual captured native hashes. Fixtures
+  create no live user data, deployment, account or credentials.
+- `tests/hub/verify_linux.py:verify` adds the actual doctor baseline/skew human
+  and JSON assertions; its nested `report` only adds command selection for
+  doctor. Existing setup, cleanup, namespaces, native/server probes and guards
+  remain. Dockerfile, CI job names/commands, release verification, ordinary and
+  frozen golden gates are unchanged.
+- README, AGENTS, this runbook and PRD §§11.5/13.1/16 record the before/after,
+  exact evidence and remaining gates. Shared `onboarding.md` changes the named
+  local check count from five to six with its before-state retained; its
+  approval, host discovery, memory, rendering and provenance procedures remain.
+  No installed host workflow, MCP registration, dependency or schema changes.
+
 ## Structural scope
 
 - New `internal/hub/config.go` owns only nonsecret hub settings, validation and

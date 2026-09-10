@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/dolthub/dolt/go/cmd/dolt/doltversion"
 	"github.com/spf13/cobra"
 
 	"github.com/kninetimmy/memdolt/internal/embedding"
+	"github.com/kninetimmy/memdolt/internal/hub"
 	"github.com/kninetimmy/memdolt/internal/ipc"
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/singleowner"
@@ -28,6 +30,8 @@ import (
 // advisory that does not make the repository unsafe to use. Fail remains a
 // condition that prevents safe operation. Stale ownership records retain
 // their existing warning and zero-exit behavior (PRD §5.2.3).
+// Explicit remote diagnostics also warn about unobserved native release,
+// absent identity or unresolved divergence; none claims full compatibility.
 const (
 	statusOK   = "ok"
 	statusWarn = "warn"
@@ -44,19 +48,25 @@ type doctorCheck struct {
 // doctorReport is what `memdolt doctor` prints. OK is false when any check
 // failed, which is also when the command exits nonzero.
 type doctorReport struct {
-	Dir    string        `json:"dir"`
-	OK     bool          `json:"ok"`
-	Checks []doctorCheck `json:"checks"`
+	Dir    string                      `json:"dir,omitempty"`
+	OK     bool                        `json:"ok"`
+	Checks []doctorCheck               `json:"checks"`
+	Hub    *hub.Report                 `json:"hub,omitempty"`
+	Remote *localdolt.RepoStatusReport `json:"remote,omitempty"`
 }
 
 func newDoctorCommand() *cobra.Command {
-	var dir string
+	var flags storeFlags
+	var selectedHub bool
+	var config string
+	var remote localdolt.RepoStatusOptions
 
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Report store, retrieval, and host-registration health",
+		Short: "Report local health and explicitly selected hub or remote compatibility",
 		Long: "Run the store-health checks of PRD §5.2 and §6.4 plus the empty-recall\n" +
 			"observability check of PRD §8.1 against this repository:\n\n" +
+			"  embedded-dolt-version  pinned Dolt release versus the measured baseline\n" +
 			"  store-lock      who, if anyone, owns the store — held, an orphaned\n" +
 			"                  ownership record, or absent\n" +
 			"  ipc             whether a live owner answers on its loopback endpoint\n" +
@@ -68,43 +78,146 @@ func newDoctorCommand() *cobra.Command {
 			"directly to read its schema; this briefly takes the ownership lock and may\n" +
 			"create .memdolt/LOCK, but makes no durable database change. It exits\n" +
 			"nonzero when a check fails. Stale ownership records and a missing optional\n" +
-			"OpenCode registration are warnings and exit zero.",
+			"OpenCode registration are warnings and exit zero. Ordinary doctor is offline\n" +
+			"apart from local owner IPC; it never contacts a configured remote.\n\n" +
+			"--hub --config <absolute-hub.json> runs existing hub status inspection on\n" +
+			"the selected Linux deployment, without opening repository memory. It needs\n" +
+			"permission to inspect nftables and deployment files. This observes the\n" +
+			"configured native executable, private boundary, addresses and listeners;\n" +
+			"it does not install/start anything or prove listener identity or SQL grants.\n\n" +
+			"--remote <name> adds existing repo status inspection through the direct or\n" +
+			"authenticated owner route. It fetches committed remote main and checks\n" +
+			"schema/identity compatibility, preserving main, proposals, tags, working\n" +
+			"memory, indexes and config. Fetched objects/tracking refs may remain even\n" +
+			"on refusal; a lost reply is never replayed. --user overrides the stored\n" +
+			"SQL username. Only the executing owner's DOLT_REMOTE_PASSWORD supplies a\n" +
+			"password; restart that owner to change it. Passwords never cross IPC.\n\n" +
+			"Remote executable release is unobserved: storage metadata and successful\n" +
+			"fetches do not establish it. Run doctor --hub --config on the hub for that\n" +
+			"evidence. The measured baseline is exactly Dolt 1.88.1, not a compatible\n" +
+			"range. Physical two-client acceptance and backup/disk checks remain separate.\n" +
+			"--hub cannot combine with --dir, --remote or --user; --config needs --hub.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDoctor(cmd, dir)
+			var err error
+			switch {
+			case selectedHub && (cmd.Flags().Changed("dir") || cmd.Flags().Changed("remote") || cmd.Flags().Changed("user")):
+				err = errors.New("--hub cannot be combined with --dir, --remote or --user")
+			case selectedHub && config == "":
+				err = errors.New("--hub requires --config <absolute-hub.json>")
+			case !selectedHub && cmd.Flags().Changed("config"):
+				err = errors.New("--config requires --hub")
+			case cmd.Flags().Changed("remote") && remote.Remote == "":
+				err = errors.New("--remote must name one configured remote")
+			case cmd.Flags().Changed("user") && (remote.Remote == "" || remote.User == ""):
+				err = errors.New("--user must not be empty and requires --remote <name>")
+			default:
+				err = remote.Validate()
+			}
+			if err != nil {
+				return finishDoctorReport(cmd, doctorReport{Checks: []doctorCheck{newCheck("selection", statusFail, "%v", err)}})
+			}
+			if selectedHub {
+				return runDoctorHub(cmd, config)
+			}
+			return runDoctor(cmd, flags, remote)
 		},
 	}
 
-	cmd.Flags().StringVar(&dir, "dir", ".",
-		"repository root to check (the store lives in <dir>/.memdolt)")
-
-	return cmd
+	cmd.Flags().BoolVar(&selectedHub, "hub", false, "inspect an explicitly selected managed Linux hub instead of repository memory")
+	cmd.Flags().StringVar(&config, "config", "", "absolute path to the selected generated hub.json; requires --hub")
+	cmd.Flags().StringVar(&remote.Remote, "remote", "", "inspect this configured repository remote; permits a fetch")
+	cmd.Flags().StringVar(&remote.User, "user", "", "SQL username override for --remote; password comes only from the owner's environment")
+	return flags.bind(cmd)
 }
 
-func runDoctor(cmd *cobra.Command, dir string) error {
-	paths, err := layout.New(dir)
+func runDoctor(cmd *cobra.Command, flags storeFlags, remote localdolt.RepoStatusOptions) error {
+	paths, err := layout.New(flags.dir)
 	if err != nil {
 		return err
 	}
 	ctx := cmd.Context()
+	report := doctorReport{Dir: paths.Dir(), Checks: []doctorCheck{embeddedDoltCheck(doltversion.Version)}}
+	if remote.Remote != "" {
+		// Guard before schemaCheck too: Open can create a missing database in
+		// a partial store. Explicit remote inspection must never initialize it.
+		if err := localdolt.RequireExistingTransferStore(flags.dir); err != nil {
+			report.Checks = append(report.Checks, newCheck("remote-compatibility", statusFail, "%v", err), remoteDoltCheck())
+			return finishDoctorReport(cmd, report)
+		}
+	}
 
 	// The IPC check runs before the schema check because its answer
 	// decides how the schema check may read the store: a live owner holds
 	// the data directory, and PRD §5.2.1 routes every other process
 	// through it rather than around it.
 	owner, ownerLive := ownerCheck(ctx, paths)
-	report := doctorReport{
-		Dir: paths.Dir(),
-		OK:  true,
-		Checks: []doctorCheck{
-			lockCheck(paths),
-			owner,
-			schemaCheck(ctx, paths, ownerLive),
-			emptyRecallCheck(ctx, paths),
-			openCodeRegistrationCheck(paths.Base()),
-		},
+	report.Checks = append(report.Checks, lockCheck(paths), owner,
+		schemaCheck(ctx, paths, ownerLive), emptyRecallCheck(ctx, paths), openCodeRegistrationCheck(paths.Base()))
+	if remote.Remote != "" {
+		st, err := flags.open(ctx, cliActor)
+		check := newCheck("remote-compatibility", statusFail, "%v", err)
+		if err == nil {
+			check, report.Remote = doctorRemoteCheck(ctx, st, remote)
+		}
+		report.Checks = append(report.Checks, check, remoteDoltCheck())
 	}
+	return finishDoctorReport(cmd, report)
+}
 
+func embeddedDoltCheck(version string) doctorCheck {
+	const name = "embedded-dolt-version"
+	if version == "" {
+		return newCheck(name, statusFail, "embedded Dolt release unobservable; rebuild from the pinned dependency; measured baseline is exactly %s", hub.Version)
+	}
+	if version != hub.Version {
+		return newCheck(name, statusFail, "unsupported embedded Dolt release %s; measured baseline is exactly %s; use the measured pinned build", version, hub.Version)
+	}
+	return newCheck(name, statusOK, "embedded Dolt release %s from pinned dolt/go doltversion.Version; measured baseline is exactly %s", version, hub.Version)
+}
+
+func runDoctorHub(cmd *cobra.Command, config string) error {
+	observed, err := hub.Inspect(cmd.Context(), config, "status", false)
+	report := doctorReport{Hub: &observed, Checks: []doctorCheck{embeddedDoltCheck(doltversion.Version)}}
+	for _, check := range observed.Checks {
+		report.Checks = append(report.Checks, newCheck("hub-"+check.Name, check.Status, "%s", check.Detail))
+	}
+	return errors.Join(err, finishDoctorReport(cmd, report))
+}
+
+// doctorRemoteCheck owns the opened store and retains observations on a late
+// failure. RepoStatus alone determines which committed evidence was validated;
+// an authenticated owner refusal may provide no partial report at all.
+func doctorRemoteCheck(ctx context.Context, st commandStore, opts localdolt.RepoStatusOptions) (doctorCheck, *localdolt.RepoStatusReport) {
+	const name = "remote-compatibility"
+	report, err := st.RepoStatus(ctx, opts)
+	if err = errors.Join(err, st.Close()); err != nil {
+		if report.Store == "" {
+			return newCheck(name, statusFail, "%v", err), nil
+		}
+		return newCheck(name, statusFail, "%v; captured main: local %q, remote %q (empty means unobserved)",
+			err, report.MainCommit, report.RemoteCommit), &report
+	}
+	status := statusOK
+	identity := "matching committed project identity " + report.ProjectID
+	if report.ProjectID == "" {
+		status = statusWarn
+		identity = "committed project identity absent on both sides; review Git origin and explicit init --adopt-identity"
+	}
+	if report.Status == "conflicted" || report.Status == "diverged-unassessed" {
+		status = statusWarn
+	}
+	return newCheck(name, status,
+		"remote %s reachable; committed main %s; schema v%d compatible with local main %s; %s; status %s. %s",
+		opts.Remote, report.RemoteCommit, report.SchemaVersion, report.MainCommit, identity, report.Status, report.Remedy), &report
+}
+
+func remoteDoltCheck() doctorCheck {
+	return newCheck("remote-dolt-version", statusWarn,
+		"remote executable release unobserved: remotes metadata describes storage formats, not the native release. On the hub run `memdolt doctor --hub --config <absolute-hub.json>` with permission to inspect deployment files and nftables; measured baseline is exactly %s", hub.Version)
+}
+
+func finishDoctorReport(cmd *cobra.Command, report doctorReport) error {
 	failed := 0
 	for _, check := range report.Checks {
 		if check.Status == statusFail {
@@ -113,13 +226,11 @@ func runDoctor(cmd *cobra.Command, dir string) error {
 	}
 	report.OK = failed == 0
 
-	if err := writeDoctorReport(cmd, report); err != nil {
-		return err
-	}
+	var err error
 	if failed > 0 {
-		return fmt.Errorf("doctor: %d of %d checks failed", failed, len(report.Checks))
+		err = fmt.Errorf("doctor: %d of %d checks failed", failed, len(report.Checks))
 	}
-	return nil
+	return errors.Join(err, writeDoctorReport(cmd, report))
 }
 
 func openCodeRegistrationCheck(repoRoot string) doctorCheck {
@@ -452,7 +563,11 @@ func writeDoctorReport(cmd *cobra.Command, report doctorReport) error {
 		return nil
 	}
 
-	if _, err := fmt.Fprintf(out, "memdolt doctor: %s\n", report.Dir); err != nil {
+	target := report.Dir
+	if report.Hub != nil {
+		target = "hub " + report.Hub.Config
+	}
+	if _, err := fmt.Fprintf(out, "memdolt doctor: %s\n", target); err != nil {
 		return fmt.Errorf("write doctor line: %w", err)
 	}
 	for _, check := range report.Checks {

@@ -2566,8 +2566,10 @@ verifier and its two CLI callers, not all memory writers. `Toolset.Render`
 flushes that owner's queue; standalone store rendering has no session queue.
 `RegisterTools` still registers exactly 22 tools; no registration is added.
 
-The guidance distinguishes `doctor`'s five checks from actual host workflow/tool
-discovery and target verification: MCP `status.dataDir` reports
+Before #167 the guidance distinguished `doctor`'s five checks from actual host
+workflow/tool discovery and target verification. After #167 the sixth check
+reports the embedded Dolt release; the original five and that distinction remain.
+MCP `status.dataDir` reports
 `<root>/.memdolt/dolt`, whose `memory` child is the database. Each `serve` owns
 its local clone; supported CLI calls route through its authenticated owner,
 but a second MCP server does not. Executing-owner credentials, optional
@@ -2747,6 +2749,42 @@ not enforce private remotes ingress. The measured managed-startup baseline is
 exactly **1.88.1**, not the historical ≥1.30 capability statement or an unmeasured
 compatibility range. Remotes wire-format metadata is not a Dolt release version.
 This delivery adds no skew guard to existing clone/push/pull clients or doctor.
+
+**Doctor compatibility subset (issue #167).** The #147 before-state above left
+doctor without release evidence. After #167 ordinary doctor adds the embedded
+Dolt release from the pinned `dolt/go/cmd/dolt/doltversion.Version` and compares
+it with the measured exact **1.88.1** baseline, failing unsupported/unobservable
+evidence. The driver environment label and an uninitialized embedded SQL version
+string do not identify that release. The five existing local checks and offline
+default remain. Explicit `doctor --hub --config <absolute-hub.json>` reuses
+`hub.Inspect` status, retaining observed native release, failures and unknowns
+without opening repository memory or changing deployment. It requires the same
+Linux deployment/file/nftables inspection privileges as `hub status`.
+
+Explicit `doctor --remote <name> --dir <repository> [--user <username>]` reuses
+`RepoStatus` through the existing direct/authenticated owner route. It requires
+an initialized store, fetches only the selected committed remote main, and
+checks schema and project identity. Main, proposals, tags, working memory,
+derived indexes and configuration remain unchanged; fetched objects and the
+selected tracking ref may remain even on refusal. A username overrides the
+stored username; only the executing owner's `DOLT_REMOTE_PASSWORD` supplies a
+password. No password flag, config value, IPC field, replay or personal Dolt
+credential loading is added. Conflicting/incomplete selections refuse before
+inspection. Hub selection cannot combine with repository `--dir`, `--remote`
+or `--user`; `--config` requires `--hub` and `--user` requires `--remote`.
+
+Remote transport/schema/identity evidence never establishes a remote executable
+release: remotes metadata carries storage formats, not native version. Doctor
+warns that release is unobserved and names the on-hub doctor command as the
+inspection remedy. Both absent identities warn without changing RepoStatus's
+legacy acceptance; conflicts or unassessed divergence remain visible advisories.
+The local release check binds this doctor's running binary, not a potentially
+different owner binary. No transfer path gains an inferred remote version guard.
+The [hub runbook](../hub-deployment.md#doctor-compatibility-issue-167) names every
+changed symbol/file and preserved boundary. There is no dependency, schema,
+live-SQL store, MCP registration, installation or credential change. §13.2's
+backup-age/headroom/trend checks, full parity and the physical two-client gate
+remain unexecuted/separate.
 
 `hub init` generates exact nonsecret YAML, a dedicated-user native systemd unit,
 a separate privileged boundary unit, an nftables file and setup instructions.
@@ -3006,6 +3044,13 @@ hub acceptance gate remain separate.
 | **M4 — Hub & repo ops** | remotes config, pull/push/repo-status + conflict elicitation, hub init/systemd docs, auth setup, version-skew guards, topology config; `Store` remote impl (topology B) if time allows. | Two-machine round-trip acceptance test (r2 §13.6 analogue): fixture data, write from both machines, merge, verify counts/hashes; re-open with plain local memdolt — no conversion (D13 gate). |
 | **M5 — Parity long tail** | docs ingestion, code index + locate + eval, render, global store, import-from-memhub including session-note provenance, audit md, ingest-git. | Parity matrix (§12) fully dispositioned; locate golden gate green. |
 | **M6 — Ops polish** | backups + doctor --hub, gc/retention, upgrade machinery with safe wrapper resync, token accounting (gated), validated unredacted OpenCode transcripts, README/status discipline. | Quarterly-drill-style restore test documented and executed once. |
+
+**M4 diagnostic subset (issue #167):** before this slice doctor lacked embedded
+release, selected hub and selected remote diagnostics. After it, §13.1's explicit
+checks and isolated CLI/native Linux rig cover that subset. The exact baseline
+is 1.88.1; no compatible version range is inferred. These checks do not execute
+or replace the physical two-client counts/hashes/reopen gate above, complete M4,
+or deliver M6's backup/disk diagnostics and restore drill.
 
 **M3 exit-gate replacement (2026-09-06, issue #119).** The previous gate above
 required a real Claude Code session. The user canceled their Claude subscription
