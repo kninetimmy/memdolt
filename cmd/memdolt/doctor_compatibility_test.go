@@ -52,7 +52,10 @@ func TestDoctorEmbeddedReleaseEvidence(t *testing.T) {
 }
 
 func TestDoctorHubAndSelectionFailuresPreserveMemory(t *testing.T) {
-	base := scratchDir(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(base)
 	bundle := filepath.Join(base, "bundle")
 	cfg := hub.DefaultConfig()
