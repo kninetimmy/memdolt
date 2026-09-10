@@ -116,7 +116,8 @@ def verify(root, source_memdolt, source_dolt, uid):
 
     def report(mode, success, *extra):
         previous_probes = set(Path(tempfile.gettempdir()).glob("memdolt-hub-version-*"))
-        command = [memdolt, "hub", mode, "--config", config, "--json", *extra]
+        command = [memdolt, "doctor", "--hub"] if mode == "doctor" else [memdolt, "hub", mode]
+        command += ["--config", config, "--json", *extra]
         result = ns(hub_ns, *(as_user(command) if mode == "ready" else command), ok=False)
         document = json.loads(result.stdout)
         if document["ok"] != success:
@@ -221,6 +222,14 @@ def verify(root, source_memdolt, source_dolt, uid):
             time.sleep(0.05)
         native = report("status", True)
         require(native["observed_dolt_version"] == "1.88.1", "wrong native baseline")
+        doctor = report("doctor", True)
+        require(doctor["hub"]["observed_dolt_version"] == "1.88.1" and "dir" not in doctor and "remote" not in doctor,
+                "doctor lost native evidence or selected repository memory")
+        require(any(c["name"] == "embedded-dolt-version" and c["status"] == "ok" for c in doctor["checks"])
+                and any(c["name"] == "hub-version" and c["status"] == "ok" for c in doctor["checks"]),
+                "doctor did not check both measured release sources")
+        human = ns(hub_ns, memdolt, "doctor", "--hub", "--config", config).stdout
+        require("hub-version" in human and "native release 1.88.1" in human, "doctor human baseline missing")
         require(not connect(denied_ns, "192.0.2.1", 50051) and not connect(denied_ns, "2001:db8::1", 50051),
                 "real wildcard remotes listener exposed")
         stop(server)
@@ -238,6 +247,14 @@ def verify(root, source_memdolt, source_dolt, uid):
         dolt.chmod(0o755)
         skew = report("ready", False)
         require(skew["observed_dolt_version"] == "1.88.2", "skew was not reported")
+        doctor = report("doctor", False)
+        require(doctor["hub"]["observed_dolt_version"] == "1.88.2"
+                and any(c["name"] == "hub-version" and c["status"] == "fail" for c in doctor["checks"]),
+                "doctor hid the unsupported native release")
+        human = ns(hub_ns, memdolt, "doctor", "--hub", "--config", config, ok=False)
+        require(human.returncode != 0 and "unsupported native Dolt release 1.88.2" in human.stdout,
+                "doctor human version refusal missing")
+        print("PASS: doctor --hub human/JSON native 1.88.1 baseline and observed 1.88.2 refusal", flush=True)
         dolt.unlink()
         original.rename(dolt)
         ns(hub_ns, nft, "add", "table", "inet", "memdolt_hub", "{ flags dormant; }")

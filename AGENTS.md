@@ -19,6 +19,23 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Explicit doctor compatibility (issue #167).** Before this slice doctor
+reported five local checks with no release, hub or remote selection. After it,
+ordinary doctor adds the embedded Dolt release from pinned `doltversion.Version`
+against the measured exact 1.88.1 baseline and retains those five checks and its
+offline default. `doctor --hub --config <absolute-hub.json>` reuses hub status
+without opening repository memory. `doctor --remote <name> [--user <username>]`
+reuses direct/authenticated-owner RepoStatus and its committed schema/identity,
+credential, preservation and fetch/tracking-ref residue contract. The remote
+native release remains unobserved with an on-hub inspection remedy; local release
+or storage formats do not establish it. Selection errors and failed observations
+remain human/JSON failures; absent identities and unresolved divergence warn.
+The complete changed-symbol/file inventory and scopes are in the
+[hub runbook](docs/hub-deployment.md#doctor-compatibility-issue-167).
+No Store/IPC policy, dependency, schema, MCP registration, live installation or
+credential changes. Physical two-client acceptance, full doctor parity and M6's
+backup-age/disk-trend diagnostics remain separate.
+
 **Repository identity and topology (issue #163).** Before this slice, native
 transfers shipped but `[repo]` was ignored and `meta.project_id` was absent.
 After it, explicit init records a memhub-compatible Git-origin identity, with

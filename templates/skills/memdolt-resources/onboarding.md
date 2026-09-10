@@ -164,11 +164,13 @@ are also excluded from recall. Blank recall from narrative-only memory is
 expected. Verify recall with actual approved facts, decisions, tasks or selected
 docs only when present; do not add sample claims to make the check green.
 
-Run `memdolt doctor --dir <repository> --json` and report its five scoped
-checks: store lock, IPC, schema version, empty-recall rate and OpenCode
-registration. It neither installs nor proves live compatibility across three
-hosts. Separately reconnect the chosen host, confirm discovery of
-`memdolt-init-project` and the selected workflows, verify the MCP tool list
+Run `memdolt doctor --dir <repository> --json` and report its six scoped
+checks: embedded Dolt release, store lock, IPC, schema version, empty-recall
+rate and OpenCode registration. Before issue #167 this step named five checks;
+the embedded release check is now included and the other five retain their
+behavior. Ordinary doctor stays offline. It neither installs nor proves live
+compatibility across three hosts. Separately reconnect the chosen host, confirm
+discovery of `memdolt-init-project` and the selected workflows, verify the MCP tool list
 (including `status`, `repo_status`, `doc_add` and `render`), and compare live
 `status` with the selected target. Exercise relevant read calls. Report exactly
 which live checks were possible; package tests and a green doctor result do

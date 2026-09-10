@@ -176,7 +176,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 
 	for _, want := range []string{
 		"memdolt doctor:", "store-lock", "ipc", "schema-version", "empty-recall-rate",
-		"mcp-registration-opencode", statusOK,
+		"mcp-registration-opencode", "embedded-dolt-version", "1.88.1", statusOK,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output %q does not mention %q", out, want)

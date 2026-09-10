@@ -356,9 +356,14 @@ hub acceptance or complete memhub parity.
 | Area | Delivered | Remaining boundary |
 | --- | --- | --- |
 | Foundations and M0–M3 | Local Dolt, ownership/IPC, reviewed writes, retrieval gates, 22 MCP tools, host templates | M0's recorded GO has scoped limits. Live Claude acceptance was explicitly waived; deterministic compatibility and a real OpenCode provenance write supplied the replacement M3 evidence. |
-| M4: cross-machine memory | Clone, remotes, status/diff, push/pull, compatible merges, human conflict choices, Linux hub artifacts, isolated native ingress tests, repository identity and local/clone topology | Before #163 topology/project identity remained pending; they now ship. Physical two-client/private-network and client version-skew acceptance remain. Live SQL-to-hub storage is unsupported. |
+| M4: cross-machine memory | Clone, remotes, status/diff, push/pull, compatible merges, human conflict choices, Linux hub artifacts, isolated native ingress tests, repository identity and local/clone topology, explicit doctor compatibility diagnostics | Before #163 topology/project identity remained pending; they now ship. Physical two-client/private-network acceptance remains. Remote native release requires inspection on the hub. Live SQL-to-hub storage is unsupported. |
 | M5: memory workflows | Documents, code locator and golden gates, rendering, human fact/decision commands, global replicas with combined recall, terminal global proposal acceptance, JSON import/export | Before #161 global-target proposal acceptance refused; it now ships through terminal human review. Audit-md, Git/file-history ingestion, top-level status/stats/history, remaining wrap-up policy, and the full parity audit remain. |
-| M6: operations | Existing scoped health checks and deployment runbook | Backups and restore drill, `doctor --hub`, retention/GC, upgrades, gated token accounting, and local transcript archives remain planned. |
+| M6: operations | Scoped local, selected hub and remote health checks; deployment runbook | Backups and restore drill, backup-age/disk-trend checks, retention/GC, upgrades, gated token accounting, and local transcript archives remain planned. |
+
+Before #167, this status listed client version-skew acceptance and `doctor --hub`
+as pending. Doctor now checks the embedded release and explicitly selected hub
+or remote evidence against the exact measured **1.88.1** baseline. This delivers
+diagnostics, not physical two-client acceptance or the planned backup/disk checks.
 
 The maintainer still uses memhub; migration is optional and has not been
 performed. Read the [milestones and product authority](docs/prd/memdolt-prd.md),
@@ -573,6 +578,18 @@ native binaries, generation flags, credentials, permissions, startup, and
 `hub status --config <hub.json>`. Isolated Linux enforcement tests have
 shipped; a real two-client deployment and physical off-network acceptance
 remain to be completed.
+
+Ordinary `memdolt doctor --dir <repository>` stays offline and reports the
+embedded Dolt release from the pinned dependency. Explicit
+`doctor --remote origin --dir <repository> [--user <username>]` fetches remote
+main through the existing direct/owner route and checks committed schema and
+identity. It warns that the remote executable release is unobserved; fetch or
+storage-format compatibility cannot establish it. On the selected Linux hub,
+run `sudo memdolt doctor --hub --config /etc/memdolt-hub/hub.json --json` for the
+existing native release, deployment and listener inspection. This opens no
+repository store and makes no deployment change. Remote passwords still come
+only from the executing owner's `DOLT_REMOTE_PASSWORD` environment; restart the
+owner to change it. The runbook explains the evidence and fetch residue limits.
 
 ## Reference
 
