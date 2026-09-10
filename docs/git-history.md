@@ -221,6 +221,8 @@ command and MCP `historyTool`/`Toolset.history` retain their exact native ancest
 nullable images, warning/session isolation and queue-preservation contracts.
 Git ingestion, file-search routing/output schemas and derived-cache safeguards
 remain unchanged. Only the overlapping AGENTS.md insertion needed conflict
-resolution; both issue records were retained. The native-history implementation
+resolution; both issue records were retained. README's maturity row also records
+Git ingestion's previous deferral and shipped status alongside native history.
+The native-history implementation
 and tests are landed base content, not new #174 changes. The final #174 inventory
 above is measured against fetched `origin/main`, including that landed base.
