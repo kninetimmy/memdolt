@@ -19,6 +19,20 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Cached Git file history (issue #174).** Before this slice `search file:`
+refused and the derived index held source/vector rows only. After it,
+`ingest-git [--since <commit-ish>] --dir <repository> [--json]` explicitly
+caches local committed metadata through one captured HEAD. CLI and the existing
+MCP search return exact cached file history, ordered by parsed author instants
+with commit-ID ties. File calls bypass Dolt/owner, source bodies, inference and
+note queues; ordinary decision search keeps its existing route and output.
+Schema v1 upgrades to v2 without replacing source/chunk/vector rows. Unsupported
+or foreign schema now refuses; refresh preserves deleted-file history and
+`code rm` explicitly removes the whole cache. The [Git-history guide](docs/git-history.md)
+records every changed file/symbol, range/count/UTF-8/rename semantics, deny and
+path checks, output schema and exact writer/reader boundaries. No durable schema,
+dependency, new MCP name/input, global history or golden/scoring change.
+
 **CLI file bodies (issue #171).** Before this slice, note add, state set,
 arch set and verified OpenCode wrap-up-note accepted argument/stdin bodies
 only. After it, all four also accept `--from-file <path>`, mutually exclusive
@@ -720,8 +734,10 @@ The complete structural blast radius is:
 - New `schema.go`/`index.go` own the separate SQLite schema, refresh,
   read-only status, vector validation/backfill and bounded removal. An
   application ID, regular/single-link file and known schema are required
-  before an existing index is disposable. Incompatible derived schema resets
-  safely; unknown occupants, unrelated schema and journal residue refuse.
+  before an existing index is disposable. Before #174, incompatible derived
+  schema reset safely; afterward v1 upgrades preserving source rows and
+  unsupported versions refuse. Unknown occupants, unrelated schema and journal
+  residue still refuse. See the Git-history guide for the exact shared scope.
   No recursive deletion is used. DELETE/FULL journaling replaces the tagged
   WAL/NORMAL choice here so status creates no WAL/shared-memory sidecars.
   Chunk/FTS changes commit together before vectors; failed inference preserves
@@ -811,6 +827,9 @@ The complete structural blast radius is:
 This record, the guide and PRD §§8.4/9/11/16 preserve the before/after scope.
 Git-ingested history/`search file:`, global memory, public memory commands and
 remaining M5 parity stay separately tracked; no full-M5 claim is made.
+Before #174 that separate list still included Git history; afterward the
+explicit ingestion/cache-only search described above ships. The #138 record
+remains the before-state, and full-M5 acceptance remains separate.
 
 **Trusted human repository memory (issue #139).** Before this delivery,
 facts and decisions had schema, reviewed agent proposals and committed readers,
@@ -2220,8 +2239,10 @@ export GOFLAGS=-tags=gms_pure_go
   narrow or annotate one call; `--json` emits the complete response object.
 - Search committed decisions (PRD §8): `go run ./cmd/memdolt search <query>`
   accepts plain text or a memhub-compatible decision prefix and uses Dolt
-  FULLTEXT over decision titles and rationales. `search file:<path>` refuses
-  with the M5 code-index/git-ingest remedy until that corpus exists.
+  FULLTEXT over decision titles and rationales. Before #174, `search file:<path>`
+  refused with the M5 code-index/git-ingest remedy. After it, explicit file
+  queries and cached path fallback return derived Git history, without opening
+  memory or implicitly ingesting it; see [cached coverage and limits](docs/git-history.md).
 - Evaluate retrieval (PRD §8.4): `go run ./cmd/memdolt eval retrieval` runs
   the committed golden JSON through production hybrid recall, reports every
   match/empty outcome plus Recall@3 and safety failures, and exits nonzero

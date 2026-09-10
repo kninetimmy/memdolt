@@ -19,6 +19,17 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+Before #174, `search file:` refused and the derived code index had no Git
+history. Now explicit `ingest-git [--since <commit-ish>] --dir <repository>`
+caches committed local metadata through captured HEAD; CLI/MCP search reads
+exact cached paths without Dolt/owner, source bodies, models or queue flushes.
+Decision search retains its ranking and output. Schema v1 upgrades in place;
+unsupported/foreign cache state refuses, source refresh preserves history,
+and `code rm` removes it with the whole index. The [complete Git-history guide](docs/git-history.md)
+records ranges, timestamps, rename/copy and deny semantics, output changes,
+tests and every changed symbol's scope. No new dependency, durable schema,
+MCP name/input, global history or scoring/golden change.
+
 Before issue #163, repository topology TOML was ignored and init did not record
 Git-derived project identity. After it, `init` records new-store identity;
 existing unidentified stores require explicit `init --adopt-identity` with

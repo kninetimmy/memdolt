@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/kninetimmy/memdolt/internal/codeindex"
 	"github.com/kninetimmy/memdolt/internal/layout"
 	"github.com/kninetimmy/memdolt/internal/memory"
 	"github.com/kninetimmy/memdolt/internal/render"
@@ -80,7 +82,7 @@ func registerTools(server *mcp.Server, baseDir string, st Backend, interval time
 	mcp.AddTool(server, &mcp.Tool{Name: "repo_pull", Description: "Pull committed remote main; compatible divergence merges as the requesting agent. Actual conflicts require complete human form choices bound to both heads, committed together as user. Nine modern forms return a reachable continuation; legacy clients receive one complete form. Without form support use the CLI remedy."}, tools.repoPull)
 	mcp.AddTool(server, &mcp.Tool{Name: "repo_push", Description: "Publish captured committed main to one configured remote by fast-forward; never force or publish proposals. Password comes only from the executing owner's environment. An uncertain reply requires inspection before retrying."}, tools.repoPush)
 	mcp.AddTool(server, &mcp.Tool{Name: "recall", Description: "Recall ranked committed facts, decisions, tasks, and document chunks."}, tools.recall)
-	mcp.AddTool(server, &mcp.Tool{Name: "search", Description: "Search committed decision titles and rationales."}, tools.search)
+	mcp.AddTool(server, &mcp.Tool{Name: "search", Description: "Search committed decisions, or exact cached Git history with file:<path> / an indexed path. File history is explicitly ingested by the CLI, may cover partial ranges, and never opens Dolt, reads source bodies, runs Git or provisions models.", OutputSchema: searchOutputSchema()}, tools.search)
 	mcp.AddTool(server, &mcp.Tool{Name: "locate", Description: "Locate local tracked source by intent with lazy refresh; return path/line/symbol breadcrumbs and snippets capped at six lines and 400 characters. Uses independent SQLite, never Dolt, recall, exports or sync. All source reads enforce root, link, owner-credential and deny checks."}, tools.locate)
 	mcp.AddTool(server, &mcp.Tool{Name: "list_tasks", Description: "List committed tasks by status, oldest first."}, tools.listTasks)
 	mcp.AddTool(server, &mcp.Tool{Name: "list_decisions", Description: "List committed decisions, newest first."}, tools.listDecisions)
@@ -180,6 +182,24 @@ type searchInput struct {
 	Limit int    `json:"limit,omitempty"`
 }
 
+// Anonymous optional Go branches marshal as a union, but the SDK infers all
+// promoted fields as required. Derive each real branch instead; input is unchanged.
+func searchOutputSchema() *jsonschema.Schema {
+	response, responseErr := jsonschema.For[search.Response](nil)
+	decision, decisionErr := jsonschema.For[search.DecisionHit](nil)
+	file, fileErr := jsonschema.For[struct {
+		Type string `json:"type"`
+		codeindex.FileHistoryHit
+	}](nil)
+	if err := errors.Join(responseErr, decisionErr, fileErr); err != nil {
+		panic(fmt.Sprintf("infer search output schema: %v", err))
+	}
+	decision.Properties["type"].Enum = []any{"decision"}
+	file.Properties["type"].Enum = []any{"file_history"}
+	response.Properties["results"].Items = &jsonschema.Schema{OneOf: []*jsonschema.Schema{decision, file}}
+	return response
+}
+
 func (t *Toolset) search(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, search.Response, error) {
 	limit := in.Limit
 	if limit == 0 {
@@ -188,6 +208,9 @@ func (t *Toolset) search(ctx context.Context, _ *mcp.CallToolRequest, in searchI
 	query, err := search.Parse(in.Query, limit)
 	if err != nil {
 		return nil, search.Response{}, err
+	}
+	if response, handled, err := search.TryFile(ctx, t.baseDir, query); handled {
+		return &mcp.CallToolResult{}, response, err
 	}
 	response, err := search.Run(ctx, t.store, query)
 	return &mcp.CallToolResult{}, response, err

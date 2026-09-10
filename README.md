@@ -603,7 +603,7 @@ output; store-oriented commands accept `--dir`.
 | Command family | Purpose |
 | --- | --- |
 | `init` · `doctor` · `version` | Initialize/migrate explicitly, inspect health, identify the binary |
-| `recall` · `search` | Ranked memory recall; lexical search of committed decisions |
+| `recall` · `search` | Ranked memory recall; committed decision search or cached exact Git file history |
 | `fact add/list/verify/supersede` | Trusted human fact operations |
 | `decision add/list/set-summary/supersede` | Trusted human decision operations |
 | `task add/list/done/block` · `note add/list` | Work queue and session observations |
@@ -611,6 +611,7 @@ output; store-oriented commands accept `--dir`.
 | `review list/show/accept/reject/stale/expire` | Inspect and manage proposal branches |
 | `doc add/ls/show/rm` | Selected Markdown and its chunks |
 | `code index/status/rm` · `locate` | Local tracked-code navigation |
+| `ingest-git [--since <commit-ish>]` | Explicit local Git-history cache, ending at captured HEAD |
 | `index status/rebuild` · `eval retrieval/locate` | Derived memory vectors and golden evaluations |
 | `repo status` · `repo remote add/list` | Inspect memory history and configure remotes |
 | `clone` · `pull` · `push` | Transfer committed memory |
@@ -619,6 +620,23 @@ output; store-oriented commands accept `--dir`.
 | `render` · `serve` | Generated views and the stdio MCP server |
 | `opencode session-info/wrap-up-note` | Verified OpenCode session provenance |
 | `hub init/status/preflight/ready` | Explicit deployment artifacts and startup checks |
+
+Before #174, search handled committed decisions and refused `file:<path>`.
+It now also reads exact cached file history populated by `ingest-git`:
+
+~~~sh
+memdolt ingest-git --since v1.0 --dir <repository> --json
+memdolt search 'file:src/main.go' --dir <repository> --json
+~~~
+
+`--since` selects a commit range, not a date. History uses author dates and
+rename/copy destinations; results disclose cached range coverage and limits.
+An indexed path-looking query also selects file history, while explicit
+decision prefixes retain decision search. File queries never open Dolt,
+read source bodies, load models or ingest implicitly. Existing source/vector
+rows survive schema v1's in-place extension and ordinary refresh; `code rm`
+removes history with the whole cache. See [Git history](docs/git-history.md)
+for exact fields, protections and the complete before/after change inventory.
 
 Before issue #169 the direct-lane surface had `command record/get` and
 `state set/show` / `arch set/show`; `note list` defaulted to 20 without filters,
