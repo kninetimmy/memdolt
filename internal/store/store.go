@@ -21,6 +21,11 @@ import (
 	"github.com/kninetimmy/memdolt/internal/singleowner"
 )
 
+// DefaultMaxRows is the existing IPC result ceiling, also used to bound note
+// and narrative history limits before the native sorter allocates by LIMIT.
+// It is not a restriction on every Store.Query or every reader.
+const DefaultMaxRows = 200_000
+
 // Store is the M0 subset of memdolt's storage interface.
 //
 // It carries exactly the four operations M0 needs to prove the embedded

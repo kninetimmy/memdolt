@@ -605,7 +605,7 @@ output; store-oriented commands accept `--dir`.
 | `fact add/list/verify/supersede` | Trusted human fact operations |
 | `decision add/list/set-summary/supersede` | Trusted human decision operations |
 | `task add/list/done/block` · `note add/list` | Work queue and session observations |
-| `command record/get` · `state set/show` · `arch set/show` | Observed commands and project narratives |
+| `command record/verify/get/list` · `state set/show/history` · `arch set/show/history` | Observed commands and project narratives |
 | `review list/show/accept/reject/stale/expire` | Inspect and manage proposal branches |
 | `doc add/ls/show/rm` | Selected Markdown and its chunks |
 | `code index/status/rm` · `locate` | Local tracked-code navigation |
@@ -617,6 +617,31 @@ output; store-oriented commands accept `--dir`.
 | `render` · `serve` | Generated views and the stdio MCP server |
 | `opencode session-info/wrap-up-note` | Verified OpenCode session provenance |
 | `hub init/status/preflight/ready` | Explicit deployment artifacts and startup checks |
+
+Before issue #169 the direct-lane surface had `command record/get` and
+`state set/show` / `arch set/show`; `note list` defaulted to 20 without filters,
+and note/narrative reads could expose dirty working data. It now adds:
+
+~~~sh
+memdolt state history --limit 25
+memdolt arch history --json
+memdolt note list --actor agent:codex --since-days 7 --limit 25
+memdolt command list
+memdolt command verify test "go test ./..." --exit-code 0 --actor codex
+~~~
+
+History includes full bodies and attribution, newest creation time/id first.
+Note listing now defaults to 25; `--actor` matches the exact stored actor and
+`--since-days` accepts 0 through 106751 (a rolling UTC horizon). Note/history
+limits accept 1 through 200000 and default to 25. These reads and command
+get/list use committed main, preserve working/proposal data and queued MCP
+notes, and refuse missing memory without initializing it. Command listing
+includes all kinds, newest run first with schema kind order breaking ties.
+`verify` records a supplied result; it requires `--exit-code` and never runs
+the command. Existing `record --exit` and its default exit 0 remain. Both
+use the same attributed writer and confirmed/unknown outcome reporting.
+The [PRD's issue #169 record](docs/prd/memdolt-prd.md#direct-lane-cli-read-parity-issue-169)
+states the complete reader/writer scope and change inventory.
 
 ### Local models and retrieval
 

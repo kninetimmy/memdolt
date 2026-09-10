@@ -19,6 +19,21 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Direct-lane CLI read parity (issue #169).** Before this slice, narrative
+history and command list/verify were absent, note list defaulted to 20 without
+filters, and the shared note/narrative readers exposed dirty working data.
+After it, state/arch history and note list default to 25 with limits 1..200000;
+notes add exact stored-actor and bounded nonnegative since-days filters.
+Shared readers use committed main through direct/authenticated-owner routes.
+The selected CLI reads refuse absent memory without creating it and leave
+queued MCP notes untouched. Command verify requires explicit --exit-code and
+reuses record's attributed writer, counters and confirmed/unknown outcomes;
+record --exit/default 0 remains. This does not add a clean-working-set gate
+to ordinary command writes. The [PRD record](docs/prd/memdolt-prd.md#direct-lane-cli-read-parity-issue-169)
+contains every changed file/symbol, native failure evidence, ordering, filter
+and preservation scopes. Store.Query, IPC policy, other readers/writers,
+schemas, dependencies and the 22 MCP registrations retain their contracts.
+
 **Explicit doctor compatibility (issue #167).** Before this slice doctor
 reported five local checks with no release, hub or remote selection. After it,
 ordinary doctor adds the embedded Dolt release from pinned `doltversion.Version`
@@ -2175,6 +2190,10 @@ export GOFLAGS=-tags=gms_pure_go
   by the actor (`--actor "Claude Code"` normalizes to `agent:claude-code`; the
   default is `user`), so `dolt_log` answers provenance on its own. `note add`
   and the two `set` commands read their body from stdin when given no argument.
+  Before #169 that was the complete note/command/narrative CLI surface; after
+  it, `command list|verify` and `state history` / `arch history` also ship,
+  with the committed-read/filter/default changes recorded above. The existing
+  writer, actor and stdin semantics in this paragraph still hold.
 - Verify OpenCode session metadata: `memdolt opencode session-info <current-session-id>`
   reads the API without a store; `memdolt opencode wrap-up-note <current-session-id>
   [text]` verifies first, then writes one note (stdin supplies omitted text).

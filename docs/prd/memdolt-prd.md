@@ -1415,6 +1415,122 @@ The [deployment runbook](../hub-deployment.md) specifies native 1.88.1, credenti
 setup, applied nftables enforcement, preservation, supported platforms and the
 complete structural blast radius. Existing CLI/MCP/transfer behavior stays.
 
+#### Direct-lane CLI read parity (issue #169)
+
+Before this slice, the shipped direct-lane CLI had state/arch set/show,
+note add/list (default limit 20, no actor/day filters) and command record/get.
+`Lanes.Notes` and `Lanes.Narrative` queried the working set, while command get
+already selected committed main. After it, these commands ship with `--dir`
+and `--json` on existing current-schema repository memory:
+
+- `state history [--limit <n>]` and `arch history [--limit <n>]` list appended
+  narrative rows still present at committed main, newest `created_at`, then
+  newest id. Each entry includes full body, id, canonical/raw actor and creation
+  time. Human output carries all fields; JSON uses `{"history": [...]}`.
+  Empty history is `[]` (human: `no state history` / `no arch history`).
+  The default is 25; explicit limits accept 1 through 200000. This is the
+  tagged memhub narrative-row workflow, separate from §11.1's deferred generic
+  history/blame/as-of engine. Existing show retains its body-only human form,
+  full JSON row and not-found behavior, now over committed main.
+- `note list [--actor <stored-actor>] [--since-days <days>] [--limit <n>]`
+  now defaults to 25, with the same 1..200000 limit range. Actor matches exact
+  stored bytes: no trimming, case folding, writer normalization or matching
+  against actor_raw. An explicitly empty filter matches empty actors, not NULL.
+  Since-days accepts 0..106751 and binds a UTC cutoff computed from the caller's
+  current second minus that many 24-hour days; 0 means since the current second.
+  Both filters apply before the unchanged newest-created_at/id ordering and
+  limit. Invalid UTF-8, negative/overflowing days and invalid/oversized limits
+  refuse. JSON retains all fields and the five nullable provenance fields'
+  existing NULL/empty-string convention; human text still collapses whitespace.
+  Empty results remain `{"notes": []}` / `no session notes`.
+- `command list` returns all recorded kinds by newest last-run time, then enum
+  order (build, test, run, lint, other). Each row carries command line, last exit
+  and time, success count and failure count. Empty results are `{"commands": []}`
+  / `no recorded commands`. Existing command get remains supported.
+- `command verify <kind> <cmdline> --exit-code <n> [--actor <actor>]` records an
+  observed result, never executes the supplied command. Explicit --exit-code
+  is required even for success. Existing `command record ... [--exit <n>]`
+  keeps its default exit 0. Both use the same kind-keyed SQL upsert, atomic
+  counter increments, actor normalization, commit message and one-commit
+  operation; the tagged memhub multiple-command-row model is not introduced.
+  Confirmed hashes/identities survive late errors and an unknown owner reply
+  retains its inspection remedy without replay. The ordinary command writer
+  can commit preexisting dirty working changes; this slice adds no RequireClean
+  gate and does not claim the read-preservation policy for command writes.
+
+The note/narrative readers now use `AS OF 'main'`; command get retains that
+policy and command list shares it. Each SELECT reads committed main, not dirty
+or proposal rows; separate calls do not claim a shared atomic snapshot. These
+reads do not change main, branch heads, working/staged data, configuration,
+derived indexes or queued MCP notes. The selected CLI reads check the existing
+store before Open, so absent memory is refused without creating a database.
+Schema/identity/routing validation, ownership, actor/deny/review rules, current
+writer outcomes and MCP note batching remain. No global lane, file-input feature,
+dependency, durable schema, new MCP registration, doctor/ingest/audit/metrics
+feature or full M5 completion is introduced.
+
+Native regression evidence: before the shared reader fix, both direct and
+authenticated-owner `note list`, `state show` and `arch show` returned fixture
+dirty text; command get correctly retained its committed value. The fixture
+pins one native connection while preparing separate pending/dirty controls and
+checks the original main hash. A separate max-int limit probe reproduced
+`panic: runtime error: makeslice: cap out of range` in the pinned
+go-mysql-server `topRowsIter.computeTopRows`: it allocates `limit+1` rows before
+reading data. The existing 200000-row IPC ceiling is therefore also the shared
+note/history limit ceiling. Larger values refuse before native SQL; neither
+the IPC default nor its configurable result bound changes.
+
+Complete changed-element inventory and preservation scope:
+
+- `internal/memory/memory.go`: `Notes` keeps its public signature and delegates
+  to new `NotesFiltered`; the former working-set read and unrestricted positive
+  limit become committed-main reads with the bound above. `NotesFiltered` owns
+  literal bound actor/cutoff parameters and preserves scanning of all note
+  fields/NULLs and timestamp/id ordering. `Narrative` delegates to new
+  `NarrativeHistory(..., 1)` and retains its not-found result; history reuses
+  `NarrativeKind.table`'s two constant identifiers and the existing full row
+  shape. New `Commands` and private `commands` share the prior command scan
+  with `Command`; get retains kind normalization, not-found and committed-main
+  semantics, with complete row iteration/close errors. These restrictions bind
+  these named readers and their callers, not all SQL readers. `RecordCommand`,
+  commandMu, `write`, SetNarrative, note preparation/commit/provenance and every
+  other lane writer retain their implementations. Their OpenCode/MCP/owner
+  callers inherit no new write policy or queue action.
+- `cmd/memdolt/lanes.go`: new `storeFlags.runLaneRead` reuses
+  `RequireExistingTransferStore` then existing run/owner/schema/close handling.
+  Only note list, command get/list and state/arch show/history use this new
+  pre-open check; ordinary `run`/`runStore` writers and other command families
+  retain their former behavior. `newNoteListCommand` adds the two flags and
+  default change while preserving human/JSON note output. `newCommandCommand`
+  registers list/verify; `newCommandRecordCommand(verb)` constructs both writer
+  spellings over unchanged runLaneWrite/emitLaneWrite and the same RecordCommand.
+  `newCommandGetCommand` adds only the existing-store read guard; new
+  `newCommandListCommand` reuses commandLine/emit. `newNarrativeCommand` adds
+  history and explains show/history; `newNarrativeShowCommand` adds the guard;
+  new `newNarrativeHistoryCommand` owns limit and full-body history rendering.
+  Existing root registration, set/add/bodyArg, actor flags and writer results
+  remain. No new stdin/file behavior or output-helper contract is introduced.
+- `internal/store/store.go`: adds only shared `DefaultMaxRows = 200000`.
+  `internal/storeipc/storeipc.go` changes its existing DefaultMaxRows constant
+  to an alias of that value. Store/Backend interfaces, Query validation,
+  endpoint allow-list/authentication, time argument encoding, configurable
+  MaxRows and no-replay/result rules are unchanged. The constant is not a
+  universal Store.Query limit; only the named note/history readers enforce it
+  on requested limits, while IPC retains its existing result-set bound.
+- New `cmd/memdolt/lane_reads_test.go` owns native fixture rows, history/note
+  output/filter/limit checks, dirty/proposal roots, input refusal, missing-store
+  preservation and production queued-note checks. New `command_verify_test.go`
+  exercises direct/owner counters, attribution, list/get ordering, deny refusal,
+  no command execution and a real committed write whose owner reply is lost.
+  `confirmed_result_test.go` extends its existing owner late-readback and direct
+  output-failure cases to verify, adjusting only expected commit/counter totals.
+  `lanes_test.go` adds the new operations to its existing stale-schema refusal
+  cases. Existing lane tests/fixtures remain; disposable stores are used and
+  no live memory, host installation or frozen golden assertion is changed.
+- README's everyday commands, AGENTS' direct-lane record and this PRD section
+  retain matching before/after scope, defaults and links. Existing documented
+  writer/actor/stdin contracts still hold. Broader §12 parity remains separate.
+
 **Trusted human repository facts/decisions (issue #139).** Before this slice,
 §12's CRUD port and M5 deferral still included the ordinary human commands.
 After it, these commands ship with `--dir` and `--json` on an initialized

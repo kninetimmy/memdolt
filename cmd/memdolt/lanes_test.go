@@ -450,6 +450,8 @@ func TestDirectAndReviewLanesRefuseAStaleSchema(t *testing.T) {
 	for _, args := range [][]string{
 		{"task", "add", "must migrate first", "--dir", base},
 		{"review", "list", "--dir", base},
+		{"note", "list", "--dir", base}, {"state", "history", "--dir", base}, {"arch", "history", "--dir", base},
+		{"command", "list", "--dir", base}, {"command", "verify", "test", "go test ./...", "--exit-code", "0", "--dir", base},
 	} {
 		err := runMemdoltErr(t, args...)
 		for _, want := range []string{"schema v" + stale, "memdolt init", "missing migrations"} {

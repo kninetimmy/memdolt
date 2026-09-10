@@ -76,6 +76,15 @@ func (f *storeFlags) run(cmd *cobra.Command, fn func(context.Context, *memory.La
 	})
 }
 
+// runLaneRead keeps note, command and narrative reads from creating an absent
+// database through Open. Writer routing and other command families stay separate.
+func (f *storeFlags) runLaneRead(cmd *cobra.Command, fn func(context.Context, *memory.Lanes) error) error {
+	if err := localdolt.RequireExistingTransferStore(f.dir); err != nil {
+		return err
+	}
+	return f.run(cmd, fn)
+}
+
 // runLaneWrite closes the selected store before reporting a direct write, so
 // close failures cannot hide behind an already-emitted success.
 func runLaneWrite[T any](cmd *cobra.Command, flags *storeFlags, write func(context.Context, *memory.Lanes) (T, string, error)) (T, string, error) {
@@ -394,14 +403,28 @@ func newNoteAddCommand() *cobra.Command {
 func newNoteListCommand() *cobra.Command {
 	var flags storeFlags
 	var limit int
+	var actor string
+	var sinceDays int64
 
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List recent session notes, newest first",
-		Args:  cobra.NoArgs,
+		Short: "List committed session notes, newest first",
+		Long: "List committed main notes by creation time and id, newest first. --actor\n" +
+			"matches the exact stored actor, without normalization. --since-days uses\n" +
+			"a rolling UTC horizon; 0 means since the current second. Both filters\n" +
+			"combine before the positive limit. Reads never flush queued MCP notes.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
-				notes, err := lanes.Notes(ctx, limit)
+			var actorFilter *string
+			var daysFilter *int64
+			if cmd.Flags().Changed("actor") {
+				actorFilter = &actor
+			}
+			if cmd.Flags().Changed("since-days") {
+				daysFilter = &sinceDays
+			}
+			return flags.runLaneRead(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
+				notes, err := lanes.NotesFiltered(ctx, limit, actorFilter, daysFilter)
 				if err != nil {
 					return err
 				}
@@ -424,7 +447,9 @@ func newNoteListCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().IntVar(&limit, "limit", 20, "how many notes to list")
+	cmd.Flags().IntVar(&limit, "limit", 25, fmt.Sprintf("how many notes to list (1 through %d)", store.DefaultMaxRows))
+	cmd.Flags().StringVar(&actor, "actor", "", "exact stored actor, for example agent:codex")
+	cmd.Flags().Int64Var(&sinceDays, "since-days", 0, "include notes from the last DAYS days (0 through 106751)")
 
 	return flags.bind(cmd)
 }
@@ -451,18 +476,21 @@ func newCommandCommand() *cobra.Command {
 			"build command and one test command per project, so recording replaces the\n" +
 			"stored command line and adds a tick to its success or failure tally.",
 	}
-	cmd.AddCommand(newCommandRecordCommand(), newCommandGetCommand())
+	cmd.AddCommand(newCommandRecordCommand("record"), newCommandRecordCommand("verify"), newCommandGetCommand(), newCommandListCommand())
 	return cmd
 }
 
-func newCommandRecordCommand() *cobra.Command {
+func newCommandRecordCommand(verb string) *cobra.Command {
 	var flags storeFlags
 	var exitCode int
 
 	cmd := &cobra.Command{
-		Use:   "record <kind> <cmdline>",
+		Use:   verb + " <kind> <cmdline>",
 		Short: "Record how a command of one kind ran",
-		Args:  cobra.ExactArgs(2),
+		Long: "Record an observed command line and exit status; this does not execute\n" +
+			"the command. Update its kind's success/failure counters in one attributed\n" +
+			"memory commit. verify requires an explicit --exit-code; record keeps --exit.",
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			command, commit, err := runLaneWrite(cmd, &flags, func(ctx context.Context, lanes *memory.Lanes) (memory.Command, string, error) {
 				return lanes.RecordCommand(ctx, args[0], args[1], exitCode)
@@ -472,7 +500,14 @@ func newCommandRecordCommand() *cobra.Command {
 				[]string{fmt.Sprintf("recorded %s (commit %s)", commandLine(command), commit)}, err)
 		},
 	}
-	cmd.Flags().IntVar(&exitCode, "exit", 0, "the exit status the run finished with")
+	exitFlag := "exit"
+	if verb == "verify" {
+		exitFlag = "exit-code"
+	}
+	cmd.Flags().IntVar(&exitCode, exitFlag, 0, "the exit status the run finished with")
+	if verb == "verify" {
+		_ = cmd.MarkFlagRequired(exitFlag)
+	}
 
 	return flags.bindLaneWriter(cmd)
 }
@@ -485,7 +520,7 @@ func newCommandGetCommand() *cobra.Command {
 		Short: "Show the recorded command of one kind",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
+			return flags.runLaneRead(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
 				command, err := lanes.Command(ctx, args[0])
 				if err != nil {
 					return err
@@ -495,6 +530,37 @@ func newCommandGetCommand() *cobra.Command {
 		},
 	}
 
+	return flags.bind(cmd)
+}
+
+func newCommandListCommand() *cobra.Command {
+	var flags storeFlags
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List committed command kinds, newest run first",
+		Long: "List all recorded kinds at committed main, newest run first, with the\n" +
+			"schema's kind order breaking ties: build, test, run, lint, other. Includes\n" +
+			"command line, last exit/time and success/failure counters.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return flags.runLaneRead(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
+				commands, err := lanes.Commands(ctx)
+				if err != nil {
+					return err
+				}
+				lines := make([]string, 0, len(commands))
+				for _, command := range commands {
+					lines = append(lines, commandLine(command))
+				}
+				if len(lines) == 0 {
+					lines = []string{"no recorded commands"}
+				}
+				return emit(cmd, struct {
+					Commands []memory.Command `json:"commands"`
+				}{commands}, lines)
+			})
+		},
+	}
 	return flags.bind(cmd)
 }
 
@@ -515,9 +581,10 @@ func newNarrativeCommand(kind memory.NarrativeKind, subject string) *cobra.Comma
 		Long: "The " + subject + " narrative is a direct lane (PRD §3.1). Setting it appends a\n" +
 			"new version rather than overwriting the old one, because the history of how\n" +
 			"the project described itself is a product feature (§3.2): dolt_log over the\n" +
-			"narrative table is that timeline. Reading it returns the newest version.",
+			"narrative table is that timeline. show returns the newest committed version;\n" +
+			"history lists the appended versions still present at committed main.",
 	}
-	cmd.AddCommand(newNarrativeSetCommand(kind, subject), newNarrativeShowCommand(kind, subject))
+	cmd.AddCommand(newNarrativeSetCommand(kind, subject), newNarrativeShowCommand(kind, subject), newNarrativeHistoryCommand(kind, subject))
 	return cmd
 }
 
@@ -555,7 +622,7 @@ func newNarrativeShowCommand(kind memory.NarrativeKind, subject string) *cobra.C
 		Short: "Print the current " + subject,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return flags.run(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
+			return flags.runLaneRead(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
 				narrative, err := lanes.Narrative(ctx, kind)
 				if err != nil {
 					return err
@@ -567,5 +634,39 @@ func newNarrativeShowCommand(kind memory.NarrativeKind, subject string) *cobra.C
 		},
 	}
 
+	return flags.bind(cmd)
+}
+
+func newNarrativeHistoryCommand(kind memory.NarrativeKind, subject string) *cobra.Command {
+	var flags storeFlags
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "history",
+		Short: "List committed versions of the " + subject + ", newest first",
+		Long: "List appended narrative rows at committed main by creation time and id,\n" +
+			"newest first. Include each full body, id, canonical/raw actor and creation\n" +
+			"time for the appended versions still present in the narrative table.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return flags.runLaneRead(cmd, func(ctx context.Context, lanes *memory.Lanes) error {
+				history, err := lanes.NarrativeHistory(ctx, kind, limit)
+				if err != nil {
+					return err
+				}
+				lines := make([]string, 0, len(history))
+				for _, narrative := range history {
+					lines = append(lines, fmt.Sprintf("%s  %s  %s (raw %q)\n%s",
+						stamp(narrative.CreatedAt), narrative.ID, narrative.Actor, narrative.ActorRaw, narrative.Body))
+				}
+				if len(lines) == 0 {
+					lines = []string{"no " + string(kind) + " history"}
+				}
+				return emit(cmd, struct {
+					History []memory.Narrative `json:"history"`
+				}{history}, lines)
+			})
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 25, fmt.Sprintf("how many versions to list (1 through %d)", store.DefaultMaxRows))
 	return flags.bind(cmd)
 }

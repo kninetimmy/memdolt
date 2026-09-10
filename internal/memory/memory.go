@@ -25,6 +25,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -481,18 +482,44 @@ func noteText(note Note) []string {
 		note.ProviderID, note.ModelID, note.Variant}
 }
 
-// Notes lists the most recent session notes, newest first. A limit of zero
-// or less is refused rather than read as "no limit": an unbounded read of
+// Notes lists the most recent committed session notes, newest first. A limit
+// of zero or less is refused rather than read as "no limit": an unbounded read of
 // a table that grows every session is not something a caller asks for by
-// leaving a flag at its zero value.
+// leaving a flag at its zero value. Before #169 it read the working set and
+// accepted any positive limit. It now uses committed main and the existing
+// IPC row ceiling to prevent the native sorter allocating an oversized LIMIT.
 func (l *Lanes) Notes(ctx context.Context, limit int) (notes []Note, err error) {
-	if limit <= 0 {
-		return nil, fmt.Errorf("note limit %d must be positive", limit)
-	}
+	return l.NotesFiltered(ctx, limit, nil, nil)
+}
 
-	rows, err := l.store.Query(ctx,
-		"SELECT id, actor, actor_raw, text, created_at, session_id, agent_id, provider_id, model_id, variant FROM session_notes "+
-			"ORDER BY created_at DESC, id DESC LIMIT ?", limit)
+// NotesFiltered retains Notes' ordering and nullable provenance. Actor matches
+// the exact stored bytes, without writer normalization or SQL collation folds.
+// SinceDays is a rolling UTC horizon; values that overflow a duration refuse.
+func (l *Lanes) NotesFiltered(ctx context.Context, limit int, actor *string, sinceDays *int64) (notes []Note, err error) {
+	if limit <= 0 || limit > store.DefaultMaxRows {
+		return nil, fmt.Errorf("note limit %d must be positive and no greater than %d", limit, store.DefaultMaxRows)
+	}
+	query := "SELECT id, actor, actor_raw, text, created_at, session_id, agent_id, provider_id, model_id, variant FROM session_notes AS OF 'main' WHERE 1 = 1"
+	args := []any{}
+	if actor != nil {
+		if !utf8.ValidString(*actor) {
+			return nil, errors.New("note actor filter must be valid UTF-8")
+		}
+		query += " AND BINARY actor = BINARY ?"
+		args = append(args, *actor)
+	}
+	if sinceDays != nil {
+		const maxDays = math.MaxInt64 / int64(24*time.Hour)
+		if *sinceDays < 0 || *sinceDays > maxDays {
+			return nil, fmt.Errorf("note since-days must be between 0 and %d", maxDays)
+		}
+		query += " AND created_at >= ?"
+		args = append(args, now().Add(-time.Duration(*sinceDays)*24*time.Hour))
+	}
+	query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := l.store.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("read session notes: %w", err)
 	}
@@ -605,27 +632,49 @@ func (l *Lanes) Command(ctx context.Context, kind string) (command Command, err 
 		return Command{}, err
 	}
 
-	rows, err := l.store.Query(ctx,
-		"SELECT kind, cmdline, last_exit_code, last_run_at, success_count, fail_count "+
-			"FROM commands AS OF 'main' WHERE kind = ?", kind)
+	commands, err := l.commands(ctx, kind)
 	if err != nil {
 		return Command{}, fmt.Errorf("read %s command: %w", kind, err)
 	}
-	defer func() { err = errors.Join(err, rows.Close()) }()
-
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return Command{}, fmt.Errorf("read %s command: %w", kind, err)
-		}
+	if len(commands) == 0 {
 		return Command{}, fmt.Errorf("no %s command recorded: %w", kind, ErrNotFound)
 	}
-	var cmdline sql.NullString
-	if err := rows.Scan(&command.Kind, &cmdline, &command.LastExitCode, &command.LastRunAt,
-		&command.SuccessCount, &command.FailCount); err != nil {
-		return Command{}, fmt.Errorf("read %s command: %w", kind, err)
+	return commands[0], nil
+}
+
+// Commands lists committed command kinds by newest run, with enum order as
+// the timestamp tie-breaker. The schema permits at most one row per kind.
+func (l *Lanes) Commands(ctx context.Context) ([]Command, error) {
+	return l.commands(ctx, "")
+}
+
+func (l *Lanes) commands(ctx context.Context, kind string) (commands []Command, err error) {
+	query := "SELECT kind, cmdline, last_exit_code, last_run_at, success_count, fail_count FROM commands AS OF 'main'"
+	args := []any{}
+	if kind != "" {
+		query += " WHERE kind = ?"
+		args = append(args, kind)
 	}
-	command.Cmdline = nullText(cmdline)
-	return command, nil
+	rows, err := l.store.Query(ctx, query+" ORDER BY last_run_at DESC, kind", args...)
+	if err != nil {
+		return nil, fmt.Errorf("read commands: %w", err)
+	}
+	defer func() { err = errors.Join(err, rows.Close()) }()
+	commands = []Command{}
+	for rows.Next() {
+		var command Command
+		var cmdline sql.NullString
+		if err := rows.Scan(&command.Kind, &cmdline, &command.LastExitCode, &command.LastRunAt,
+			&command.SuccessCount, &command.FailCount); err != nil {
+			return nil, fmt.Errorf("read commands: %w", err)
+		}
+		command.Cmdline = nullText(cmdline)
+		commands = append(commands, command)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read commands: %w", err)
+	}
+	return commands, nil
 }
 
 // NarrativeKind names one of the two narrative tables.
@@ -705,36 +754,53 @@ func (l *Lanes) SetNarrative(ctx context.Context, kind NarrativeKind, body strin
 	return narrative, hash, ConfirmedWriteError(err, hash, "`memdolt "+string(kind)+" show` and Dolt history for narrative "+narrative.ID)
 }
 
-// Narrative returns the current body of one narrative: the newest row of
-// its table. A narrative nobody has written yet is ErrNotFound rather than
+// Narrative returns the current body of one narrative: the newest committed row
+// of its table. A narrative nobody has written yet is ErrNotFound rather than
 // an empty body, so "not set" and "set to nothing" stay distinguishable.
 func (l *Lanes) Narrative(ctx context.Context, kind NarrativeKind) (narrative Narrative, err error) {
-	table, err := kind.table()
+	history, err := l.NarrativeHistory(ctx, kind, 1)
 	if err != nil {
 		return Narrative{}, err
+	}
+	if len(history) == 0 {
+		return Narrative{}, fmt.Errorf("no %s narrative recorded: %w", kind, ErrNotFound)
+	}
+	return history[0], nil
+}
+
+// NarrativeHistory lists appended versions at committed main. Before #169,
+// Narrative read the working set; both readers now exclude dirty/proposal data.
+func (l *Lanes) NarrativeHistory(ctx context.Context, kind NarrativeKind, limit int) (history []Narrative, err error) {
+	table, err := kind.table()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > store.DefaultMaxRows {
+		return nil, fmt.Errorf("%s history limit %d must be positive and no greater than %d", kind, limit, store.DefaultMaxRows)
 	}
 
 	rows, err := l.store.Query(ctx,
 		"SELECT id, body, actor, actor_raw, created_at FROM "+table+
-			" ORDER BY created_at DESC, id DESC LIMIT 1")
+			" AS OF 'main' ORDER BY created_at DESC, id DESC LIMIT ?", limit)
 	if err != nil {
-		return Narrative{}, fmt.Errorf("read the %s narrative: %w", kind, err)
+		return nil, fmt.Errorf("read the %s narrative: %w", kind, err)
 	}
 	defer func() { err = errors.Join(err, rows.Close()) }()
 
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return Narrative{}, fmt.Errorf("read the %s narrative: %w", kind, err)
+	history = []Narrative{}
+	for rows.Next() {
+		narrative := Narrative{Kind: kind}
+		var body, actor, actorRaw sql.NullString
+		if err := rows.Scan(&narrative.ID, &body, &actor, &actorRaw, &narrative.CreatedAt); err != nil {
+			return nil, fmt.Errorf("read the %s narrative: %w", kind, err)
 		}
-		return Narrative{}, fmt.Errorf("no %s narrative recorded: %w", kind, ErrNotFound)
+		narrative.Body, narrative.Actor, narrative.ActorRaw = nullText(body), nullText(actor), nullText(actorRaw)
+		history = append(history, narrative)
 	}
-	narrative.Kind = kind
-	var body, actor, actorRaw sql.NullString
-	if err := rows.Scan(&narrative.ID, &body, &actor, &actorRaw, &narrative.CreatedAt); err != nil {
-		return Narrative{}, fmt.Errorf("read the %s narrative: %w", kind, err)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the %s narrative: %w", kind, err)
 	}
-	narrative.Body, narrative.Actor, narrative.ActorRaw = nullText(body), nullText(actor), nullText(actorRaw)
-	return narrative, nil
+	return history, nil
 }
 
 // validate reports whether value is one of the allowed values, naming what
