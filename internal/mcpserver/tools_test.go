@@ -160,6 +160,79 @@ func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
 	}
 }
 
+func TestLaneNullableOutputsThroughMCP(t *testing.T) {
+	ctx := context.Background()
+	base, st := initializedToolStore(t)
+	if _, err := st.Commit(ctx, store.CommitRequest{Author: memory.UserActor.CommitAuthor(), Message: "nullable command", NoText: true,
+		Statements: []store.Statement{{SQL: "INSERT INTO commands (kind) VALUES ('build')"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := New("test")
+	tools := RegisterTools(server, base, testElicitationBackend(base, st))
+	client, serverSession := connect(t, server, &mcp.Implementation{Name: "Codex", Version: "1"}, false)
+	t.Cleanup(func() {
+		closeSessions(t, client, serverSession)
+		if err := tools.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	listed, err := client.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+		if tool.Name != "get_command" && tool.Name != "record_command" && tool.Name != "log_session_note" {
+			continue
+		}
+		raw, err := json.Marshal(tool.OutputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Properties map[string]json.RawMessage
+			}
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		object := "command"
+		fields := map[string]string{"cmdline": "string", "lastExitCode": "integer", "lastRunAt": "string", "successCount": "integer", "failCount": "integer"}
+		if tool.Name == "log_session_note" {
+			object, fields = "note", map[string]string{"createdAt": "string"}
+		}
+		for field, valueType := range fields {
+			var property struct{ Type []string }
+			if err := json.Unmarshal(schema.Properties[object].Properties[field], &property); err != nil || len(property.Type) != 2 || !slices.Contains(property.Type, "null") || !slices.Contains(property.Type, valueType) {
+				t.Fatalf("%s.%s schema does not preserve nullable %s output: %s (%v)", tool.Name, field, valueType, raw, err)
+			}
+		}
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, m3ToolNames) {
+		t.Fatal("nullable lane output changed tool registration")
+	}
+	command := callAs[commandOutput](t, client, "get_command", map[string]any{"kind": "build"}).Command
+	if command.Kind != "build" || command.Cmdline != nil || command.LastExitCode != nil || command.LastRunAt != nil || command.SuccessCount != nil || command.FailCount != nil {
+		t.Fatal("MCP get invented observations for native NULLs")
+	}
+	written := callAs[commandWriteOutput](t, client, "record_command", map[string]any{"kind": "build", "cmdline": "go build ./...", "exit_code": 0})
+	if written.Commit == "" || written.Command.Cmdline == nil || *written.Command.Cmdline != "go build ./..." || written.Command.LastExitCode == nil || *written.Command.LastExitCode != 0 || written.Command.LastRunAt == nil || written.Command.SuccessCount != nil || written.Command.FailCount != nil {
+		t.Fatal("MCP write lost the observation or changed existing NULL counter arithmetic")
+	}
+	failed := callAs[commandWriteOutput](t, client, "record_command", map[string]any{"kind": "test", "cmdline": "go test ./...", "exit_code": 5}).Command
+	if failed.LastExitCode == nil || *failed.LastExitCode != 5 || failed.SuccessCount == nil || *failed.SuccessCount != 0 || failed.FailCount == nil || *failed.FailCount != 1 {
+		t.Fatal("MCP writer did not return known zero/one counter increments")
+	}
+	noted := callAs[noteOutput](t, client, "log_session_note", map[string]any{"text": "prepared notes retain real timestamps"})
+	if !noted.Queued || noted.Note.CreatedAt == nil || noted.Note.CreatedAt.IsZero() {
+		t.Fatal("MCP note lost its queued state or known timestamp")
+	}
+}
+
 func TestListFactsTreatsPrefixCharactersLiterallyAndLargeHorizonDoesNotOverflow(t *testing.T) {
 	ctx := context.Background()
 	base, st := initializedToolStore(t)

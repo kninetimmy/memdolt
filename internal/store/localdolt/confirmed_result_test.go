@@ -114,7 +114,7 @@ func TestConfirmedDirectLanesSurviveNativeFinalization(t *testing.T) {
 			}
 			command, hash, err := lanes.RecordCommand(ctx, "test", "go test ./...", 0)
 			requireConfirmed(t, hash, err)
-			if command.Kind != "test" || command.SuccessCount != 1 {
+			if command.Kind != "test" || command.SuccessCount == nil || *command.SuccessCount != 1 {
 				t.Fatal("confirmed command read-back lost")
 			}
 			state, hash, err := lanes.SetNarrative(ctx, memory.StateNarrative, "confirmed state")
@@ -216,12 +216,12 @@ func TestConfirmedCommandRetainsIdentityAfterReadbackFailure(t *testing.T) {
 			command, hash, err := memory.New(confirmedStore{Store: st, readFailure: failure}, memory.UserActor).
 				RecordCommand(context.Background(), "build", "go build ./...", 0)
 			requireConfirmed(t, hash, err)
-			if command.Kind != "build" || command.SuccessCount != 0 || !strings.Contains(err.Error(), "read back") {
+			if command.Kind != "build" || command.Cmdline != nil || command.LastExitCode != nil || command.LastRunAt != nil || command.SuccessCount != nil || command.FailCount != nil || !strings.Contains(err.Error(), "read back") {
 				t.Fatalf("read-back failure claimed unknown totals: %+v %v", command, err)
 			}
 			st = reopenConfirmedStore(t, st)
 			persisted, err := memory.New(st, memory.UserActor).Command(context.Background(), "build")
-			if err != nil || persisted.SuccessCount != 1 {
+			if err != nil || persisted.SuccessCount == nil || *persisted.SuccessCount != 1 {
 				t.Fatalf("committed command missing: %+v %v", persisted, err)
 			}
 		})

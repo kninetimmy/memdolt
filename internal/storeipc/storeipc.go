@@ -71,7 +71,7 @@ const (
 
 	// DefaultMaxRows bounds a result set. Memory-scale tables (PRD §8.1
 	// puts the corpus at 10³–10⁴ rows) fit inside it with room to spare.
-	DefaultMaxRows = 200_000
+	DefaultMaxRows = store.DefaultMaxRows
 
 	// DefaultMaxRequestBytes bounds a request body.
 	DefaultMaxRequestBytes = 4 << 20

@@ -71,6 +71,7 @@ func TestConfirmedOwnerCLILanesRetainLateResults(t *testing.T) {
 	for _, args := range [][]string{
 		{"task", "add", "confirmed owner task"}, {"task", "done"}, {"task", "block"},
 		{"note", "add", "confirmed owner note"}, {"command", "record", "test", "go test ./..."},
+		{"command", "verify", "test", "go test ./...", "--exit-code", "0"},
 		{"state", "set", "confirmed owner state"}, {"arch", "set", "confirmed owner architecture"},
 		{"doc", "add", file}, {"doc", "rm"},
 	} {
@@ -113,7 +114,7 @@ func TestConfirmedOwnerCLILanesRetainLateResults(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if storeCommitCount(t, base) != before+10 {
+	if storeCommitCount(t, base) != before+11 {
 		t.Fatal("owner path duplicated/lost a committed write")
 	}
 	tasks := decodeJSON[taskList](t, runMemdolt(t, "task", "list", "--status", "all", "--dir", base, "--json"))
@@ -121,7 +122,7 @@ func TestConfirmedOwnerCLILanesRetainLateResults(t *testing.T) {
 		t.Fatal("reopened owner task lost final status")
 	}
 	command := decodeJSON[memory.Command](t, runMemdolt(t, "command", "get", "test", "--dir", base, "--json"))
-	if command.SuccessCount != 1 {
+	if command.SuccessCount == nil || *command.SuccessCount != 2 {
 		t.Fatal("owner read-back failure lost command counter")
 	}
 }
@@ -130,6 +131,7 @@ func TestConfirmedDirectCLIOutputFailureNamesCommitAfterClose(t *testing.T) {
 	for _, args := range [][]string{
 		{"task", "add", "confirmed direct task"}, {"note", "add", "confirmed direct note"},
 		{"command", "record", "build", "go build ./..."}, {"state", "set", "confirmed direct state"}, {"arch", "set", "confirmed direct architecture"},
+		{"command", "verify", "build", "go build ./...", "--exit-code", "0"},
 	} {
 		t.Run(args[0], func(t *testing.T) {
 			base := initStore(t)
