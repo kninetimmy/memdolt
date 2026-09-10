@@ -40,6 +40,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newEvalCommand())
 	root.AddCommand(newExportCommand())
 	root.AddCommand(newGlobalCommand())
+	root.AddCommand(newHistoryCommand())
 	root.AddCommand(newHubCommand())
 	root.AddCommand(newImportCommand())
 	root.AddCommand(newIndexCommand())

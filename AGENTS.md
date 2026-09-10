@@ -19,6 +19,21 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**Native memory history (issue #173).** Before this slice, top-level memory
+history/blame/as-of remained deferred and RegisterTools exposed 22 names.
+After it, `history fact <id>`, `history decision <id>`, `history state`,
+`history arch` and one MCP `history` tool share native committed-main ancestry,
+complete nullable row images, real parent/commit changes and distinct native
+author/committer metadata. `--as-of`/`as_of` require a full verified ancestor
+hash; limits default to 25 and accept 1..200000 change rows. Appended narrative
+version listings retain their earlier behavior. The [PRD record](docs/prd/memdolt-prd.md#native-memory-history-issue-173)
+specifies every output, changed file/symbol, reused seam and preserved boundary.
+Only History and its CLI/owner/MCP callers gain these restrictions; ordinary
+Store.Query, retrieval provenance, imported source metadata, queue/review rules
+and the earlier 22 tool inputs remain. RegisterTools now exposes 23 tools.
+No dependency graph, durable schema, global lane, Git ingestion or installation
+changes are introduced. Native history is not full M5 acceptance.
+
 **CLI file bodies (issue #171).** Before this slice, note add, state set,
 arch set and verified OpenCode wrap-up-note accepted argument/stdin bodies
 only. After it, all four also accept `--from-file <path>`, mutually exclusive

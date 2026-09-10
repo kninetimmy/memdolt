@@ -89,8 +89,9 @@ func TestCoreSkillTemplatesMatchAcrossHostsAndUseImplementedTools(t *testing.T) 
 		}
 		// Before #155 this list also forbade doc_add and repo_status even
 		// though both were implemented. Only genuinely deferred tools remain.
+		// Before #173 history was deferred; its native reader now ships.
 		for _, deferredTool := range []string{
-			"`history`", "`archive_transcript`",
+			"`archive_transcript`",
 		} {
 			if strings.Contains(text, deferredTool) {
 				t.Errorf("%s invokes deferred tool %s", path, deferredTool)
