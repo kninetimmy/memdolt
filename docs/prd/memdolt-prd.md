@@ -805,6 +805,12 @@ punctuation-only queries are refused before search SQL. An explicit
 `file:<path>` request fails loudly with the M5 code-index/git-ingest remedy;
 it does not pretend that a missing history corpus produced an empty match.
 
+Before #174 that refusal remained the implemented behavior. After it, the
+explicit Git-history ingestion and cached file-search surface in §9 replaces
+the refusal, with honest empty results for missing cached history. Explicit
+decision prefixes and unindexed decision fallback retain their existing Dolt
+FULLTEXT route, output fields and ranking.
+
 `memdolt eval retrieval [--golden <path>] [--mode hybrid|fts]` loads the
 committed version-1 golden format and runs every `match` and `empty` query
 through the same production `retrieval.Recall` path as the CLI. Its human and
@@ -849,7 +855,7 @@ Direct port of memhub's design; storage = local SQLite via `modernc.org/sqlite` 
 - Chunkers: tree-sitter (Go bindings) for the same 7 grammars — rust, c#, java, ts, js, python, go — with memhub's chunking rules (top-level items, `Type::method`, container header-chunks with excised bodies, doc-comment folding, LF normalization); 50-line/4000-byte window fallback.
 - Fusion knobs `[code_index]`: fts 0.5 / vector 0.5 / `test_path_penalty` 0.90; reranker off by default (memhub decisions 122/123 carry over); lazy refresh before every query.
 - Returns ranked `{path, start_line, end_line, symbol, kind, score, snippet≤6 lines}` — breadcrumbs, never full files.
-- Schema-version-mismatch = drop + rebuild (index is regenerable; `upgrade` is a no-op here).
+- Before #174, schema-version mismatch meant drop + rebuild (the index is regenerable). After it, recognized v1 upgrades to v2 in place and unsupported/foreign schema refuses without replacement; explicit whole-index removal deletes cached history too. Durable `upgrade` remains separate.
 - Git-ingest history tables (`commits/files/commit_files` + `search file:<path>`) live here too (§6.1 note).
 
 **Implemented code-only subset (issue #138).** Before this delivery the bullets
@@ -860,9 +866,36 @@ No history corpus, `search file:` implementation, global store or full-M5
 completion is implied. SQLite remains a pure-Go dependency; the actual seven
 tree-sitter parsers use the already-mandatory cgo build.
 
-`internal/codeindex` never opens/migrates Dolt or routes to its owner. A code
-operation touches only its own SQLite/lock plus tracked source reads; memory
-embeddings, committed/proposed memory, exports and transfers stay separate.
+**Cached Git file history (issue #174).** Before this slice the final Git-history
+bullet and `search file:` remained deferred as recorded above. After it,
+`ingest-git [--since <nonempty-commit-ish>]` supports `--dir`/`--json`, observes
+local committed history through one captured HEAD, and atomically caches Git
+author/author-date/subject and exact file-change metadata in the derived index.
+`--since` selects the resolved revision difference, not a date. Invalid or
+unavailable observations fail; repeated/overlapping ranges do not duplicate
+rows. Raw object validation and NUL framing replace the tag's lossy/quoted-path
+parsing. Configured deny rules and protected paths apply without echoing denied
+contents. Author timestamps sort by parsed instants with full-ID ties; rename
+and copy records attach to destinations and merges compare the first parent.
+
+CLI and existing MCP search route explicit file queries, or cached path-looking
+queries, before any memory access. Missing cached history is empty. Results
+disclose range count/last ingest, author-date semantics, limits and truncation;
+the union of prior ranges can be partial and is never a fresh Git observation.
+These calls neither open Dolt/its owner, read source bodies, load models, ingest
+implicitly nor flush notes. Decision output/ranking/routes and MCP input/names
+remain. The derived v1-to-v2 extension preserves source/chunk/vector rows, source
+refresh preserves historical paths, and `code rm` removes the whole recognized
+cache. Unknown/foreign/unsupported state refuses. [The complete Git-history guide](../git-history.md)
+records every reached symbol/file, changed restriction, failure outcome, test,
+count and writer/reader boundary. No durable schema, dependency, global history,
+scoring rule, frozen corpus, threshold or full-M5 completion is added.
+
+`internal/codeindex` never opens/migrates Dolt or routes to its owner. Before
+#174 its operations touched only its own SQLite/lock plus tracked source reads;
+afterward explicit Git ingestion also reads local committed objects, and cached
+file search reads metadata/path identities only. Memory embeddings,
+committed/proposed memory, exports and transfers stay separate.
 Status creates nothing. A recognized application ID, safe file identity and
 known derived schema bound rebuild/removal; unknown files or unrelated schema
 are retained. DELETE/FULL journaling intentionally replaces tagged WAL/NORMAL
@@ -3257,7 +3290,7 @@ the tagged note/narrative character limits; broader CRUD parity remains separate
 | doctor (19 checks) | port + memdolt-specific checks (LOCK/pidfile/IPC §5.2, remote reachability, schema skew, model presence, empty-recall rate §8.1) |
 | audit md (CLAUDE.md/AGENTS.md linter) | port (pure text tool) |
 | export/import JSON v1 | import kept (migration §15); export kept for interop; neither is the sync path |
-| ingest-git + `search file:` | port into code-index store (§6.1 note) |
+| ingest-git + `search file:` | Before #174, placement design only (§6.1 note); after #174, explicit local derived-cache ingestion and exact cached search ship (§9), with partial-range coverage disclosed. |
 | upgrade (multi-instance registry, skill resync, install manifest, Windows self-replace) | port; Go single-binary + no 250MB embed makes Windows self-replace simpler; skill wrappers for 3 agent CLIs from templates |
 | gc (target/ artifacts) | replaced by `memdolt gc` = Dolt-focused: `dolt gc` scheduling, old-notes retention sweep + periodic `gc --full` (§13.3), model-cache pruning |
 | token accounting (recall proxy, session scraper, tiktoken, calibrate) | port behind config gate, M6 — off by default |

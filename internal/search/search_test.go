@@ -33,11 +33,34 @@ func TestParseDecisionFallbackPrefixesAndRefusals(t *testing.T) {
 		{"", 10, "cannot be empty"},
 		{"decision:", 10, "searchable token"},
 		{"decision: !!!", 10, "searchable token"},
-		{"file:src/main.go", 10, "M5 code-index/git-ingest"},
+		{"file:", 10, "repository-relative path"},
 		{"decision: storage", 0, "greater than zero"},
 	} {
 		if _, err := Parse(test.query, test.limit); err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("Parse(%q, %d) error = %v, want %q", test.query, test.limit, err, test.want)
 		}
+	}
+}
+
+func TestFileHistorySearchParsingPreservesPathsAndDecisionPriority(t *testing.T) {
+	for _, raw := range []string{"file:src/雪 name.go", "file: spaced.go ", "file:dir\\name.go"} {
+		query, err := Parse(raw, 10)
+		if err != nil || query.Matcher != "exact:file-history" || query.Path != strings.ReplaceAll(strings.TrimPrefix(raw, "file:"), "\\", "/") {
+			t.Fatalf("file query=%+v %v", query, err)
+		}
+	}
+	for _, raw := range []string{"decision:src/main.go", "decisions about v1.2"} {
+		query, err := Parse(raw, 10)
+		if err != nil || query.Matcher != "fts:decision" || query.Path != "" {
+			t.Fatalf("decision query=%+v %v", query, err)
+		}
+	}
+	query, err := Parse("src/main.go", 10)
+	if err != nil || query.Path != "src/main.go" || query.Matcher != "fts:decision-fallback" {
+		t.Fatalf("path candidate=%+v %v", query, err)
+	}
+	query, err = Parse("  file:src/main.go", 10)
+	if err != nil || query.Matcher != "exact:file-history" || query.Path != "src/main.go" {
+		t.Fatalf("leading prefix whitespace=%+v %v", query, err)
 	}
 }

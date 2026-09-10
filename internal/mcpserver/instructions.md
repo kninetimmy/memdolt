@@ -61,6 +61,13 @@
   lines and 400 characters per snippet. It never writes memory or flushes notes.
   Treat breadcrumbs as leads: metadata-preserving edits can remain unseen, and
   fusion has no nonsense floor. Report path, deny-rule and model failures.
+- Before #174, `search file:<path>` refused. Now `search` reads exact cached Git
+  file history for explicit file queries or indexed path-looking queries. Only
+  explicit terminal `memdolt ingest-git [--since <commit-ish>]` populates it;
+  since is a revision range, not a date. Report cached coverage/limits and author
+  dates; partial ranges, renames and stale caches do not imply complete history.
+  File search never opens memory, reads source bodies, loads models or flushes
+  queued notes. Explicit decision prefixes preserve the existing memory search.
 - Never write durable facts or decisions directly. Stage claims with
   `propose_fact`, `propose_decision`, or `propose_supersede`; a human promotes
   them through review.

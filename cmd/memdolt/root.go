@@ -43,6 +43,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newHistoryCommand())
 	root.AddCommand(newHubCommand())
 	root.AddCommand(newImportCommand())
+	root.AddCommand(newIngestGitCommand())
 	root.AddCommand(newIndexCommand())
 	root.AddCommand(newInitCommand())
 	root.AddCommand(newLocateCommand())
