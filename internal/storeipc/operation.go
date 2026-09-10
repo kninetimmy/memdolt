@@ -25,6 +25,7 @@ const (
 	opRecallFTS        = "recall_fts"
 	opSearchDecisions  = "search_decisions"
 	opLastChanged      = "last_changed"
+	opHistory          = "history"
 	opCheckWriteText   = "check_write_text"
 	opRecordCommand    = "record_command"
 	opProposeFact      = "propose_fact"
@@ -75,6 +76,7 @@ type Backend interface {
 	CaptureRecall(context.Context, store.RecallSnapshotOptions) (store.RecallSnapshot, error)
 	SearchDecisions(context.Context, string, int) ([]store.DecisionSearchHit, error)
 	LastChanged(context.Context, string, string) (*store.CommitProvenance, error)
+	History(context.Context, localdolt.HistoryOptions) (localdolt.HistoryResult, error)
 	CheckWriteText(context.Context, []string) error
 	ProposeFact(context.Context, localdolt.Proposal, localdolt.Fact) (localdolt.StagedProposal, error)
 	ProposeFactResolution(context.Context, localdolt.Proposal, localdolt.FactSnapshot, localdolt.Fact, localdolt.FactResolution) (localdolt.StagedProposal, error)
@@ -233,6 +235,12 @@ func (h *handler) handleOperation(w http.ResponseWriter, r *http.Request) {
 	var result any
 	var err error
 	switch req.Operation {
+	case opHistory:
+		var args localdolt.HistoryOptions
+		args, err = operationArgs[localdolt.HistoryOptions](req.Args)
+		if err == nil {
+			result, err = h.store.History(ctx, args)
+		}
 	case opCapturePromotion:
 		var args lastChangedArgs
 		args, err = operationArgs[lastChangedArgs](req.Args)

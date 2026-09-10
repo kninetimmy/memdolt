@@ -1,6 +1,17 @@
 # memdolt server instructions v1
 
 - On turn one, read `.memdolt/rendered/PROJECT.md` once for project context.
+- Before #173 native memory history was deferred. Use `history` for committed
+  fact/decision changes by explicit row id, or state/arch evolution without an
+  id. Optional `as_of` takes a full Dolt hash verified in captured main ancestry;
+  `limit` defaults to 25 and accepts 1..200000 change rows. Report captured main
+  and selected revision, nullable current values/blame and before/after images.
+  Native author/committer/date/message are separate from stored source/actor/time;
+  imported timestamps do not imply old native commits. Merge changes identify
+  each parent. Missing current rows can still have deletion history. Existing
+  CLI state/arch history lists appended versions still present, a different
+  view. This tool never flushes notes, exposes unaccepted/dirty memory, or
+  grants review/write authority. See the PRD's issue #173 record for exact fields.
 - Before #163 repository identity/topology were deferred. Now CLI and MCP share
   validated local/clone policy and committed Git-origin identity. Live topology
   refuses. Existing unidentified stores need explicit terminal init adoption

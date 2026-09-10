@@ -1114,6 +1114,14 @@ The later-backed names `locate`, `doc_add`, `render`, `repo_status`,
 first M3 implementation alone, not removal of those tools from the destination
 contract or permission to substitute a stub before its backend lands.
 
+**Native memory history phasing (issue #173).** Before this slice, `history`
+remained one of those absent tools and the combined RegisterTools surface had
+22 names. After it, the real typed `history` tool adds one name, making 23.
+The CLI and tool share the [native history contract](#native-memory-history-issue-173)
+below. Every earlier input/registration, attribution, discovery/cache hint,
+review/queue behavior and retrieval score remains unchanged. This count and
+schema extension bind RegisterTools alone, not arbitrary SDK servers.
+
 Before issue #132, `doc_add` was still one of those absent names. After it,
 the real repository `doc_add` registration initially joined the sixteen tools
 present after #106. After integrating #133, those tools and `render` remain,
@@ -1415,6 +1423,190 @@ The [deployment runbook](../hub-deployment.md) specifies native 1.88.1, credenti
 setup, applied nftables enforcement, preservation, supported platforms and the
 complete structural blast radius. Existing CLI/MCP/transfer behavior stays.
 
+#### Native memory history (issue #173)
+
+Before this delivery, §11.1's `history` tool and §11.2's top-level history CLI
+were deferred. #169's `state history` / `arch history` already listed appended
+versions still present at committed main, ordered by stored creation time/id;
+their display DTO deliberately collapsed nullable prose to an empty string.
+After #173 those listings keep their behavior, while a separate native history
+surface preserves all nullable cells and reports actual additions, edits and
+deletions from Dolt's commit graph. It does not derive a timeline from stored
+timestamps or old rendered files.
+
+CLI selection is `memdolt history fact <id>`, `history decision <id>`,
+`history state` or `history arch`, with `--dir`, `--json`, `--limit <n>` and
+optional `--as-of <full-Dolt-commit-hash>`. Fact/decision selection requires one
+explicit, nonblank UTF-8 row id of at most 26 characters, compared exactly as
+stored; it never resolves keys or titles. Narrative subjects take no id.
+MCP `history` has required `subject` and optional `id`, `as_of`, `limit`.
+Omitting the limit uses 25; explicit positive limits accept 1..200000. Zero,
+negative, excessive, malformed and contradictory selections refuse. CLI and
+MCP explicitly empty as-of selections refuse too.
+
+The result is identical across direct CLI, authenticated owner and MCP:
+
+| Field | Exact meaning |
+|---|---|
+| `subject` | `fact`, `decision`, `state` or `arch` |
+| `id` | Requested fact/decision id; omitted for state/arch |
+| `mainCommit` | One captured immutable committed main hash |
+| `revision` | That main hash, or the verified selected ancestor hash |
+| `current` | Complete row at revision, or JSON null when absent |
+| `blame` | Native last-change commit for current, or null when current is absent |
+| `changes` | Array of native parent-to-commit row differences; empty is `[]` |
+
+Every change contains `commit`, `parent`, `type`, `from`, `to`. The type is
+`added`, `modified`, or `deleted`. From is null for an addition; to is null for
+a deletion. All existing image columns are present, even when a cell is NULL.
+SQL NULL maps to JSON null; other cells are exact native strings, including
+DATETIME's stored `YYYY-MM-DD HH:MM:SS` form. There is no whitespace, actor,
+timestamp or empty-string normalization in this reader. Invalid UTF-8 refuses
+instead of allowing JSON's replacement-character conversion. The image columns
+are exactly the reached fixed-schema columns:
+
+- Facts: `id`, `key`, `value`, `source`, `kind`, `evidence`, `verified_at`,
+  `created_at`, `superseded_by`, and the native generated `live_key`.
+- Decisions: `id`, `title`, `rationale`, `summary`, `alternatives_rejected`,
+  `evidence`, `status`, `source`, `decided_at`, `superseded_by`.
+- State and architecture: `id`, `body`, `actor`, `actor_raw`, `created_at`.
+
+`commit` and `blame` use the same object: `hash`, `author`, `authorEmail`,
+`authorDate`, `committer`, `committerEmail`, `date`, `message`. These are read
+from the native DOLT_LOG columns, with nullable metadata preserved and native
+dates encoded as RFC3339 timestamps with their observed offsets. Neither row
+`source` nor narrative `actor` is substituted for native author/committer.
+Importing a source row with a 2020 timestamp creates a real import commit at
+import time; history reports that native commit plus the old stored metadata,
+not manufactured old commits. A deleted current row still returns its changes
+with current/blame null; a never-present id returns null/null/`[]`.
+
+Changes preserve native DOLT_LOG iteration order. Within a commit, native parent
+order comes first, then row id and native diff type. A merge can show differences
+against each parent, each explicitly identified by `parent`; the same row may
+therefore appear on more than one merge edge. The limit counts change rows,
+including those edges, not commits or appended versions. State/arch changes
+span the whole table. Their current/blame selection is the newest stored
+creation time, then newest id, at revision; dated rows precede undated ones.
+This selection does not imply that the largest stored timestamp is a native
+commit time. Human CLI output labels history subject, captured main, selected
+revision, current and native blame, then prints each complete change object;
+missing values are `null` and an empty timeline says `no changes`.
+
+Only a full lowercase 32-character Dolt hash in captured main's verified native
+ancestry can select historical contents. Names, abbreviated hashes, WORKING,
+unknown hashes and non-ancestor commits refuse before their rows are read.
+An unaccepted proposal or tag target does not become readable by naming its
+hash. A commit which is actually an ancestor remains eligible even if another
+ref also names it. The selected revision's history and blame are restricted to
+its own native ancestry. Native parent membership is verified too; no app-owned
+DAG, audit ledger, traversal cache or general ref/SQL interface is introduced.
+
+The opened repository must have the current committed schema. Historical
+subject tables use the existing fixed column contract, which already existed
+in schema 1; later proposal/note migrations need not exist at the selected past
+revision. Every subject-table shape throughout selected ancestry is checked
+before returning contents, even beyond the requested output limit, so an
+incompatible intermediate schema cannot be hidden by a later repair. Missing
+tables are empty diff sides; an absent selected table refuses. Changed/missing
+columns, unsupported types and changed fact live-key generation refuse with
+the offending revision, without migration or invented images. Native diff
+warnings also refuse: incompatible historical primary-key identities can
+otherwise return no changes despite matching visible column types. These checks
+validate the reached column shape and the fact expression, not every historical
+table, index, constraint, foreign writer or arbitrary native SQL operation.
+
+History serializes with this Store's cooperating writers, captures main once,
+and reads only immutable qualified revisions thereafter. A foreign main movement
+does not relabel that captured revision as the new main; foreign Dolt processes
+do not participate in this mutex. The dedicated SQL session is retired after
+the operation because revision-qualified blame changes native session database
+context. Cancellation, schema/policy refusal and loss of an owner reply return
+no partial contents and never replay a request. Later ordinary reads/writes on
+the shared handle retain their existing semantics. CLI checks for an existing
+store before Open and closes it before successful output. The typed operation
+never initializes/migrates, commits, changes main/proposals/tags/working/staged
+roots, writes config/derived indexes/rendered files, or flushes MCP notes.
+Global-marked stores refuse History and neither CLI nor MCP offers a global
+selection; this is the existing explicit global-store marker boundary, not
+filesystem classification of arbitrary raw New calls.
+
+Complete changed-element inventory and retained behavior:
+
+- New `internal/store/localdolt/history.go`: `HistoryOptions.Validate` owns
+  these four subjects, exact id selection, full-hash syntax and positive limit.
+  `HistoryCommit`, `HistoryChange`, `HistoryResult`, private `historyLogEntry`
+  own the response/native metadata. `Store.History` delegates to private
+  `history`; only the private method's after-blame callback supports native
+  cancellation tests. `historyLog` reads native ancestry/metadata/parents;
+  `historySchema` checks each reached subject shape; `historyDiff` reads bound
+  native parent-to-commit differences with materialized TEXT and refuses native
+  warnings; `historyText` rejects lossy UTF-8 output. All are additive. Their
+  restrictions apply to this operation and its callers, not every reader of
+  their kind.
+- Reused unchanged localdolt seams: `initializedMainConn`, `committedMainConn`,
+  `handle`, `branchHead`, `proposalMu`, `transferHash`, `transferTables`,
+  `transferColumnShape`, `transferLiveKey`, `pullColumns`, `pullProjection`,
+  `pullRows`, `quoteIdentifier`, `interopValue`, `discardConn`, and the native
+  DOLT_LOG / dolt_commit_diff / revision-qualified dolt_blame primitives.
+  Existing repository/identity/schema guards, nullable SQL scanning, owner lock
+  and session retirement semantics remain. `repoDiffRows`'s existing CONCAT/CAST
+  materialization pattern is reused without changing that symbol or its callers.
+  Ordinary `LastChanged`/`lastChanged`, Store.Query, note/narrative readers,
+  interop, transfer/review and retrieval scoring retain their prior contracts.
+- `internal/storeipc/operation.go` adds only `opHistory`, one typed Backend
+  method and its explicit read-only handleOperation case. New
+  `internal/storeipc/history.go` implements `OwnerStore.History`: validate before
+  JSON encoding, submit once and clear an unsuccessful result. Existing
+  authentication, decoding, response bounds, no-fallback/no-replay behavior,
+  every other operation and the raw Store interface remain unchanged.
+- New `cmd/memdolt/history.go` / `newHistoryCommand` own the four child commands,
+  selection/defaults, existing-memory preflight, direct/owner routing,
+  close-before-output and full nullable human/JSON output. `root.go` adds only
+  that family. `storeFlags.open`/`bind`, `RequireExistingTransferStore` and
+  `emit` are reused unchanged. Existing command flags, appended narrative
+  listings and writer routing remain.
+- New `internal/mcpserver/history.go` / `historyInput`, `historyTool`,
+  `Toolset.history` own the typed tool, defaults and nullable row-map output
+  schema. The already-present SDK jsonschema dependency supplies inference;
+  only this output's map type is overridden to allow null rows and nullable
+  string cells. `tools.go` / `registerTools` adds exactly one registration.
+  Before, RegisterTools had 22 names; after it has 23. All earlier inputs,
+  outputs, handlers, registration names, review/session queues, middleware,
+  cache hints and retrieval scoring remain unchanged.
+- New localdolt `history_test.go` owns real four-table evolution, deleted and
+  missing rows, NULL/empty distinctions, limits/order, schema-1 and as-of values,
+  native author/committer/date distinction, actual memhub import metadata,
+  merge-parent evidence, long Unicode text, unsupported historical schema/text
+  and incompatible native primary-key warnings, dirty/staged/dirty-DDL and
+  unaccepted tag/proposal refusals, native hash preservation, canceled-after-blame
+  and subsequent ordinary writes. It reuses
+  existing disposable store/native snapshot/interop fixtures unchanged.
+- New `cmd/memdolt/history_test.go` compares full direct and live-owner outputs,
+  past/current values, the default 25 and explicit limits, human/JSON absence,
+  existing-memory/refusal preservation, dirty roots/proposals and local
+  configuration/artifact sentinels. New `storeipc/history_test.go` compares
+  full native/owner outputs and exercises loss without replay, UTF-8 preflight,
+  roots and subsequent owner writes. New `mcpserver/history_test.go` exercises
+  modern/legacy protocol output validation, nullable images, direct parity,
+  past values/default limits, missing ids, unaccepted revisions and unchanged
+  queued notes through later ordinary reads and shutdown.
+- `mcpserver/tools_test.go` updates only the exact discovery/deferred-name
+  expectations. `cmd/memdolt/serve_test.go` updates only the production stdio
+  discovery count from 22 to 23. `cmd/memdolt/host_templates_test.go` stops treating
+  history as deferred; host templates/registrations themselves do not change.
+  README, this PRD, AGENTS and `mcpserver/instructions.md` retain explicit before/after
+  records, tool count and usage, including native versus appended/imported
+  history. No dependency graph, durable schema/migration, global lane, Git-file
+  history, token accounting, installation or live-store change is introduced.
+
+Required verification is process-local CGO_ENABLED=1 and
+GOFLAGS=-tags=gms_pure_go: `go build ./...`, `go vet ./...`, `go test ./...`,
+`gofmt -l .`, `golangci-lint run`, and
+`go test ./cmd/memdolt ./internal/store/localdolt ./internal/storeipc ./internal/mcpserver -run 'Test.*History' -count=1`.
+Native tests use disposable databases; they establish no physical hub/client
+acceptance or complete M5 parity. Frozen golden assertions remain unchanged.
+
 #### CLI file bodies (issue #171)
 
 Before this slice, `note add [text]`, `state set [body]`, `arch set [body]`
@@ -1557,8 +1749,9 @@ and `--json` on existing current-schema repository memory:
   time. Human output carries all fields; JSON uses `{"history": [...]}`.
   Empty history is `[]` (human: `no state history` / `no arch history`).
   The default is 25; explicit limits accept 1 through 200000. This is the
-  tagged memhub narrative-row workflow, separate from §11.1's deferred generic
-  history/blame/as-of engine. Existing show retains its body-only human form,
+  tagged memhub narrative-row workflow. Before #173, §11.1's separate native
+  history/blame/as-of engine was deferred; after #173 it ships alongside this
+  unchanged listing. Existing show retains its body-only human form,
   full JSON row and not-found behavior, now over committed main.
 - `note list [--actor <stored-actor>] [--since-days <days>] [--limit <n>]`
   now defaults to 25, with the same 1..200000 limit range. Actor matches exact
