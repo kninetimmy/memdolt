@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -463,9 +464,23 @@ type commandInfo struct {
 
 // commandLine renders a recorded command as one human-readable line.
 func commandLine(command memory.Command) string {
-	return fmt.Sprintf("%s: %s (last run %s, exit %d; %d ok, %d failed)",
-		command.Kind, command.Cmdline, stamp(command.LastRunAt), command.LastExitCode,
-		command.SuccessCount, command.FailCount)
+	line, run, exit, success, failure := "unknown", "unknown", "unknown", "unknown", "unknown"
+	if command.Cmdline != nil {
+		line = *command.Cmdline
+	}
+	if command.LastRunAt != nil {
+		run = stamp(*command.LastRunAt)
+	}
+	if command.LastExitCode != nil {
+		exit = strconv.Itoa(*command.LastExitCode)
+	}
+	if command.SuccessCount != nil {
+		success = strconv.Itoa(*command.SuccessCount)
+	}
+	if command.FailCount != nil {
+		failure = strconv.Itoa(*command.FailCount)
+	}
+	return fmt.Sprintf("%s: %s (last run %s, exit %s; %s ok, %s failed)", command.Kind, line, run, exit, success, failure)
 }
 
 func newCommandCommand() *cobra.Command {

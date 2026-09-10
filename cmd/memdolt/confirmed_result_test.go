@@ -122,7 +122,7 @@ func TestConfirmedOwnerCLILanesRetainLateResults(t *testing.T) {
 		t.Fatal("reopened owner task lost final status")
 	}
 	command := decodeJSON[memory.Command](t, runMemdolt(t, "command", "get", "test", "--dir", base, "--json"))
-	if command.SuccessCount != 2 {
+	if command.SuccessCount == nil || *command.SuccessCount != 2 {
 		t.Fatal("owner read-back failure lost command counter")
 	}
 }

@@ -32,7 +32,18 @@ record --exit/default 0 remains. This does not add a clean-working-set gate
 to ordinary command writes. The [PRD record](docs/prd/memdolt-prd.md#direct-lane-cli-read-parity-issue-169)
 contains every changed file/symbol, native failure evidence, ordering, filter
 and preservation scopes. Store.Query, IPC policy, other readers/writers,
-schemas, dependencies and the 22 MCP registrations retain their contracts.
+durable schemas, dependencies and the 22 MCP registrations retain their contracts.
+
+Before #169's first review correction, command list/get still refused supported
+imported NULL observations/counters and collapsed NULL command lines to empty.
+After it, the shared Command fields preserve all five nullable non-key columns
+as JSON null / human unknown, retaining known empty/zero values. RecordCommand
+keeps its SQL, attribution and counter arithmetic; existing NULL counters stay
+unknown, including after a new observation. Its failed read-back now reports
+unknown fields as null with the existing confirmed hash/error. The inferred
+get_command/record_command output schemas allow these nullable fields; inputs,
+registrations and the IPC protocol remain. Native legacy/native-import and MCP
+regressions plus the PRD correction inventory record the exact broader scope.
 
 **Explicit doctor compatibility (issue #167).** Before this slice doctor
 reported five local checks with no release, hub or remote selection. After it,

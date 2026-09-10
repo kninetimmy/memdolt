@@ -159,13 +159,13 @@ func TestCommandLaneRoundTrip(t *testing.T) {
 
 	recorded := decodeJSON[commandInfo](t, runMemdolt(t,
 		"command", "record", "test", "go test ./...", "--dir", base, "--json"))
-	if recorded.SuccessCount != 1 || recorded.FailCount != 0 || recorded.LastExitCode != 0 {
+	if recorded.SuccessCount == nil || *recorded.SuccessCount != 1 || recorded.FailCount == nil || *recorded.FailCount != 0 || recorded.LastExitCode == nil || *recorded.LastExitCode != 0 {
 		t.Fatalf("the first recorded run is %+v, want one success and no failures", recorded)
 	}
 
 	failed := decodeJSON[commandInfo](t, runMemdolt(t,
 		"command", "record", "test", "go test -race ./...", "--exit", "1", "--dir", base, "--json"))
-	if failed.SuccessCount != 1 || failed.FailCount != 1 || failed.LastExitCode != 1 {
+	if failed.SuccessCount == nil || *failed.SuccessCount != 1 || failed.FailCount == nil || *failed.FailCount != 1 || failed.LastExitCode == nil || *failed.LastExitCode != 1 {
 		t.Fatalf("the failed run is %+v, want the tallies at one each and exit 1", failed)
 	}
 
@@ -174,7 +174,7 @@ func TestCommandLaneRoundTrip(t *testing.T) {
 	runMemdolt(t, "command", "record", "build", "go build ./...", "--dir", base)
 
 	got := decodeJSON[memory.Command](t, runMemdolt(t, "command", "get", "test", "--dir", base, "--json"))
-	if got.Cmdline != "go test -race ./..." || got.SuccessCount != 1 || got.FailCount != 1 {
+	if got.Cmdline == nil || *got.Cmdline != "go test -race ./..." || got.SuccessCount == nil || *got.SuccessCount != 1 || got.FailCount == nil || *got.FailCount != 1 {
 		t.Fatalf("`command get test` returned %+v, want the newest command line and both tallies", got)
 	}
 	if human := runMemdolt(t, "command", "get", "build", "--dir", base); !strings.Contains(human, "go build ./...") {
@@ -238,10 +238,13 @@ func TestConcurrentCommandRecordingsDoNotLoseCounters(t *testing.T) {
 		if result.err != nil {
 			t.Fatalf("recording %d: %v", result.index, result.err)
 		}
-		if want := fmt.Sprintf("go test ./... #%d", result.index); result.command.Cmdline != want {
-			t.Errorf("recording %d returned command line %q, want %q", result.index, result.command.Cmdline, want)
+		if result.command.Cmdline == nil || result.command.SuccessCount == nil || result.command.FailCount == nil {
+			t.Fatal("recording lost known command fields")
 		}
-		totals = append(totals, result.command.SuccessCount+result.command.FailCount)
+		if want := fmt.Sprintf("go test ./... #%d", result.index); *result.command.Cmdline != want {
+			t.Errorf("recording %d returned command line %q, want %q", result.index, *result.command.Cmdline, want)
+		}
+		totals = append(totals, *result.command.SuccessCount+*result.command.FailCount)
 	}
 	sort.Ints(totals)
 	for i, total := range totals {
@@ -254,9 +257,12 @@ func TestConcurrentCommandRecordingsDoNotLoseCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read recorded command: %v", err)
 	}
-	if persisted.SuccessCount != recordings/2 || persisted.FailCount != recordings/2 {
+	if persisted.SuccessCount == nil || persisted.FailCount == nil {
+		t.Fatal("recording lost known counters")
+	}
+	if *persisted.SuccessCount != recordings/2 || *persisted.FailCount != recordings/2 {
 		t.Fatalf("persisted counters = %d success/%d failure, want %d/%d",
-			persisted.SuccessCount, persisted.FailCount, recordings/2, recordings/2)
+			*persisted.SuccessCount, *persisted.FailCount, recordings/2, recordings/2)
 	}
 }
 

@@ -97,11 +97,11 @@ func TestLaneReadsPreserveDirtyAndProposalData(t *testing.T) {
 				}
 			}
 			command := decodeJSON[memory.Command](t, runMemdolt(t, "command", "get", "test", "--dir", base, "--json"))
-			if command.Cmdline != "committed command" {
+			if command.Cmdline == nil || *command.Cmdline != "committed command" {
 				t.Errorf("command get exposed working/proposal data: %+v", command)
 			}
 			commands := decodeJSON[commandList](t, runMemdolt(t, "command", "list", "--dir", base, "--json")).Commands
-			if len(commands) != 1 || commands[0] != command {
+			if len(commands) != 1 || !reflect.DeepEqual(commands[0], command) {
 				t.Fatal(commands)
 			}
 			if filtered := decodeJSON[noteList](t, runMemdolt(t, "note", "list", "--actor", "user", "--since-days", "1", "--dir", base, "--json")).Notes; !reflect.DeepEqual(filtered, notes) {

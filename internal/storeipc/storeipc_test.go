@@ -738,7 +738,10 @@ func TestOwnerRoutedCommandRecordKeepsCommitAndReadbackTogether(t *testing.T) {
 		if got.commit == "" {
 			t.Fatal("record routed command returned an empty commit")
 		}
-		seen[got.command.Cmdline] = got.command
+		if got.command.Cmdline == nil {
+			t.Fatal("record routed command lost its known command line")
+		}
+		seen[*got.command.Cmdline] = got.command
 	}
 	for _, cmdline := range cmdlines {
 		if got, ok := seen[cmdline]; !ok || got.Kind != "test" {
@@ -746,8 +749,11 @@ func TestOwnerRoutedCommandRecordKeepsCommitAndReadbackTogether(t *testing.T) {
 		}
 	}
 	first, second := seen[cmdlines[0]].SuccessCount, seen[cmdlines[1]].SuccessCount
-	if first == second || first+second != 3 {
-		t.Fatalf("routed command success counts = %d and %d, want serialized counts 1 and 2", first, second)
+	if first == nil || second == nil {
+		t.Fatal("record routed command lost its known counters")
+	}
+	if *first == *second || *first+*second != 3 {
+		t.Fatalf("routed command success counts = %d and %d, want serialized counts 1 and 2", *first, *second)
 	}
 }
 

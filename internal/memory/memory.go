@@ -557,13 +557,17 @@ var CommandKinds = []string{"build", "test", "run", "lint", "other"}
 // kind enum, because there is exactly one build command and one test
 // command per project — recording a command replaces the row rather than
 // appending to it.
+// All five non-key columns may be NULL in supported imports. Before #169's
+// review correction, scalar observations/counters refused NULL and cmdline
+// collapsed it to empty. Pointers preserve absence as JSON null; known values
+// retain their existing wire shape, including the two MCP command outputs.
 type Command struct {
-	Kind         string    `json:"kind"`
-	Cmdline      string    `json:"cmdline"`
-	LastExitCode int       `json:"lastExitCode"`
-	LastRunAt    time.Time `json:"lastRunAt"`
-	SuccessCount int       `json:"successCount"`
-	FailCount    int       `json:"failCount"`
+	Kind         string     `json:"kind"`
+	Cmdline      *string    `json:"cmdline"`
+	LastExitCode *int       `json:"lastExitCode"`
+	LastRunAt    *time.Time `json:"lastRunAt"`
+	SuccessCount *int       `json:"successCount"`
+	FailCount    *int       `json:"failCount"`
 }
 
 // RecordCommand records how a command of one kind ran: its command line,
@@ -590,26 +594,25 @@ func (l *Lanes) RecordCommand(ctx context.Context, kind, cmdline string, exitCod
 	commandMu.Lock()
 	defer commandMu.Unlock()
 
-	command := Command{Kind: kind, Cmdline: cmdline, LastExitCode: exitCode, LastRunAt: now()}
+	lastRunAt := now()
+	successCount, failCount := 0, 0
 	if exitCode == 0 {
-		command.SuccessCount = 1
+		successCount = 1
 	} else {
-		command.FailCount = 1
+		failCount = 1
 	}
 
 	hash, err := l.write(ctx,
-		fmt.Sprintf("command record %s (exit %d)", command.Kind, command.LastExitCode),
-		[]string{command.Cmdline},
+		fmt.Sprintf("command record %s (exit %d)", kind, exitCode),
+		[]string{cmdline},
 		store.Statement{
 			SQL: "INSERT INTO commands (kind, cmdline, last_exit_code, last_run_at, success_count, fail_count) " +
 				"VALUES (?, ?, ?, ?, ?, ?) " +
 				"ON DUPLICATE KEY UPDATE cmdline = ?, last_exit_code = ?, last_run_at = ?, " +
 				"success_count = success_count + ?, fail_count = fail_count + ?",
 			Args: []any{
-				command.Kind, command.Cmdline, command.LastExitCode, command.LastRunAt,
-				command.SuccessCount, command.FailCount,
-				command.Cmdline, command.LastExitCode, command.LastRunAt,
-				command.SuccessCount, command.FailCount,
+				kind, cmdline, exitCode, lastRunAt, successCount, failCount,
+				cmdline, exitCode, lastRunAt, successCount, failCount,
 			},
 		})
 	if err != nil && hash == "" {
@@ -664,11 +667,26 @@ func (l *Lanes) commands(ctx context.Context, kind string) (commands []Command, 
 	for rows.Next() {
 		var command Command
 		var cmdline sql.NullString
-		if err := rows.Scan(&command.Kind, &cmdline, &command.LastExitCode, &command.LastRunAt,
-			&command.SuccessCount, &command.FailCount); err != nil {
+		var lastExit, successCount, failCount sql.NullInt64
+		var lastRun sql.NullTime
+		if err := rows.Scan(&command.Kind, &cmdline, &lastExit, &lastRun, &successCount, &failCount); err != nil {
 			return nil, fmt.Errorf("read commands: %w", err)
 		}
-		command.Cmdline = nullText(cmdline)
+		if cmdline.Valid {
+			command.Cmdline = &cmdline.String
+		}
+		if lastExit.Valid {
+			command.LastExitCode = new(int(lastExit.Int64))
+		}
+		if lastRun.Valid {
+			command.LastRunAt = &lastRun.Time
+		}
+		if successCount.Valid {
+			command.SuccessCount = new(int(successCount.Int64))
+		}
+		if failCount.Valid {
+			command.FailCount = new(int(failCount.Int64))
+		}
 		commands = append(commands, command)
 	}
 	if err := rows.Err(); err != nil {

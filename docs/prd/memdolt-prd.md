@@ -1492,10 +1492,12 @@ Complete changed-element inventory and preservation scope:
   shape. New `Commands` and private `commands` share the prior command scan
   with `Command`; get retains kind normalization, not-found and committed-main
   semantics, with complete row iteration/close errors. These restrictions bind
-  these named readers and their callers, not all SQL readers. `RecordCommand`,
-  commandMu, `write`, SetNarrative, note preparation/commit/provenance and every
-  other lane writer retain their implementations. Their OpenCode/MCP/owner
-  callers inherit no new write policy or queue action.
+  these named readers and their callers, not all SQL readers. The initial
+  #169 slice retained the implementations of `RecordCommand`, commandMu,
+  `write`, SetNarrative, note preparation/commit/provenance and every other lane
+  writer. The review correction below adapts RecordCommand's representation
+  while preserving its SQL/policy; the other implementations still remain.
+  Their OpenCode/MCP/owner callers inherit no new write policy or queue action.
 - `cmd/memdolt/lanes.go`: new `storeFlags.runLaneRead` reuses
   `RequireExistingTransferStore` then existing run/owner/schema/close handling.
   Only note list, command get/list and state/arch show/history use this new
@@ -1530,6 +1532,64 @@ Complete changed-element inventory and preservation scope:
 - README's everyday commands, AGENTS' direct-lane record and this PRD section
   retain matching before/after scope, defaults and links. Existing documented
   writer/actor/stdin contracts still hold. Broader §12 parity remains separate.
+
+Before #169's first review correction, the new shared command scanner still
+assumed non-NULL exit/time/counters, and converted NULL cmdline to empty. The
+supported `testdata/memhub-v1.json` import has a build command with NULL exit
+and time and known 9/2 counters. Both CLI reads failed: direct returned
+`converting NULL to int is unsupported`; owner returned
+`cannot assign NULL to *int`. The native schema/interop contract permits NULL
+for every non-key command column, so handling only exit/time would leave
+supported rows unreadable. After correction, all five fields preserve SQL NULL
+as JSON `null` and human `unknown`. Known strings, timestamps and integers keep
+their wire/output values; empty string and zero stay distinct from absence.
+Rows without a last-run time sort after rows with a known one, with the same
+kind tie-breaker. Before this correction, a later read-back failure reported
+nonauthoritative zero-value fields with a confirmed hash/error; after it those
+unknown fields are null, with that same confirmed hash/error and
+inspection/no-replay remedy.
+
+The correction's complete additional inventory and scopes:
+
+- `internal/memory/memory.go`: `Command.Cmdline`, LastExitCode, LastRunAt,
+  SuccessCount and FailCount become nullable pointers, without omitempty.
+  The private `commands` scanner uses existing sql.NullString/NullInt64/NullTime
+  support on direct and owner routes, then fills pointers only for known
+  values. `Command`/`Commands` inherit the correction and retain their filters,
+  ordering and committed-main policy. `RecordCommand` supplies its former
+  scalar SQL arguments from local variables instead of result fields; its
+  statements, 0/1 increments, normalization, deny text, mutex, attribution,
+  commit/read-back ordering and unknown-outcome handling remain. SQL NULL
+  counters still remain NULL when incremented; no COALESCE or invented totals
+  are introduced. Other memory lanes remain unchanged.
+- `cmd/memdolt/lanes.go`: `commandLine` renders only absent values as unknown,
+  retaining the previous human form for known values. `commandInfo` and the
+  get/list/record/verify JSON payloads inherit the shared nullable fields.
+  No command, flag, input, writer, close or error-emission policy is added.
+- Existing `mcpserver/tools.go` commandOutput/commandWriteOutput,
+  `storeipc/operation.go` recordCommandResult and `storeipc/owner_store.go`
+  OwnerStore.RecordCommand carry the shared type unchanged. The inferred MCP
+  get_command and record_command output schemas now admit null for those five
+  still-present fields; their input schemas and all 22 registrations remain
+  unchanged. Existing owner
+  sql.Null* scanning and typed JSON transport suffice, so no IPC operation,
+  protocol, authentication or retry policy changes. OpenCode note handling,
+  MCP notes/queue and other output types remain unchanged.
+- `cmd/memdolt/command_verify_test.go` adds actual legacy fixture import and
+  native all-NULL/mixed-field export/import reads through both routes, checks
+  full JSON/human distinctions and preserved roots, then checks known legacy
+  counters and existing NULL-counter arithmetic after verification. Its
+  ordinary writer/list tests, `lane_reads_test.go`, `lanes_test.go`, CLI and
+  localdolt `confirmed_result_test.go`, and `storeipc/storeipc_test.go` adapt
+  their existing value/comparison assertions to pointers without relaxing
+  counter, concurrency, dirty-data or confirmed-result expectations.
+  `mcpserver/tools_test.go` adds real protocol checks for both inferred nullable
+  output schemas, unchanged registration names, NULL get/record results and
+  known 0/1 writer counters. Existing import fixtures and import/transfer
+  validators remain unchanged; all stores are disposable.
+- README, AGENTS and this PRD retain the before/after correction and explicitly
+  distinguish durable schema preservation from the two changed MCP output
+  schemas. No dependency, migration or writer policy is added.
 
 **Trusted human repository facts/decisions (issue #139).** Before this slice,
 §12's CRUD port and M5 deferral still included the ordinary human commands.

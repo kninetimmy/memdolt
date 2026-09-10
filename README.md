@@ -640,6 +640,13 @@ includes all kinds, newest run first with schema kind order breaking ties.
 `verify` records a supplied result; it requires `--exit-code` and never runs
 the command. Existing `record --exit` and its default exit 0 remain. Both
 use the same attributed writer and confirmed/unknown outcome reporting.
+Before #169's first review correction, command reads still refused imported
+NULL exit/time/counters and collapsed a NULL command line to empty. They now
+preserve absent fields as JSON `null` and human `unknown`, keeping known empty
+strings and zero counters distinct. Existing NULL counters remain unknown
+after verification; the writer retains its SQL increment semantics. The
+existing MCP get/record command outputs accept these same nullable fields;
+their inputs and registration count are unchanged.
 The [PRD's issue #169 record](docs/prd/memdolt-prd.md#direct-lane-cli-read-parity-issue-169)
 states the complete reader/writer scope and change inventory.
 
