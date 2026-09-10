@@ -1496,7 +1496,8 @@ Complete changed-element inventory and preservation scope:
   #169 slice retained the implementations of `RecordCommand`, commandMu,
   `write`, SetNarrative, note preparation/commit/provenance and every other lane
   writer. The review correction below adapts RecordCommand's representation
-  while preserving its SQL/policy; the other implementations still remain.
+  while preserving its SQL/policy; the second correction below similarly
+  adapts note/narrative timestamp representation. Other implementations remain.
   Their OpenCode/MCP/owner callers inherit no new write policy or queue action.
 - `cmd/memdolt/lanes.go`: new `storeFlags.runLaneRead` reuses
   `RequireExistingTransferStore` then existing run/owner/schema/close handling.
@@ -1573,8 +1574,10 @@ The correction's complete additional inventory and scopes:
   still-present fields; their input schemas and all 22 registrations remain
   unchanged. Existing owner
   sql.Null* scanning and typed JSON transport suffice, so no IPC operation,
-  protocol, authentication or retry policy changes. OpenCode note handling,
-  MCP notes/queue and other output types remain unchanged.
+  protocol, authentication or retry policy changes. This first correction left
+  OpenCode note handling, MCP notes/queue and other output types unchanged;
+  the second correction below changes only the note timestamp representation
+  among those types, preserving producer and queue policy.
 - `cmd/memdolt/command_verify_test.go` adds actual legacy fixture import and
   native all-NULL/mixed-field export/import reads through both routes, checks
   full JSON/human distinctions and preserved roots, then checks known legacy
@@ -1590,6 +1593,71 @@ The correction's complete additional inventory and scopes:
 - README, AGENTS and this PRD retain the before/after correction and explicitly
   distinguish durable schema preservation from the two changed MCP output
   schemas. No dependency, migration or writer policy is added.
+
+Before #169's second review correction, the narrative and note scanners still
+required non-NULL creation times, and the note scanner additionally required
+non-NULL text. The existing `TestInteropCLIReexportPendingDecision` native
+fixture imports both narratives and notes without creation timestamps, while
+the same native schema/import contract admits NULL in every non-key column of
+those tables. Native all-NULL/mixed export/import regressions reproduced direct
+`unsupported Scan, storing driver.Value type <nil> into type *time.Time` and
+`converting NULL to string is unsupported`; authenticated owner reads refused
+the corresponding NULL assignments. After correction, unknown creation times
+remain JSON null and human note/history output prints unknown. Known timestamp
+wire values remain unchanged. Dated rows come first, then undated rows with
+the same descending id tie-breaker; since-days excludes unknown dates. Show
+retains its body-only human output, including for undated narratives.
+
+All allowed nullable fields were checked: narrative body/actor/raw actor and
+note actor/raw actor/provenance already used the existing NULL-to-empty-string
+presentation. They retain it; nullable note text now uses the same convention.
+Optional empty provenance fields remain omitted in JSON. SQL NULLs remain in
+the database unchanged by reading; this presentation is not an interop rewrite.
+Only creation timestamps need a new nullable DTO representation here; command
+nullability remains as recorded above, and unrelated task/fact readers are not
+part of this correction.
+
+The second correction's complete additional inventory and scopes:
+
+- `internal/memory/memory.go`: `Note.CreatedAt` and `Narrative.CreatedAt` become
+  nullable pointers without omitempty. `NotesFiltered` scans text through
+  sql.NullString and creation time through sql.NullTime; `NarrativeHistory`
+  scans creation time through sql.NullTime. Existing Notes/Narrative wrappers
+  inherit the fix. Their committed-main selection, limits, ordering, filters,
+  prose/provenance presentation and error/close handling remain. New prepared
+  notes and SetNarrative results still use the same real second-resolution
+  UTC now(). `noteStatement` unwraps known times to time.Time for existing IPC
+  encoding (an absent DTO timestamp binds NULL); SetNarrative binds its known
+  timestamp value. SQL, text declarations, actor rules, note provenance checks,
+  clean batch guard, commit/result behavior and every normal producer's known
+  timestamp remain. No new writer validation or queue policy is introduced.
+- `cmd/memdolt/lanes.go`: new nullableStamp is used only by note listing and
+  narrative history; existing stamp and other human output stay unchanged.
+  noteInfo/narrativeInfo and their list/show/write JSON inherit nullable
+  createdAt. State/arch show retains body-only human output. CLI inputs,
+  direct/owner selection, missing-store guard and write/error reporting remain.
+- Existing `mcpserver/tools.go` noteOutput inherits the shared Note field:
+  log_session_note's inferred output schema admits null for note.createdAt,
+  while prepared outputs still contain a real timestamp. Its text-only input,
+  all 22 tool registrations, grouping/timer/flush/discard semantics and the
+  prior command output schemas remain. Existing owner raw Commit/Query and
+  typed time/NULL encoding suffice; no IPC implementation or protocol changes.
+  OpenCode's existing noteInfo output also inherits the field, with unchanged
+  verified identity/provenance and real producer timestamps. The standalone
+  renderer's separate snapshot types/readers remain untouched.
+- `cmd/memdolt/lane_reads_test.go` adds native all-NULL/mixed-field export/import
+  assertions through direct/live-owner routes, checking complete DTOs, filters,
+  ordering, undated show, preserved roots and known writer/read-back times.
+  Its existing seeded-time fixtures adapt to pointers; its production MCP
+  queued-note check additionally verifies the prepared timestamp survives
+  orderly flush/reopen. `cmd/memdolt/opencode_test.go` replaces pointer-identity
+  comparisons with full value comparisons, retaining its exact single-note
+  and batch/provenance assertions. `mcpserver/tools_test.go` expands/renames the existing nullable
+  output check to TestLaneNullableOutputsThroughMCP, retaining command checks
+  and adding the note timestamp schema and actual queued output. Existing
+  native import fixtures, validators and other assertions remain unchanged.
+- README, AGENTS and this PRD retain matching before/after and field scopes.
+  No migration, dependency, file-input or unrelated memory-reader work is added.
 
 **Trusted human repository facts/decisions (issue #139).** Before this slice,
 §12's CRUD port and M5 deferral still included the ordinary human commands.

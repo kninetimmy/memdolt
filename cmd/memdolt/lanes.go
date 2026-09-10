@@ -235,6 +235,13 @@ func bodyArg(cmd *cobra.Command, args []string) (string, error) {
 // stamp renders a stored timestamp for a human-readable line.
 func stamp(at time.Time) string { return at.Format(time.RFC3339) }
 
+func nullableStamp(at *time.Time) string {
+	if at == nil {
+		return "unknown"
+	}
+	return stamp(*at)
+}
+
 // taskInfo is what a task write prints: the row, plus the commit that
 // carries it.
 type taskInfo struct {
@@ -434,7 +441,7 @@ func newNoteListCommand() *cobra.Command {
 					// A note is free text and may span lines; a listing is
 					// one line per note, so its whitespace is collapsed.
 					lines = append(lines, fmt.Sprintf("%s  %s  %s",
-						stamp(note.CreatedAt), note.Actor, strings.Join(strings.Fields(note.Text), " ")))
+						nullableStamp(note.CreatedAt), note.Actor, strings.Join(strings.Fields(note.Text), " ")))
 				}
 				if len(lines) == 0 {
 					lines = []string{"no session notes"}
@@ -671,7 +678,7 @@ func newNarrativeHistoryCommand(kind memory.NarrativeKind, subject string) *cobr
 				lines := make([]string, 0, len(history))
 				for _, narrative := range history {
 					lines = append(lines, fmt.Sprintf("%s  %s  %s (raw %q)\n%s",
-						stamp(narrative.CreatedAt), narrative.ID, narrative.Actor, narrative.ActorRaw, narrative.Body))
+						nullableStamp(narrative.CreatedAt), narrative.ID, narrative.Actor, narrative.ActorRaw, narrative.Body))
 				}
 				if len(lines) == 0 {
 					lines = []string{"no " + string(kind) + " history"}

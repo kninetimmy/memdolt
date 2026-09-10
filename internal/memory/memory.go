@@ -372,14 +372,16 @@ func (p NoteProvenance) validate() error {
 	return nil
 }
 
-// Note is one row of the session_notes table (§6.1).
+// Note is one row of the session_notes table (§6.1). Native imports may omit
+// its creation time. NULL prose follows the existing empty-string convention;
+// an unknown timestamp is JSON null, while prepared notes always have a time.
 type Note struct {
 	NoteProvenance
-	ID        string    `json:"id"`
-	Actor     string    `json:"actor"`
-	ActorRaw  string    `json:"actorRaw"`
-	Text      string    `json:"text"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID        string     `json:"id"`
+	Actor     string     `json:"actor"`
+	ActorRaw  string     `json:"actorRaw"`
+	Text      string     `json:"text"`
+	CreatedAt *time.Time `json:"createdAt"`
 }
 
 // LogNote is the short-lived CLI seam: it records one session note in one
@@ -425,7 +427,7 @@ func (l *Lanes) PrepareNote(body string) (Note, error) {
 		Actor:     l.actor.Name,
 		ActorRaw:  l.actor.Raw,
 		Text:      body,
-		CreatedAt: now(),
+		CreatedAt: new(now()),
 	}, nil
 }
 
@@ -468,10 +470,16 @@ func (l *Lanes) CommitNotes(ctx context.Context, notes []Note) (string, error) {
 }
 
 func noteStatement(note Note) store.Statement {
+	// Keep known timestamps as time.Time for the existing typed IPC encoding;
+	// nil represents the DTO's absent timestamp, not an invented zero date.
+	var createdAt any
+	if note.CreatedAt != nil {
+		createdAt = *note.CreatedAt
+	}
 	return store.Statement{
 		SQL: "INSERT INTO session_notes (id, actor, actor_raw, text, created_at, " +
 			"session_id, agent_id, provider_id, model_id, variant) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		Args: []any{note.ID, note.Actor, note.ActorRaw, note.Text, note.CreatedAt,
+		Args: []any{note.ID, note.Actor, note.ActorRaw, note.Text, createdAt,
 			nullable(note.SessionID), nullable(note.AgentID), nullable(note.ProviderID),
 			nullable(note.ModelID), nullable(note.Variant)},
 	}
@@ -527,13 +535,18 @@ func (l *Lanes) NotesFiltered(ctx context.Context, limit int, actor *string, sin
 
 	for rows.Next() {
 		var note Note
-		var actor, actorRaw sql.NullString
+		var actor, actorRaw, body sql.NullString
+		var created sql.NullTime
 		var sessionID, agentID, providerID, modelID, variant sql.NullString
-		if err := rows.Scan(&note.ID, &actor, &actorRaw, &note.Text, &note.CreatedAt,
+		if err := rows.Scan(&note.ID, &actor, &actorRaw, &body, &created,
 			&sessionID, &agentID, &providerID, &modelID, &variant); err != nil {
 			return nil, fmt.Errorf("read session notes: %w", err)
 		}
 		note.Actor, note.ActorRaw = nullText(actor), nullText(actorRaw)
+		note.Text = nullText(body)
+		if created.Valid {
+			note.CreatedAt = &created.Time
+		}
 		note.NoteProvenance = NoteProvenance{
 			SessionID: nullText(sessionID), AgentID: nullText(agentID), ProviderID: nullText(providerID),
 			ModelID: nullText(modelID), Variant: nullText(variant),
@@ -725,14 +738,15 @@ func (k NarrativeKind) table() (string, error) {
 
 // Narrative is one row of project_state or project_arch (§6.1): a written
 // description of where the project stands or how it is built, as of when
-// it was written.
+// it was written. Before #169's second review correction, imported NULL creation
+// times refused; they now remain JSON null. Nullable prose still maps to empty.
 type Narrative struct {
 	Kind      NarrativeKind `json:"kind"`
 	ID        string        `json:"id"`
 	Body      string        `json:"body"`
 	Actor     string        `json:"actor"`
 	ActorRaw  string        `json:"actorRaw"`
-	CreatedAt time.Time     `json:"createdAt"`
+	CreatedAt *time.Time    `json:"createdAt"`
 }
 
 // SetNarrative records a new narrative body and returns it with the hash
@@ -759,12 +773,12 @@ func (l *Lanes) SetNarrative(ctx context.Context, kind NarrativeKind, body strin
 		Body:      body,
 		Actor:     l.actor.Name,
 		ActorRaw:  l.actor.Raw,
-		CreatedAt: now(),
+		CreatedAt: new(now()),
 	}
 	hash, err := l.write(ctx, string(kind)+" set", []string{narrative.Body, narrative.ActorRaw}, store.Statement{
 		SQL: "INSERT INTO " + table + " (id, body, actor, actor_raw, created_at) " +
 			"VALUES (?, ?, ?, ?, ?)",
-		Args: []any{narrative.ID, narrative.Body, narrative.Actor, narrative.ActorRaw, narrative.CreatedAt},
+		Args: []any{narrative.ID, narrative.Body, narrative.Actor, narrative.ActorRaw, *narrative.CreatedAt},
 	})
 	if err != nil && hash == "" {
 		return Narrative{}, "", fmt.Errorf("set the %s narrative: %w", kind, err)
@@ -809,10 +823,14 @@ func (l *Lanes) NarrativeHistory(ctx context.Context, kind NarrativeKind, limit 
 	for rows.Next() {
 		narrative := Narrative{Kind: kind}
 		var body, actor, actorRaw sql.NullString
-		if err := rows.Scan(&narrative.ID, &body, &actor, &actorRaw, &narrative.CreatedAt); err != nil {
+		var created sql.NullTime
+		if err := rows.Scan(&narrative.ID, &body, &actor, &actorRaw, &created); err != nil {
 			return nil, fmt.Errorf("read the %s narrative: %w", kind, err)
 		}
 		narrative.Body, narrative.Actor, narrative.ActorRaw = nullText(body), nullText(actor), nullText(actorRaw)
+		if created.Valid {
+			narrative.CreatedAt = &created.Time
+		}
 		history = append(history, narrative)
 	}
 	if err := rows.Err(); err != nil {

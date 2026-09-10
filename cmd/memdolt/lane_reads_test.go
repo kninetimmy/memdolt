@@ -148,17 +148,17 @@ func seedLaneReadRows(t *testing.T, base string) ([]memory.Note, map[string][]me
 	for i := 1; i <= 27; i++ {
 		id, created := fmt.Sprintf("%026d", i), anchor.Add(time.Duration(i/2)*time.Second)
 		for _, kind := range []string{"state", "arch"} {
-			narrative := memory.Narrative{Kind: memory.NarrativeKind(kind), ID: id, Body: fmt.Sprintf("%s version %d\nfull body: café", kind, i), Actor: "agent:claude-code", ActorRaw: "Claude Code", CreatedAt: created}
+			narrative := memory.Narrative{Kind: memory.NarrativeKind(kind), ID: id, Body: fmt.Sprintf("%s version %d\nfull body: café", kind, i), Actor: "agent:claude-code", ActorRaw: "Claude Code", CreatedAt: new(created)}
 			statements = append(statements, store.Statement{
 				SQL:  "INSERT INTO project_" + kind + " (id, body, actor, actor_raw, created_at) VALUES (?, ?, ?, ?, ?)",
 				Args: []any{id, narrative.Body, narrative.Actor, narrative.ActorRaw, created},
 			})
 			history[kind] = append(history[kind], narrative)
 		}
-		note := memory.Note{ID: id, Text: fmt.Sprintf("note %d\nfull note: café", i), Actor: "agent:codex", ActorRaw: "Codex", CreatedAt: created}
+		note := memory.Note{ID: id, Text: fmt.Sprintf("note %d\nfull note: café", i), Actor: "agent:codex", ActorRaw: "Codex", CreatedAt: new(created)}
 		switch i {
 		case 1:
-			note.CreatedAt = anchor.Add(-48 * time.Hour)
+			note.CreatedAt = new(anchor.Add(-48 * time.Hour))
 		case 24:
 			note.Actor = "agent:Codex"
 		case 25:
@@ -167,7 +167,7 @@ func seedLaneReadRows(t *testing.T, base string) ([]memory.Note, map[string][]me
 			note.Actor = "agent:codex' OR 1=1 --"
 		case 27:
 			note.Actor = ""
-			note.CreatedAt = anchor.Add(2 * time.Hour)
+			note.CreatedAt = new(anchor.Add(2 * time.Hour))
 		}
 		metadata := []any{nil, nil, nil, nil, nil}
 		if i%2 == 0 {
@@ -176,7 +176,7 @@ func seedLaneReadRows(t *testing.T, base string) ([]memory.Note, map[string][]me
 		}
 		statements = append(statements, store.Statement{
 			SQL:  "INSERT INTO session_notes (id, actor, actor_raw, text, created_at, session_id, agent_id, provider_id, model_id, variant) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			Args: append([]any{id, note.Actor, note.ActorRaw, note.Text, note.CreatedAt}, metadata...),
+			Args: append([]any{id, note.Actor, note.ActorRaw, note.Text, *note.CreatedAt}, metadata...),
 		})
 		notes = append(notes, note)
 	}
@@ -231,7 +231,7 @@ func TestNarrativeHistoryAndNoteFiltersDirectAndOwner(t *testing.T) {
 				}
 				human := runMemdolt(t, kind, "history", "--limit", "1", "--dir", base)
 				newest := histories[kind][0]
-				for _, want := range []string{newest.ID, newest.Body, newest.Actor, newest.ActorRaw, stamp(newest.CreatedAt)} {
+				for _, want := range []string{newest.ID, newest.Body, newest.Actor, newest.ActorRaw, nullableStamp(newest.CreatedAt)} {
 					if !strings.Contains(human, want) {
 						t.Fatalf("history human output omits %q: %s", want, human)
 					}
@@ -334,6 +334,9 @@ func TestLaneReadsDoNotInitializeMissingMemory(t *testing.T) {
 func TestLaneReadsLeaveMCPNotesQueued(t *testing.T) {
 	base, session, stop := renderNoteSession(t)
 	note := queueRenderNote(t, session)
+	if note.CreatedAt == nil || note.CreatedAt.IsZero() {
+		t.Fatal("prepared MCP note lost its known timestamp")
+	}
 	var before [][]string
 	humanInspect(t, base, func(st commandStore) { before = repoStateSnapshot(t, st) })
 	for _, args := range [][]string{{"note", "list"}, {"note", "list", "--actor", note.Actor, "--since-days", "1"}, {"state", "history"}, {"arch", "history"}, {"command", "list"}} {
@@ -348,7 +351,152 @@ func TestLaneReadsLeaveMCPNotesQueued(t *testing.T) {
 	})
 	stop()
 	listed := decodeJSON[noteList](t, runMemdolt(t, "note", "list", "--dir", base, "--json")).Notes
-	if len(listed) != 1 || listed[0].ID != note.ID {
+	if len(listed) != 1 || listed[0].ID != note.ID || listed[0].CreatedAt == nil || !listed[0].CreatedAt.Equal(*note.CreatedAt) {
 		t.Fatalf("read discarded or duplicated the note before orderly flush: %+v", listed)
+	}
+}
+
+func TestNarrativeAndNoteNullableImportsDirectAndOwner(t *testing.T) {
+	source := initStore(t)
+	at := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	humanInspect(t, source, func(st commandStore) {
+		var statements []store.Statement
+		for _, kind := range []string{"state", "arch"} {
+			statements = append(statements,
+				store.Statement{SQL: "INSERT INTO project_" + kind + " (id) VALUES (?)", Args: []any{fmt.Sprintf("%026d", 1)}},
+				store.Statement{SQL: "INSERT INTO project_" + kind + " (id, body, actor) VALUES (?, ?, ?)", Args: []any{fmt.Sprintf("%026d", 2), "Imported " + kind, "user"}},
+				store.Statement{SQL: "INSERT INTO project_" + kind + " (id, body, actor, actor_raw, created_at) VALUES (?, '', '', '', ?)", Args: []any{fmt.Sprintf("%026d", 3), at}},
+				store.Statement{SQL: "INSERT INTO project_" + kind + " (id, created_at) VALUES (?, ?)", Args: []any{fmt.Sprintf("%026d", 4), at.Add(time.Second)}},
+				store.Statement{SQL: "INSERT INTO project_" + kind + " (id, body, actor, actor_raw, created_at) VALUES (?, ?, ?, ?, ?)", Args: []any{fmt.Sprintf("%026d", 5), "Current " + kind, "agent:codex", "Codex", at.Add(time.Second)}},
+			)
+		}
+		statements = append(statements,
+			store.Statement{SQL: "INSERT INTO session_notes (id) VALUES (?)", Args: []any{fmt.Sprintf("%026d", 1)}},
+			store.Statement{SQL: "INSERT INTO session_notes (id, text, actor, session_id, agent_id, model_id) VALUES (?, 'Imported note', 'agent:codex', 'session', '', 'model')", Args: []any{fmt.Sprintf("%026d", 2)}},
+			store.Statement{SQL: "INSERT INTO session_notes (id, text, actor, actor_raw, created_at) VALUES (?, '', '', '', ?)", Args: []any{fmt.Sprintf("%026d", 3), at}},
+			store.Statement{SQL: "INSERT INTO session_notes (id, created_at, provider_id, variant) VALUES (?, ?, '', '')", Args: []any{fmt.Sprintf("%026d", 4), at.Add(time.Second)}},
+			store.Statement{SQL: "INSERT INTO session_notes (id, text, actor, actor_raw, created_at, session_id, agent_id, provider_id, model_id, variant) VALUES (?, 'Current note', 'agent:codex', 'Codex', ?, 's', 'a', 'p', 'm', 'v')", Args: []any{fmt.Sprintf("%026d", 5), at.Add(time.Second)}},
+		)
+		if _, err := st.Commit(context.Background(), store.CommitRequest{Author: cliActor, Message: "nullable note and narratives", Text: []string{"native nullable fixture"}, Statements: statements}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	fixture := filepath.Join(interopTempDir(t), "nullable-lanes.json")
+	runMemdolt(t, "export", fixture, "--dir", source, "--json")
+	for _, routed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("owner=%t", routed), func(t *testing.T) {
+			base := initStore(t)
+			if routed {
+				serveStore(t, base)
+			}
+			runMemdolt(t, "import", fixture, "--dir", base, "--json")
+			var before [][]string
+			humanInspect(t, base, func(st commandStore) { before = repoStateSnapshot(t, st) })
+			for _, args := range [][]string{{"state", "history"}, {"arch", "history"}, {"note", "list"}, {"note", "list", "--actor", "agent:codex"}} {
+				out, err := runMemdoltResult(t, append(args, "--dir", base, "--json")...)
+				if err != nil {
+					t.Errorf("imported nullable %v failed: %v", args, err)
+					continue
+				}
+				var rows []map[string]any
+				if args[0] == "note" {
+					rows = decodeJSON[struct{ Notes []map[string]any }](t, out).Notes
+				} else {
+					rows = decodeJSON[struct{ History []map[string]any }](t, out).History
+				}
+				wantIDs := []int{5, 4, 3, 2, 1}
+				if len(args) > 2 {
+					wantIDs = []int{5, 2}
+				}
+				if len(rows) != len(wantIDs) {
+					t.Fatal(rows)
+				}
+				for i, row := range rows {
+					id := wantIDs[i]
+					want := map[string]any{"id": fmt.Sprintf("%026d", id), "actor": "", "actorRaw": "", "createdAt": nil}
+					field, subject := "body", args[0]
+					if subject == "note" {
+						field = "text"
+					} else {
+						want["kind"] = subject
+					}
+					want[field] = ""
+					if id == 2 {
+						want[field], want["actor"] = "Imported "+subject, "user"
+						if subject == "note" {
+							want["actor"], want["session_id"], want["model_id"] = "agent:codex", "session", "model"
+						}
+					}
+					if id == 5 {
+						want[field], want["actor"], want["actorRaw"] = "Current "+subject, "agent:codex", "Codex"
+						if subject == "note" {
+							want["session_id"], want["agent_id"], want["provider_id"], want["model_id"], want["variant"] = "s", "a", "p", "m", "v"
+						}
+					}
+					if id == 3 {
+						want["createdAt"] = stamp(at)
+					} else if id >= 4 {
+						want["createdAt"] = stamp(at.Add(time.Second))
+					}
+					if !reflect.DeepEqual(row, want) {
+						t.Fatalf("nullable %s fields/order changed: got %+v, want %+v", subject, row, want)
+					}
+				}
+				if human := runMemdolt(t, append(args, "--dir", base)...); !strings.Contains(human, "unknown") || strings.Contains(human, "0001-01-01") {
+					t.Fatal(human)
+				}
+			}
+			for _, tc := range []struct {
+				flags []string
+				ids   []int
+			}{
+				{[]string{"--since-days", "1"}, []int{5, 4, 3}},
+				{[]string{"--since-days", "1", "--actor", "agent:codex"}, []int{5}},
+				{[]string{"--actor", ""}, []int{3}},
+			} {
+				notes := decodeJSON[noteList](t, runMemdolt(t, append([]string{"note", "list", "--dir", base, "--json"}, tc.flags...)...)).Notes
+				if len(notes) != len(tc.ids) {
+					t.Fatalf("nullable note filter %v returned %+v", tc.flags, notes)
+				}
+				for i, id := range tc.ids {
+					if notes[i].ID != fmt.Sprintf("%026d", id) {
+						t.Fatal("nullable note filter changed order or admitted an unknown timestamp")
+					}
+				}
+			}
+			humanInspect(t, base, func(st commandStore) {
+				if after := repoStateSnapshot(t, st); !reflect.DeepEqual(before, after) {
+					t.Fatal("nullable lane reads changed imported memory")
+				}
+				if _, err := st.Commit(context.Background(), store.CommitRequest{Author: cliActor, Message: "only undated narrative versions", NoText: true, Statements: []store.Statement{
+					{SQL: "UPDATE project_state SET created_at = NULL"}, {SQL: "UPDATE project_arch SET created_at = NULL"},
+				}}); err != nil {
+					t.Fatal(err)
+				}
+			})
+			for _, kind := range []string{"state", "arch"} {
+				shown := decodeJSON[memory.Narrative](t, runMemdolt(t, kind, "show", "--dir", base, "--json"))
+				if shown.CreatedAt != nil || shown.ID != fmt.Sprintf("%026d", 5) || shown.Body != "Current "+kind {
+					t.Fatal("show invented a timestamp or changed undated id ordering")
+				}
+				if human := runMemdolt(t, kind, "show", "--dir", base); human != "Current "+kind+"\n" {
+					t.Fatalf("show lost its body-only convention: %q", human)
+				}
+				fresh := decodeJSON[narrativeInfo](t, runMemdolt(t, kind, "set", "new approved body", "--dir", base, "--json"))
+				if fresh.Commit == "" || fresh.CreatedAt == nil || fresh.CreatedAt.IsZero() {
+					t.Fatal("narrative writer lost its known timestamp")
+				}
+				if got := decodeJSON[memory.Narrative](t, runMemdolt(t, kind, "show", "--dir", base, "--json")); !reflect.DeepEqual(got, fresh.Narrative) {
+					t.Fatal("narrative writer/read-back changed known fields")
+				}
+			}
+			fresh := decodeJSON[noteInfo](t, runMemdolt(t, "note", "add", "new note", "--dir", base, "--json"))
+			if fresh.Commit == "" || fresh.CreatedAt == nil || fresh.CreatedAt.IsZero() {
+				t.Fatal("note writer lost its known timestamp")
+			}
+			if got := decodeJSON[noteList](t, runMemdolt(t, "note", "list", "--limit", "1", "--dir", base, "--json")).Notes; len(got) != 1 || !reflect.DeepEqual(got[0], fresh.Note) {
+				t.Fatal("note writer/read-back changed known fields")
+			}
+		})
 	}
 }

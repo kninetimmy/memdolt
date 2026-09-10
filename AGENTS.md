@@ -45,6 +45,19 @@ get_command/record_command output schemas allow these nullable fields; inputs,
 registrations and the IPC protocol remain. Native legacy/native-import and MCP
 regressions plus the PRD correction inventory record the exact broader scope.
 
+Before #169's second review correction, shared note/history reads still refused
+supported NULL creation times, and note listing also refused NULL text. After
+it, Note/Narrative timestamps preserve absence as JSON null and note/history
+human output says unknown. Nullable prose retains the empty-string convention;
+dated rows precede undated rows and since-days excludes unknown dates. Prepared
+notes and set narratives keep their real timestamps and typed IPC bindings;
+producer/queue/deny/result rules remain. The existing log_session_note output
+schema admits null for note.createdAt, with its input and all 22 registrations
+unchanged. The PRD inventories the shared DTOs/readers, writer binding adapters,
+CLI formatter, actual imported all-NULL/mixed direct/owner tests, OpenCode value
+comparison and MCP output/queue timestamp checks. Other memory lanes stay out
+of scope; no durable schema, dependency or IPC policy changes.
+
 **Explicit doctor compatibility (issue #167).** Before this slice doctor
 reported five local checks with no release, hub or remote selection. After it,
 ordinary doctor adds the embedded Dolt release from pinned `doltversion.Version`

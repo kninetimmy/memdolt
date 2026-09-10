@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -139,7 +140,7 @@ func TestOpenCodeCLIRecordsVerifiedMetadataDirectlyAndThroughOwner(t *testing.T)
 				t.Fatalf("CLI changed verified metadata, text or actor: %+v / %+v", info, note)
 			}
 			listed := decodeJSON[noteList](t, runMemdolt(t, "note", "list", "--dir", base, "--json"))
-			if len(listed.Notes) != 1 || listed.Notes[0] != note.Note {
+			if len(listed.Notes) != 1 || !reflect.DeepEqual(listed.Notes[0], note.Note) {
 				t.Fatalf("stored note = %+v, want %+v", listed, note.Note)
 			}
 		})
@@ -214,7 +215,7 @@ func TestNoteProvenanceIsScannedForSingleAndBatchedOwnerWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 			notes, err := lanes.Notes(ctx, 10)
-			if err != nil || len(notes) != 2 || notes[0] != second || notes[1] != first {
+			if err != nil || !reflect.DeepEqual(notes, []memory.Note{second, first}) {
 				t.Fatalf("batch readback = %+v / %v", notes, err)
 			}
 			rows, err := st.Query(ctx, "SELECT message, committer FROM dolt_log WHERE message LIKE 'note %'")

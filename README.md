@@ -647,6 +647,15 @@ strings and zero counters distinct. Existing NULL counters remain unknown
 after verification; the writer retains its SQL increment semantics. The
 existing MCP get/record command outputs accept these same nullable fields;
 their inputs and registration count are unchanged.
+Before the second review correction, imported NULL creation times still refused
+note/history reads, and NULL note text also refused. Notes and narratives now
+report an unknown creation time as JSON `null`; note/history human output uses
+`unknown`. Undated rows follow dated rows, with id breaking ties, and a note
+since-days filter excludes rows whose date is unknown. Nullable prose keeps
+the existing empty-string presentation, and state/arch show stays body-only.
+Normal writers and MCP note batching retain their real timestamps. The existing
+log_session_note output schema now admits null for note.createdAt; its input
+and queue behavior are unchanged.
 The [PRD's issue #169 record](docs/prd/memdolt-prd.md#direct-lane-cli-read-parity-issue-169)
 states the complete reader/writer scope and change inventory.
 
