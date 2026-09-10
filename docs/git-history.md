@@ -212,3 +212,15 @@ No dependency/version, durable Dolt schema, global history, MCP name/input,
 embedding/scoring rule, frozen corpus or golden threshold changes. The unchanged
 locator gate still requires full Rust 18/18 and polyglot 17/17 fusion matches;
 its existing floor-0 rerank probes and default fusion leak assertions remain.
+
+Before integration with landed #173, this branch inherited 22 MCP registrations
+and had no native memory-history command/tool. After the normal merge of
+`e2277668`, both history surfaces coexist and all 23 landed registrations remain.
+The inherited `Store.History`, typed `OwnerStore.History` operation, CLI history
+command and MCP `historyTool`/`Toolset.history` retain their exact native ancestry,
+nullable images, warning/session isolation and queue-preservation contracts.
+Git ingestion, file-search routing/output schemas and derived-cache safeguards
+remain unchanged. Only the overlapping AGENTS.md insertion needed conflict
+resolution; both issue records were retained. The native-history implementation
+and tests are landed base content, not new #174 changes. The final #174 inventory
+above is measured against fetched `origin/main`, including that landed base.

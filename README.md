@@ -8,7 +8,7 @@
   <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.26.2%2B-007d9c?logo=go&amp;logoColor=white" alt="Go 1.26.2 or newer"></a>
   <br>
   <a href="go.mod"><img src="https://img.shields.io/badge/Dolt-embedded%201.88.1-5965d8" alt="Embedded Dolt driver 1.88.1"></a>
-  <a href="#mcp-and-hosts"><img src="https://img.shields.io/badge/MCP-22%20tools-0f766e" alt="MCP: 22 shipped tools"></a>
+  <a href="#mcp-and-hosts"><img src="https://img.shields.io/badge/MCP-23%20tools-0f766e" alt="MCP: 23 shipped tools"></a>
   <a href=".github/workflows/ci.yml"><img src="https://img.shields.io/badge/clients-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-475569" alt="Client platforms: Windows, macOS, Linux"></a>
 </p>
 
@@ -357,9 +357,9 @@ hub acceptance or complete memhub parity.
 
 | Area | Delivered | Remaining boundary |
 | --- | --- | --- |
-| Foundations and M0–M3 | Local Dolt, ownership/IPC, reviewed writes, retrieval gates, 22 MCP tools, host templates | M0's recorded GO has scoped limits. Live Claude acceptance was explicitly waived; deterministic compatibility and a real OpenCode provenance write supplied the replacement M3 evidence. |
+| Foundations and M0–M3 | Local Dolt, ownership/IPC, reviewed writes, retrieval gates, 23 MCP tools, host templates | M0's recorded GO has scoped limits. Live Claude acceptance was explicitly waived; deterministic compatibility and a real OpenCode provenance write supplied the replacement M3 evidence. Before #173 discovery had 22 tools; native `history` adds one. |
 | M4: cross-machine memory | Clone, remotes, status/diff, push/pull, compatible merges, human conflict choices, Linux hub artifacts, isolated native ingress tests, repository identity and local/clone topology, explicit doctor compatibility diagnostics | Before #163 topology/project identity remained pending; they now ship. Physical two-client/private-network acceptance remains. Remote native release requires inspection on the hub. Live SQL-to-hub storage is unsupported. |
-| M5: memory workflows | Documents, code locator and golden gates, rendering, human fact/decision commands, global replicas with combined recall, terminal global proposal acceptance, JSON import/export | Before #161 global-target proposal acceptance refused; it now ships through terminal human review. Audit-md, Git/file-history ingestion, top-level status/stats/history, remaining wrap-up policy, and the full parity audit remain. |
+| M5: memory workflows | Documents, code locator and golden gates, rendering, human fact/decision commands, global replicas with combined recall, terminal global proposal acceptance, JSON import/export, native memory history | Before #161 global-target proposal acceptance refused; it now ships through terminal human review. Before #173 top-level history remained deferred; repository fact/decision/state/arch history now ships. Audit-md, Git/file-history ingestion, top-level status/stats, remaining wrap-up policy, and the full parity audit remain. |
 | M6: operations | Scoped local, selected hub and remote health checks; deployment runbook | Backups and restore drill, backup-age/disk-trend checks, retention/GC, upgrades, gated token accounting, and local transcript archives remain planned. |
 
 Before #167, this status listed client version-skew acceptance and `doctor --hub`
@@ -608,6 +608,7 @@ output; store-oriented commands accept `--dir`.
 | `decision add/list/set-summary/supersede` | Trusted human decision operations |
 | `task add/list/done/block` · `note add/list` | Work queue and session observations |
 | `command record/verify/get/list` · `state set/show/history` · `arch set/show/history` | Observed commands and project narratives |
+| `history fact/decision/state/arch` | Native committed changes, nullable row images, blame and historical values |
 | `review list/show/accept/reject/stale/expire` | Inspect and manage proposal branches |
 | `doc add/ls/show/rm` | Selected Markdown and its chunks |
 | `code index/status/rm` · `locate` | Local tracked-code navigation |
@@ -678,6 +679,37 @@ log_session_note output schema now admits null for note.createdAt; its input
 and queue behavior are unchanged.
 The [PRD's issue #169 record](docs/prd/memdolt-prd.md#direct-lane-cli-read-parity-issue-169)
 states the complete reader/writer scope and change inventory.
+
+Before issue #173, native memory history was deferred and the narrative
+`state history` / `arch history` commands listed appended rows still present
+at main. Those commands retain that behavior. The new surface also shows
+edits and deletions, using real Dolt history:
+
+~~~sh
+memdolt history fact <row-id>
+memdolt history decision <row-id> --limit 10
+memdolt history state --as-of <full-Dolt-commit-hash> --json
+memdolt history arch
+~~~
+
+All accept `--dir`, `--json`, `--limit` (default 25, range 1..200000), and
+`--as-of`. Only captured committed-main ancestry is accessible. Output has
+`subject`, optional `id`, `mainCommit`, `revision`, `current`, `blame`, and
+`changes`. A missing row/blame is `null`; no changes is `[]`. Each change
+contains `commit`, `parent`, `type` (`added`, `modified`, `deleted`), `from`
+and `to`. Complete row images preserve SQL NULL as JSON null and other cells
+as strings. Native author/committer names, emails, dates and message remain
+separate from stored source/actor/times. Changes follow native log order,
+then native parent order and row id; a merge may have changes against both
+parents. The limit counts those change rows. State/arch current values use
+the newest stored creation time then id, while their changes span the table.
+
+MCP `history` takes `subject`, optional `id`, `as_of`, and `limit`, and returns
+the same result. Reads preserve dirty/staged roots and proposals, create or
+migrate nothing, and leave queued notes untouched. Imported old timestamps
+describe source metadata; imports do not manufacture old Dolt commits.
+The [native history contract](docs/prd/memdolt-prd.md#native-memory-history-issue-173)
+records exact fields, refusal boundaries, tests and the complete change inventory.
 
 ### File bodies
 
@@ -829,9 +861,10 @@ discovery. OpenCode wrap-up
 requires a host-provided current session ID and independently verified API
 metadata before writing.
 
-The **22 registered tools** are:
+Before issue #173 there were 22 registered tools. Adding native `history`
+makes **23 registered tools**:
 
-- Reads/navigation: `status`, `repo_status`, `recall`, `search`, `locate`,
+- Reads/navigation: `status`, `repo_status`, `history`, `recall`, `search`, `locate`,
   `list_tasks`, `list_decisions`, `list_facts`, `list_proposals`, `get_command`.
 - Direct/session operations: `task_add`, `task_done`, `log_session_note`,
   `record_command`, `doc_add`, `render`.
