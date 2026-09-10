@@ -12,7 +12,8 @@ var ErrOwnerSource = errors.New("source reads refuse protected memdolt owner met
 // CheckOwnerSource compares an already-open source with this repository's
 // owner file before any content read. The metadata directory is already
 // confined by the caller. Only identity is read from the protected file.
-// It binds document ingestion and code-index readers, not arbitrary readers.
+// Before CLI file bodies, its callers were document ingestion and code-index
+// readers. It now also protects the CLI body-file reader, not arbitrary readers.
 func CheckOwnerSource(metadata *os.Root, source os.FileInfo) (err error) {
 	if metadata == nil {
 		return nil // No metadata directory, therefore no known owner file.

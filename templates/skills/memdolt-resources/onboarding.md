@@ -130,8 +130,16 @@ version mismatch instead of inventing a flag or silently upgrading it.
 ## Write and verify the approved setup
 
 Use the existing `state set` and `arch set` lanes with explicit host attribution.
-They accept multiline bodies on stdin when no body argument is given; there is
-no `--from-file` flag. Feed the separately approved text through process stdin.
+They accept multiline bodies on stdin when no body argument is given. Before
+#171 there was no `--from-file` flag; now `--from-file <approved-file>` is also
+available. It conflicts with an explicit body argument, including empty values;
+omitting both keeps stdin. Files resolve from process cwd independently of --dir
+and must be regular, nonblank UTF-8 within 65535 bytes before normalization.
+Known owner credentials and path/hard-link aliases refuse before content read;
+unverifiable protection and read/close failures stop before memory opens.
+Explicit external files and rendered narratives are allowed. Existing argument
+and stdin limits/normalization, writer attribution and approval rules remain.
+Feed the separately approved text through process stdin, or select its file.
 For example, after choosing the root/actor and preparing reviewed UTF-8 files,
 the POSIX shell form is:
 

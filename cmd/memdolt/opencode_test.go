@@ -96,6 +96,9 @@ func TestOpenCodeCLIRefusesBeforeStoreOpen(t *testing.T) {
 			bin := fakeOpenCodeAPI(t, tc.response, tc.failed)
 			base := scratchDir(t)
 			runMemdoltErr(t, "opencode", "wrap-up-note", tc.id, "must not be written", "--dir", base)
+			file := filepath.Join(scratchDir(t), "wrap-up.txt")
+			writeTestFile(t, file, "file must not be written")
+			runMemdoltErr(t, "opencode", "wrap-up-note", tc.id, "--from-file", file, "--dir", base)
 			if _, err := os.Stat(pathsFor(t, base).Dir()); !errors.Is(err, fs.ErrNotExist) {
 				t.Fatalf("identity refusal opened or created the store: %v", err)
 			}

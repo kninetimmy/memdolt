@@ -39,8 +39,14 @@ If authority or target is unclear, resolve it before writing.
 6. Write only approved changed narratives through
    `memdolt state set --dir <repository> --actor "Claude Code" --json` and
    `memdolt arch set --dir <repository> --actor "Claude Code" --json`, supplying
-   each approved multiline body on stdin, with no body argument. There is no
-   `--from-file` flag. Use separate process arguments and stdin, not text
+   each approved multiline body on stdin, with no body argument. Before #171
+   there was no `--from-file` flag; now `--from-file <approved-file>` also works.
+   It conflicts with any body argument, even empty; omitting both keeps stdin.
+   Files resolve from process cwd independently of --dir and must be regular,
+   nonblank UTF-8 within 65535 raw bytes. Opened-file/owner-alias protection and
+   read/close validation finish before memory opens; external and rendered
+   files are allowed. Existing stdin/argument normalization and limits remain.
+   Use separate process arguments and stdin, not text
    interpolated into a shell command. These direct lanes append versions;
    they do not replace fact/decision proposals or authorize human promotion.
    Retain each ID/hash and read it back with `state show` / `arch show` before

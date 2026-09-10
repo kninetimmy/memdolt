@@ -100,6 +100,13 @@ export GOFLAGS=-tags=gms_pure_go
   by the actor (`--actor "Claude Code"` normalizes to `agent:claude-code`; the
   default is `user`), so `dolt_log` answers provenance on its own. `note add`
   and the two `set` commands read their body from stdin when given no argument.
+  Before #171 omission always selected stdin; now note add, state set, arch set
+  and verified OpenCode wrap-up-note also accept `--from-file <path>`.
+  It conflicts with any explicit body argument, even empty; omitting both keeps
+  stdin. Files resolve from process cwd independently of --dir and must be
+  regular, nonblank UTF-8 within 65535 raw bytes. Opened identity/owner-alias
+  protection and read/close refusals precede memory open. Existing attributed
+  writers and OpenCode provenance remain. [PRD scope and limits](docs/prd/memdolt-prd.md#cli-file-bodies-issue-171).
 - Review what agents staged (PRD §7, §11.2): `memdolt review list|show|accept|reject|expire|stale`.
   `show` renders a proposal as the single-commit diff of its branch; `accept` merges
   exactly the one commit that proposal was staged with into `main` under a `--no-ff`

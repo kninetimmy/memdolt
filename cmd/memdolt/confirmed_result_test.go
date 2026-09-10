@@ -52,6 +52,7 @@ func (s confirmedCLIStore) DocRemove(ctx context.Context, ident string, actor me
 }
 
 func TestConfirmedOwnerCLILanesRetainLateResults(t *testing.T) {
+	fakeOpenCodeAPI(t, `{"data":{"id":"ses_current"}}`, false)
 	base := initStore(t)
 	before := storeCommitCount(t, base)
 	st := openInitializedStore(t, base)
@@ -73,6 +74,8 @@ func TestConfirmedOwnerCLILanesRetainLateResults(t *testing.T) {
 		{"note", "add", "confirmed owner note"}, {"command", "record", "test", "go test ./..."},
 		{"command", "verify", "test", "go test ./...", "--exit-code", "0"},
 		{"state", "set", "confirmed owner state"}, {"arch", "set", "confirmed owner architecture"},
+		{"note", "add", "--from-file", file}, {"state", "set", "--from-file", file}, {"arch", "set", "--from-file", file},
+		{"opencode", "wrap-up-note", "ses_current", "--from-file", file},
 		{"doc", "add", file}, {"doc", "rm"},
 	} {
 		if args[0] == "task" && args[1] != "add" {
@@ -114,7 +117,7 @@ func TestConfirmedOwnerCLILanesRetainLateResults(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if storeCommitCount(t, base) != before+11 {
+	if storeCommitCount(t, base) != before+15 {
 		t.Fatal("owner path duplicated/lost a committed write")
 	}
 	tasks := decodeJSON[taskList](t, runMemdolt(t, "task", "list", "--status", "all", "--dir", base, "--json"))
@@ -128,10 +131,15 @@ func TestConfirmedOwnerCLILanesRetainLateResults(t *testing.T) {
 }
 
 func TestConfirmedDirectCLIOutputFailureNamesCommitAfterClose(t *testing.T) {
+	fakeOpenCodeAPI(t, `{"data":{"id":"ses_current"}}`, false)
+	file := filepath.Join(scratchDir(t), "confirmed.txt")
+	writeTestFile(t, file, "confirmed direct file body")
 	for _, args := range [][]string{
 		{"task", "add", "confirmed direct task"}, {"note", "add", "confirmed direct note"},
 		{"command", "record", "build", "go build ./..."}, {"state", "set", "confirmed direct state"}, {"arch", "set", "confirmed direct architecture"},
 		{"command", "verify", "build", "go build ./...", "--exit-code", "0"},
+		{"note", "add", "--from-file", file}, {"state", "set", "--from-file", file}, {"arch", "set", "--from-file", file},
+		{"opencode", "wrap-up-note", "ses_current", "--from-file", file},
 	} {
 		t.Run(args[0], func(t *testing.T) {
 			base := initStore(t)

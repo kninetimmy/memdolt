@@ -52,6 +52,10 @@ would succeed.
    Pass the ID and text as separate arguments. This re-verifies the exact
    Session.Info before opening the store, stores all available metadata, and
    attributes the note as canonical `agent:opencode` while retaining raw `cli`.
+   Before #171 its body came from an argument or stdin; now the same command
+   accepts `--from-file <approved-file>` instead of the summary argument, with
+   the file rules in step 6. Session verification and provenance stay unchanged;
+   no caller-supplied provenance overrides are accepted.
 4. Apply approved task changes with `task_add` and `task_done`, and observed
    command outcomes with `record_command`.
 5. Stage facts and decisions with `propose_fact`, `propose_decision`, or
@@ -64,8 +68,14 @@ would succeed.
 6. Write only approved changed narratives through
    `memdolt state set --dir <repository> --actor "opencode" --json` and
    `memdolt arch set --dir <repository> --actor "opencode" --json`, supplying
-   each approved multiline body on stdin, with no body argument. There is no
-   `--from-file` flag. Use separate process arguments and stdin, not text
+   each approved multiline body on stdin, with no body argument. Before #171
+   there was no `--from-file` flag; now `--from-file <approved-file>` also works.
+   It conflicts with any body argument, even empty; omitting both keeps stdin.
+   Files resolve from process cwd independently of --dir and must be regular,
+   nonblank UTF-8 within 65535 raw bytes. Opened-file/owner-alias protection and
+   read/close validation finish before memory opens; external and rendered
+   files are allowed. Existing stdin/argument normalization and limits remain.
+   Use separate process arguments and stdin, not text
    interpolated into a shell command. These direct lanes append versions;
    they do not replace fact/decision proposals or authorize human promotion.
    Retain each ID/hash and read it back with `state show` / `arch show` before

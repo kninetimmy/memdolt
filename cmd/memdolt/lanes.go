@@ -217,11 +217,19 @@ func emit(cmd *cobra.Command, payload any, lines []string) error {
 	return nil
 }
 
-// bodyArg reads the body text of a write: the argument when there is one,
-// standard input otherwise, so that prose can be piped in
-// (`memdolt state set < STATUS.md`) instead of quoted into a shell
-// argument.
-func bodyArg(cmd *cobra.Command, args []string) (string, error) {
+// bodyArg selects an explicit argument or file, otherwise preserving the
+// original stdin workflow. File validation finishes before any store opens.
+func bodyArg(cmd *cobra.Command, args []string, dir string) (string, error) {
+	if cmd.Flags().Changed("from-file") {
+		if len(args) > 0 {
+			return "", errors.New("a text argument and --from-file are mutually exclusive")
+		}
+		path, err := cmd.Flags().GetString("from-file")
+		if err != nil {
+			return "", err
+		}
+		return readBodyFile(dir, path)
+	}
 	if len(args) > 0 {
 		return args[0], nil
 	}
@@ -389,10 +397,10 @@ func newNoteAddCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add [text]",
 		Short: "Record a session note",
-		Long:  "Record a session note. With no argument the note is read from standard input.",
+		Long:  "Record a session note from a text argument, --from-file, or standard input.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			body, err := bodyArg(cmd, args)
+			body, err := bodyArg(cmd, args, flags.dir)
 			if err != nil {
 				return err
 			}
@@ -405,6 +413,7 @@ func newNoteAddCommand() *cobra.Command {
 		},
 	}
 
+	bindBodyFile(cmd)
 	return flags.bindLaneWriter(cmd)
 }
 
@@ -616,11 +625,11 @@ func newNarrativeSetCommand(kind memory.NarrativeKind, subject string) *cobra.Co
 	cmd := &cobra.Command{
 		Use:   "set [body]",
 		Short: "Record a new version of the " + subject,
-		Long: "Record a new version of the " + subject + " narrative. With no argument the\n" +
-			"body is read from standard input.",
+		Long: "Record a new version of the " + subject + " narrative from a body argument,\n" +
+			"--from-file, or standard input.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			body, err := bodyArg(cmd, args)
+			body, err := bodyArg(cmd, args, flags.dir)
 			if err != nil {
 				return err
 			}
@@ -633,6 +642,7 @@ func newNarrativeSetCommand(kind memory.NarrativeKind, subject string) *cobra.Co
 		},
 	}
 
+	bindBodyFile(cmd)
 	return flags.bindLaneWriter(cmd)
 }
 
