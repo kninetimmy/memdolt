@@ -1415,6 +1415,134 @@ The [deployment runbook](../hub-deployment.md) specifies native 1.88.1, credenti
 setup, applied nftables enforcement, preservation, supported platforms and the
 complete structural blast radius. Existing CLI/MCP/transfer behavior stays.
 
+#### CLI file bodies (issue #171)
+
+Before this slice, `note add [text]`, `state set [body]`, `arch set [body]`
+and `opencode wrap-up-note <current-session-id> [text]` accepted an argument
+or, when omitted, stdin. After it, each also accepts `--from-file <path>`.
+An explicit body argument and that flag conflict, including explicitly empty
+arguments/flag values. An empty file flag refuses; omitting both sources keeps
+the existing stdin workflow. Absolute paths work and relative file paths use
+the invoking process cwd, independently of the repository selected by --dir.
+Explicit files outside that repository and generated narratives under either
+`.memdolt/rendered` or `.memhub/rendered` remain usable sources.
+
+Only the new file route requires a regular, nonblank, valid UTF-8 source of at
+most **65535 raw bytes**, inclusive, before the existing writer's TrimSpace.
+The read is bounded to that limit plus one overflow-detection byte. Selection,
+canonical resolution, opening, identity verification, reading and closing all
+finish before memory opens; any failure refuses without changing memory,
+configuration or missing targets. Source content is never put in file errors.
+Successful input still goes through the attributed one-note/one-narrative-commit
+operation. Deny/schema checks, real producer timestamps, append-only narratives,
+confirmed hashes/identities on late errors and unknown-outcome inspection without
+replay remain. OpenCode verifies the supplied session after body selection and
+before opening memory, retaining exactly Session.Info provenance and fixed
+`agent:opencode` / raw `cli`; no caller-supplied provenance override is added.
+
+**Tagged limit disposition.** The v0.2.0 baseline's argument/file selection and
+invocation-cwd file resolution are ported; Memdolt's existing stdin fallback is
+retained even though the tagged helper lacks it. Tagged note limits of 4096
+characters and narrative limits of 65536 characters are not adopted as new
+legacy writer restrictions. The already-shipped Dolt TEXT columns have a byte
+capacity: the issue's native default-STRICT_TRANS_TABLES investigation preserved
+ASCII and multibyte UTF-8 at 65535 bytes and refused 65536/65538 bytes. The new
+CLI tests repeat those accepted bytes and refuse overflow before native SQL.
+The file cap respects that capacity before normalization; ordinary
+argument/stdin/shared/MCP writers gain no new raw byte or character limit and
+keep native SQL enforcement after their existing normalization. This does not
+change SQL modes, columns or migrations.
+
+Complete changed-element inventory and preservation scope:
+
+- New `cmd/memdolt/body_file.go`: `bodyFileLimit` owns the file-only byte cap;
+  `bindBodyFile` adds one flag and shared help to just the four commands.
+  `readBodyFile` canonicalizes the explicit source from cwd, captures its
+  regular-file identity, opens its parent as os.Root, opens the basename within
+  that root and compares the opened regular file before content read. Explicit
+  symlink paths resolve to their selected canonical file; replacement identities
+  and rooted escapes refuse. `checkBodyFileOwner` opens only existing selected
+  repository/metadata directories, checks their identities and rejects linked
+  metadata before calling the existing owner guard. Missing metadata means no
+  known owner file; unresolvable repository/metadata identities fail closed.
+  `readBodyFileContent` bounds the read, reports read/close failures, validates
+  bytes/nonblank text and returns the original body for writer normalization.
+  Root close failures also erase the returned body. These helpers bind this
+  named CLI file input, not every reader, a repository-only allow-list, copied
+  credentials or foreign filesystem changes after identity checks.
+- `internal/layout/source.go`: only CheckOwnerSource's caller-scope comment
+  changes. Before #171 the guard served document/config/code-index readers;
+  now the CLI file reader also calls it. Its implementation still compares the
+  opened source against the selected `.memdolt/server.pid` opened for Stat only,
+  refuses the owner file and path/hard-link aliases before source content read,
+  and fails closed on unverifiable owner identity or close. No owner credential
+  contents are read by this guard. Existing document and code-index policies,
+  global document guards and other file readers remain unchanged.
+- `cmd/memdolt/lanes.go`: `bodyArg` gains the repository argument and explicit
+  flag-presence selection/conflict check; its original argument and stdin reads
+  remain. `newNoteAddCommand` and `newNarrativeSetCommand` bind the flag and pass
+  --dir into that selector, retaining args, actors, closures and outputs.
+  `cmd/memdolt/opencode.go`: `newOpenCodeWrapUpNoteCommand` does the same with
+  args[1:] so the session ID remains separate. `logOpenCodeWrapUpNote` and
+  `opencode.VerifySession` keep their verification/open ordering and exact
+  metadata mapping. `storeFlags.run/runStore`, `openCommandStore`,
+  `requireCurrentSchema`, `runLaneWrite`, `emitLaneWrite`, `noteInfo` and
+  `narrativeInfo` retain routing, schema, close and success/late-error contracts.
+- Reached but unchanged writer/binding structure: `Lanes.LogNote`,
+  `LogNoteWithProvenance`, `PrepareNote`, `noteStatement`, `noteText`,
+  `SetNarrative`, `write` and `ConfirmedWriteError` retain SQL, normalization,
+  generated ULIDs/real timestamps, provenance and deny declarations. The owner
+  receives body values through existing bound raw Commit requests with concrete
+  time.Time bindings; OwnerStore/Client/handler Commit and Query behavior,
+  authentication, result envelopes and no-fallback/no-replay rules remain.
+  Shared nullable read DTOs and committed note/history reads remain. No path
+  enters an owner operation or MCP input. MCP Toolset batching/render behavior
+  and all 22 RegisterTools registrations/input schemas remain unchanged.
+- New `cmd/memdolt/body_file_test.go`: `bodyFileCommands` supplies the four CLI
+  shapes. `TestFileBodiesWriteAndReopenDirectAndOwner` exercises Unicode/multiline
+  and ASCII/multibyte 65535-byte bodies, cwd/--dir decoys, absolute paths and
+  real owner-process shutdown/reopen, checking complete rows, real timestamps,
+  authors and commit counts. `TestFileBodyRefusalsPreserveMemoryAndMissingTargets`
+  covers limits/invalid/empty/missing/nonregular inputs and explicit-empty
+  conflicts with native root/config and missing-target preservation.
+  `TestFileBodyProtectsActualOwnerAndAliasesBeforeReading` uses a real owner's
+  published credential plus file/directory symlink and hard-link controls in
+  human/JSON modes; no content, row or commit escapes. `TestFileBodyOwnerProtectionFailsClosed`
+  covers unverifiable metadata/owner paths. `TestFileBodiesPreserveStdinArgumentsAndRenderedInputs`
+  preserves old normalization beyond tagged limits and reads actual generated
+  views plus the legacy render location. `TestFileBodyReadCloseFailuresAndBoundedAllocation`
+  exercises a native closed handle, the narrow bodyFileCloseFailure close-error
+  fixture and bounded read consumption. `TestFileBodiesUnreadableSourcePreservesMissingMemory`
+  uses makeBodyFileUnreadable in new `body_file_windows_test.go` (mandatory native
+  ReadFile byte-range lock) and `body_file_other_test.go` (chmod refusal, skipped
+  only when the test user can still read). `TestFileBodiesRetainDenyGuards` checks
+  direct/owner denial with unchanged native roots; `TestFileBodiesLostOwnerReplyNeverReplays`
+  commits through the actual authenticated handler then drops each reply, proving
+  exactly one submission and reopened effects/provenance. Symlink fixture checks
+  skip only where the platform cannot create those aliases.
+- Existing CLI regressions: `confirmed_result_test.go` extends
+  TestConfirmedOwnerCLILanesRetainLateResults and
+  TestConfirmedDirectCLIOutputFailureNamesCommitAfterClose to all four file
+  commands, retaining their old argument cases and adjusting only expected
+  commits. `opencode_test.go` extends TestOpenCodeCLIRefusesBeforeStoreOpen to
+  file bodies with the same failed/malformed/mismatched API cases.
+  `lanes_test.go` extends TestDirectAndReviewLanesRefuseAStaleSchema to all four
+  file commands. Existing fakeOpenCodeAPI, CLI, native store and owner-process
+  fixtures are reused; no live host service, memory, installation or credential
+  is touched. No frozen golden assertion or unrelated test suite is changed.
+- README adds four invocation examples, input/protection/limit rules and its
+  former no-flag statement as before/after. AGENTS and CLAUDE preserve their
+  old stdin statement and record the additional selector. The shared
+  `templates/skills/memdolt-resources/onboarding.md` and Claude/Codex/OpenCode
+  wrap-up templates preserve every former no-flag statement as before/after;
+  only optional file selection is added. Their per-item approval, attribution,
+  OpenCode identity, render and no-replay obligations remain. This PRD section
+  inventories the change; the #169 and #155 records keep their historical
+  scope, and the §12 follow-up explicitly dispositions only this slice.
+
+No dependency, durable schema, new MCP registration, global lane,
+document-ingestion policy change, other parity feature or full M5 completion.
+
 #### Direct-lane CLI read parity (issue #169)
 
 Before this slice, the shipped direct-lane CLI had state/arch set/show,
@@ -2913,6 +3041,11 @@ client-process behavior or physical two-client/hub acceptance.
 ## 12. Feature parity matrix (memhub v0.2.0 baseline + v0.2.2 OpenCode 2 supplement → memdolt)
 
 Every ordinary row uses v0.2.0 as its baseline. Rows explicitly labeled v0.2.2 are the narrow OpenCode 2 supplement only, not a claim that all intervening memhub behavior was audited.
+
+Before #171 the CRUD row below still lacked explicit CLI file bodies. After it,
+the four commands in §11.2 accept them with native TEXT byte protection while
+preserving existing stdin/writer contracts. That section explicitly dispositions
+the tagged note/narrative character limits; broader CRUD parity remains separate.
 
 | memhub feature | memdolt disposition |
 |---|---|

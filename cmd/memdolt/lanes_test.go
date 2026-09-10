@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -438,7 +439,10 @@ func TestLaneCommandsRefuseAnUninitializedStore(t *testing.T) {
 }
 
 func TestDirectAndReviewLanesRefuseAStaleSchema(t *testing.T) {
+	fakeOpenCodeAPI(t, `{"data":{"id":"ses_current"}}`, false)
 	base := initStore(t)
+	file := filepath.Join(base, "body.txt")
+	writeTestFile(t, file, "file must migrate first")
 	st := openInitializedStore(t, base)
 	stale := strconv.Itoa(store.LatestSchemaVersion() - 1)
 	if _, err := st.Commit(context.Background(), store.CommitRequest{
@@ -458,6 +462,8 @@ func TestDirectAndReviewLanesRefuseAStaleSchema(t *testing.T) {
 		{"review", "list", "--dir", base},
 		{"note", "list", "--dir", base}, {"state", "history", "--dir", base}, {"arch", "history", "--dir", base},
 		{"command", "list", "--dir", base}, {"command", "verify", "test", "go test ./...", "--exit-code", "0", "--dir", base},
+		{"note", "add", "--from-file", file, "--dir", base}, {"state", "set", "--from-file", file, "--dir", base},
+		{"arch", "set", "--from-file", file, "--dir", base}, {"opencode", "wrap-up-note", "ses_current", "--from-file", file, "--dir", base},
 	} {
 		err := runMemdoltErr(t, args...)
 		for _, want := range []string{"schema v" + stale, "memdolt init", "missing migrations"} {

@@ -48,8 +48,8 @@ func newOpenCodeWrapUpNoteCommand() *cobra.Command {
 		Use:   "wrap-up-note <current-session-id> [text]",
 		Short: "Verify the supplied OpenCode session ID, then record the wrap-up note",
 		Long: "Verify the supplied OpenCode session id against its API before opening the store,\n" +
-			"then record one note with exact Session.Info provenance. With no text argument,\n" +
-			"the note is read from standard input.\n\n" +
+			"then record one note with exact Session.Info provenance from a text argument,\n" +
+			"--from-file, or standard input.\n\n" +
 			"A late error retains the confirmed note id and commit hash. Inspect note list\n" +
 			"and Dolt history before retrying; a lost owner reply has an unknown outcome.\n\n" +
 			"Workflows must obtain the current ID from OpenCode host context, never discover\n" +
@@ -57,7 +57,7 @@ func newOpenCodeWrapUpNoteCommand() *cobra.Command {
 			"it cannot authenticate the origin of that ID.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			body, err := bodyArg(cmd, args[1:])
+			body, err := bodyArg(cmd, args[1:], flags.dir)
 			if err != nil {
 				return err
 			}
@@ -68,6 +68,7 @@ func newOpenCodeWrapUpNoteCommand() *cobra.Command {
 				[]string{fmt.Sprintf("noted %s as %s (commit %s)", note.ID, note.Actor, note.Commit)}, err)
 		},
 	}
+	bindBodyFile(cmd)
 	return flags.bind(cmd)
 }
 

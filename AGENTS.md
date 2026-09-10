@@ -19,6 +19,25 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**CLI file bodies (issue #171).** Before this slice, note add, state set,
+arch set and verified OpenCode wrap-up-note accepted argument/stdin bodies
+only. After it, all four also accept `--from-file <path>`, mutually exclusive
+with any explicit body argument, including empty values; omitting both keeps
+stdin. Paths resolve from the process cwd independently of --dir. Regular,
+nonblank UTF-8 files accept at most 65535 raw bytes before normalization.
+Canonical/rooted opens, opened-file identity and the reused CheckOwnerSource
+guard protect the selected repository's known owner credential and aliases
+before content read; unverifiable protection refuses. Selection/read/close
+failures precede store open and preserve missing targets/configuration.
+External and rendered files remain valid explicit sources. The cap follows
+native TEXT bytes, not tagged memhub's note/narrative character limits; old
+argument/stdin/shared writers acquire no new limit. Existing normalization,
+attribution, real timestamps, direct/owner Commit bindings, deny/schema and
+confirmed/unknown outcomes remain. OpenCode verification/provenance and all
+22 MCP registrations/inputs/queues remain. The [PRD record](docs/prd/memdolt-prd.md#cli-file-bodies-issue-171)
+inventories every reached symbol, test and documentation file with exact
+scope. No document-ingestion policy, global lane, dependency or schema change.
+
 **Direct-lane CLI read parity (issue #169).** Before this slice, narrative
 history and command list/verify were absent, note list defaulted to 20 without
 filters, and the shared note/narrative readers exposed dirty working data.
@@ -2214,6 +2233,8 @@ export GOFLAGS=-tags=gms_pure_go
   by the actor (`--actor "Claude Code"` normalizes to `agent:claude-code`; the
   default is `user`), so `dolt_log` answers provenance on its own. `note add`
   and the two `set` commands read their body from stdin when given no argument.
+  Before #171 omission always selected stdin; after it, an explicit --from-file
+  selects the guarded file route above and omission of both still selects stdin.
   Before #169 that was the complete note/command/narrative CLI surface; after
   it, `command list|verify` and `state history` / `arch history` also ship,
   with the committed-read/filter/default changes recorded above. The existing
@@ -2221,6 +2242,8 @@ export GOFLAGS=-tags=gms_pure_go
 - Verify OpenCode session metadata: `memdolt opencode session-info <current-session-id>`
   reads the API without a store; `memdolt opencode wrap-up-note <current-session-id>
   [text]` verifies first, then writes one note (stdin supplies omitted text).
+  Before #171 only argument/stdin bodies existed; after it --from-file also
+  selects a guarded file, preserving verification before any memory open.
   Both support `--json`; the writer also accepts `--dir`. Workflows must take
   the current ID from host context and never discover or guess another session.
   The CLI verifies a supplied ID against the API and cannot authenticate where

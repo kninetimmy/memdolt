@@ -244,7 +244,9 @@ also guides project context and separately approved state/architecture drafts:
    For example, with a selected root and reviewed UTF-8 file, a Codex POSIX-shell
    invocation is `memdolt state set --dir "$memdolt_repo" --actor codex --json < "$approved_state_file"`;
    `arch set` uses the same stdin shape. Claude uses `--actor "Claude Code"` and
-   OpenCode uses `--actor opencode`. There is no `--from-file` flag. Read back
+   OpenCode uses `--actor opencode`. Before #171 there was no `--from-file`
+   flag; now `--from-file <approved-file>` is also supported, with the
+   [file-body rules below](#file-bodies). The stdin recipe still works. Read back
    content/attribution, run approved project checks, and record only their
    observed command outcomes. Follow the shared procedure for PowerShell.
 6. Render and inspect the generated narratives. Narratives are not recall
@@ -658,6 +660,42 @@ log_session_note output schema now admits null for note.createdAt; its input
 and queue behavior are unchanged.
 The [PRD's issue #169 record](docs/prd/memdolt-prd.md#direct-lane-cli-read-parity-issue-169)
 states the complete reader/writer scope and change inventory.
+
+### File bodies
+
+Before #171, note, state, architecture and verified OpenCode wrap-up writes
+accepted a text argument or stdin only. All four now also accept an explicit file:
+
+~~~sh
+memdolt note add --from-file note.txt --dir /path/to/repo --actor codex
+memdolt state set --from-file PROJECT.md --dir /path/to/repo --actor codex
+memdolt arch set --from-file architecture.md --dir /path/to/repo --actor codex
+memdolt opencode wrap-up-note <current-session-id> --from-file wrap-up.txt --dir /path/to/repo --json
+~~~
+
+Relative file paths use the invoking process directory, independently of `--dir`;
+absolute paths also work. Explicit external files and rendered narrative files
+are allowed. A text argument and `--from-file` conflict even when explicitly empty.
+Omitting both retains stdin. Files must be regular, nonblank, valid UTF-8 and at
+most **65535 bytes before whitespace normalization**. Missing/unreadable files,
+invalid content and read/close failures refuse before opening memory, leaving
+missing targets and configuration unchanged.
+
+The CLI confines the canonical source open and checks the opened file's identity.
+It refuses the selected repository's known owner credential (`.memdolt/server.pid`)
+and path/hard-link aliases before reading content, failing closed if that identity
+cannot be checked. This named-source protection does not detect copied credentials
+or impose a policy on every file reader. It adds no document-ingestion allow-list.
+
+Successful writes retain existing normalization, attribution, one commit per
+write, deny/schema rules and confirmed/unknown outcome reporting. OpenCode still
+verifies the supplied session before opening memory and stores exactly its verified
+provenance; no manual provenance flag exists. Only body text reaches the existing
+owner operation. MCP inputs, queues and registrations are unchanged.
+The new file-only byte cap follows native TEXT capacity. Tagged memhub's 4096-note
+and 65536-narrative **character** limits are not added to existing Memdolt argument,
+stdin, MCP or shared writers. The [PRD record](docs/prd/memdolt-prd.md#cli-file-bodies-issue-171)
+contains the exact reader/writer inventory and native evidence.
 
 ### Local models and retrieval
 
