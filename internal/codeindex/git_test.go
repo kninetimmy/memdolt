@@ -380,3 +380,82 @@ func TestGitHistoryOwnerAliasesAndV1NameCollisionsRefuse(t *testing.T) {
 		t.Fatal("refused migration changed source chunks")
 	}
 }
+
+func TestGitHistoryRejectsForeignSQLitePrefixLookalikes(t *testing.T) {
+	ctx := context.Background()
+	for _, version := range []int{1, 2} {
+		for _, kind := range []string{"table", "trigger"} {
+			t.Run(fmt.Sprintf("v%d/%s", version, kind), func(t *testing.T) {
+				root := testRepo(t, map[string]string{"source.go": "package a\nfunc KeptSource() {}\n"})
+				first := commitGitFixture(t, root, "Fixture", "2026-09-01T00:00:00Z", "First")
+				writeTest(t, root, ".memdolt/config.toml", "[retrieval]\nmode='hybrid'\n")
+				if _, err := Refresh(ctx, root, fakeInference{}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := IngestGit(ctx, root, nil); err != nil {
+					t.Fatal(err)
+				}
+				commitGitFixture(t, root, "Fixture", "2026-09-02T00:00:00Z", "Not yet cached", first)
+				if version == 1 {
+					execIndex(t, root, "DROP TABLE git_commit_files; DROP TABLE git_files; DROP TABLE git_commits; DROP TABLE git_ingestions; UPDATE index_meta SET value='1' WHERE key='schema_version'")
+				}
+				// Real SQLite internal indexes/statistics and FTS shadow tables
+				// remain valid in both supported schemas.
+				execIndex(t, root, "ANALYZE")
+				indexSQL(t, root, func(db *sql.DB) {
+					if err := checkOwnedSchema(ctx, db); err != nil {
+						t.Fatalf("refused legitimate SQLite internals: %v", err)
+					}
+				})
+				foreign := "CREATE TABLE sqlitex_unrelated(value TEXT); INSERT INTO sqlitex_unrelated VALUES ('keep foreign data')"
+				if kind == "trigger" {
+					foreign = "CREATE TRIGGER sqlitex_side_effect AFTER INSERT ON git_commits BEGIN DELETE FROM code_chunks; END"
+					if version == 1 {
+						foreign = "CREATE TRIGGER sqlitex_side_effect AFTER UPDATE ON index_meta BEGIN DELETE FROM code_chunks; END"
+					}
+				}
+				execIndex(t, root, foreign)
+				source := map[string][][]any{}
+				for _, table := range []string{"indexed_files", "code_chunks", "code_embeddings"} {
+					source[table] = gitTableRows(t, root, table)
+					if len(source[table]) != 1 {
+						t.Fatalf("fixture %s needs one real row", table)
+					}
+				}
+				cache := filepath.Join(root, ".memdolt", indexName)
+				before, err := os.ReadFile(cache)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, operation := range []struct {
+					name string
+					run  func() error
+				}{
+					{"ingest", func() error {
+						result, err := IngestGit(ctx, root, nil)
+						if result.Committed || result.OutcomeUnknown {
+							t.Errorf("unsafe ingest reported publication: %+v", result)
+						}
+						return err
+					}},
+					{"file history", func() error { _, err := ReadFileHistory(ctx, root, "source.go", 10); return err }},
+					{"refresh", func() error { _, err := Refresh(ctx, root, fakeInference{}); return err }},
+					{"locate", func() error { _, err := Locate(ctx, root, fakeInference{}, Options{Query: "KeptSource"}); return err }},
+					{"remove", func() error { _, err := Remove(ctx, root); return err }},
+				} {
+					if err := operation.run(); err == nil || !strings.Contains(err.Error(), "unrelated schema objects") {
+						t.Errorf("%s failed to refuse foreign %s before use: %v", operation.name, kind, err)
+					}
+					for table, rows := range source {
+						if after := gitTableRows(t, root, table); !reflect.DeepEqual(rows, after) {
+							t.Errorf("%s changed %s: %d rows before, %d after", operation.name, table, len(rows), len(after))
+						}
+					}
+					if after, err := os.ReadFile(cache); err != nil || !bytes.Equal(before, after) {
+						t.Fatalf("%s changed the complete cache, including foreign objects: %v", operation.name, err)
+					}
+				}
+			})
+		}
+	}
+}

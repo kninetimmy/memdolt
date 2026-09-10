@@ -232,7 +232,8 @@ func checkOwnedSchema(ctx context.Context, db *sql.DB) (err error) {
 	for _, ddl := range historyDDL {
 		expected[strings.Fields(ddl)[2]] = ddl
 	}
-	rows, err := db.QueryContext(ctx, "SELECT name,type,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+	// GLOB keeps '_' literal; LIKE would also hide foreign sqlitex_* objects.
+	rows, err := db.QueryContext(ctx, "SELECT name,type,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'")
 	if err != nil {
 		return err
 	}

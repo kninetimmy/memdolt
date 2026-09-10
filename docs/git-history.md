@@ -160,6 +160,22 @@ including all history; a subsequent `code index` creates source data only, and
 history needs another explicit `ingest-git`. Unsupported caches need inspection
 with a compatible binary. There is no durable Dolt migration.
 
+Before #174's first review correction, `checkOwnedSchema` used
+`name NOT LIKE 'sqlite_%'`. SQL LIKE treats `_` as a wildcard, so foreign
+`sqlitex_unrelated` tables and `sqlitex_side_effect` triggers escaped the
+inventory. A native Git/SQLite reproduction erased source chunks and vectors
+while ingestion reported `committed=true`. After correction,
+`name NOT GLOB 'sqlite_*'` excludes only the literal reserved `sqlite_` prefix;
+lookalike names reach the existing foreign-object refusal before use. This
+shared fix covers `IngestGit`, `ReadFileHistory`, `Remove` and `bootstrap` through
+`Refresh`/refreshing `Locate`. `Status` and no-refresh `Locate` retain their
+existing read paths; this is not a new ownership check on every SQLite reader.
+Real SQLite internal indexes/statistics, FTS shadow handling and the preserving
+v1/v2 transition remain. New native
+`TestGitHistoryRejectsForeignSQLitePrefixLookalikes` exercises foreign tables
+and side-effect triggers in both versions, including all five public callers,
+and checks exact source/vector rows plus byte-for-byte complete-cache retention.
+
 | Element | Before and after / preserved boundary |
 | --- | --- |
 | `internal/codeindex/git.go`: `GitRange`, `GitIngestSummary`, `gitCommit`, `gitChange`, `maxGitCommits`, `maxGitBytes` | New range, observed counters, private parsed metadata and bounded observation records; no durable Store DTO changes. |
@@ -190,7 +206,9 @@ The test-symbol inventory is:
   `TestGitHistoryBusyForeignSchemaAndFinalizationControls`,
   `TestGitFramingPreservesDelimitersAndRefusesMalformedObservations` and
   `TestGitHistoryOwnerAliasesAndV1NameCollisionsRefuse` exercise the named new
-  boundaries. Existing `TestIndexStatusRebuildRemovalAndForeignFilePreservation`
+  boundaries. `TestGitHistoryRejectsForeignSQLitePrefixLookalikes` adds the
+  review-correction ownership/preservation regression above. Existing
+  `TestIndexStatusRebuildRemovalAndForeignFilePreservation`
   retains its source/removal checks with the new unsupported-version refusal.
 - `internal/search/search_test.go`: existing
   `TestParseDecisionFallbackPrefixesAndRefusals` replaces the deferred-file
