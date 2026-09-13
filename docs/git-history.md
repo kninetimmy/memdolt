@@ -116,6 +116,21 @@ A locator-only path therefore returns empty file history. Explicit file queries
 need not already be indexed. File selection uses the configured code repository
 root; MCP refuses an unavailable root instead of guessing the process cwd.
 
+Before #174's second review correction, `TryFile` called the explicit reader
+before observing cache membership. An unindexed directory such as
+`internal/codeindex` therefore refused with a file-path protection error instead
+of searching decisions. After correction, implicit candidates use
+`ReadIndexedFileHistory`. Both reader entries share `readFileHistory`; the
+indexed-only entry observes Git/locator membership in its guarded transaction
+before source-path protection or history reads. A successfully finalized
+unindexed result preserves ordinary decision fallback, including directory and
+default-denied filename text. Explicit `ReadFileHistory` keeps its path checks
+even without a cache; indexed candidates retain those same protections. Cache
+ownership, configuration, locking and finalization errors still refuse instead
+of silently falling back. Membership and selected history share one snapshot.
+This selection change binds `TryFile` and its CLI/MCP callers; ingestion and
+the other code-index readers retain their prior behavior.
+
 These calls read only cache metadata and current path identities. They do not
 run Git, read current source bodies, provision a model, refresh/ingest history,
 open Dolt or contact its owner. The ordinary `serve` startup still owns Dolt;
@@ -130,9 +145,9 @@ are inspected without content reads; deleted paths remain searchable. Linked
 paths, default secret paths, protected metadata namespaces and known owner-file
 aliases are excluded. The configured regexes scan stored commit ID, author,
 author date, subject, change type and paths. Denied commits/changes are counted
-without printing their contents. Queries recheck current configuration and
-filter previously cached denied metadata; a denied query path returns a generic
-error without echoing it. This does not erase earlier cache rows or scan whole
+without printing their contents. File queries recheck current configuration and
+filter previously cached denied metadata; a denied selected file path returns
+a generic error without echoing it. This does not erase earlier cache rows or scan whole
 source bodies/commit-message bodies. Remove/reingest explicitly if the cache
 itself needs replacement under new rules.
 
@@ -184,10 +199,10 @@ and checks exact source/vector rows plus byte-for-byte complete-cache retention.
 | `validateGitObjects`, `validGitIdentity`, `parseGitMetadata`, `parseGitChanges` | New raw-length/NUL framing, UTF-8/identity/date/type validation and destination extraction. Native subject formatting remains Git's; no lossy decoding or quoted-path storage. These validations do not govern unrelated Git commands. |
 | `publishGitHistory` | New bound upserts and one history/range transaction. Its private finalizer defaults to native `sql.Tx.Commit`; tests can exercise an unobserved return. It trusts the outer validated payload, and introduces no general SQLite write policy. |
 | `internal/codeindex/git_history.go`: `FileHistoryHit`, `HistoryCoverage`, `FileHistory`, `MaxFileHistoryLimit`, `gitObservedFormat` | New exact history DTOs, disclosed query bound and fixed-width UTC cache-observation timestamps. Git author offsets remain unchanged in output. |
-| `NormalizeHistoryPath`, `historyPathAllowed`, `ReadFileHistory`, `historyCoverage`, `fileHistoryRows` | New query normalization, metadata-only path protection, guarded snapshot, current deny filtering and author-instant ordering. No implicit refresh, Git process, model, source content or memory owner access. |
+| `NormalizeHistoryPath`, `historyPathAllowed`, `ReadFileHistory`, `ReadIndexedFileHistory`, `readFileHistory`, `historyCoverage`, `fileHistoryRows` | New query normalization, metadata-only path protection, guarded snapshot, current deny filtering and author-instant ordering. The second correction extracts the shared reader and adds indexed-only selection before file-path checks; the explicit entry keeps its existing checks and outputs. Both entries retain cache ownership/lock/finalization refusal. No implicit refresh, Git process, model, source content or memory owner access. |
 | `internal/codeindex/schema.go`: `schemaVersion`, `historyDDL`, `checkOwnedSchema`, `bootstrap`, `needsRebuild` | v2 extends v1 in place. Owned definitions/counts are validated; foreign name collisions and unsupported versions refuse. `Refresh` and refreshing `Locate` reach the new bootstrap; `Remove` reaches the stricter ownership check. `Status`/no-refresh `Locate` retain their existing read paths and source v1 compatibility; neither acquires every new ingestion check. Existing header/path/locking and rollback/meta helpers remain. |
 | Reused `ResolveRoot`, `openRepository`, `verifyMetadata`, `acquire`, `close`, `validateSourcePath`, `openRegular`, `openSource`, `readConfig`, `defaultDenied`, `openDB`, `checkIndexFiles`, `storedVersion`, `rollback`, `layout.CheckOwnerSource`, `denylist.Compile`/`List.Check` | Their existing implementations and source/document/locator callers remain unchanged. Git operations now use their root/config/identity/lock/schema/deny boundaries. Historical paths may be absent; a successful current-file open closes without calling `readSource`. These are named helper guarantees, not a policy for every filesystem or SQLite operation. |
-| `internal/search/search.go`: `Query`, `Response`, `Hit`, `Parse`, `TryFile`, `Run`, `Lines` | Before, Parse refused file queries and Response held only decision hits. Now path candidates route before memory access; Results carries either typed branch and optional coverage. Parse's UTF-8/NUL check binds all search requests. `DecisionHit` fields, `Store.SearchDecisions`, ranking and decision formatting stay intact. Run refuses misrouted explicit file requests; it remains the decision executor, not a cache reader. |
+| `internal/search/search.go`: `Query`, `Response`, `Hit`, `Parse`, `TryFile`, `Run`, `Lines` | Before, Parse refused file queries and Response held only decision hits. Now path candidates route before memory access; Results carries either typed branch and optional coverage. The second correction makes TryFile select the indexed-only reader for implicit candidates, preserving unindexed-directory decision fallback. Parse's UTF-8/NUL check binds all search requests. `DecisionHit` fields, `Store.SearchDecisions`, ranking and decision formatting stay intact. Run refuses misrouted explicit file requests; it remains the decision executor, not a cache reader. |
 | `cmd/memdolt/ingest_git.go`: `newIngestGitCommand`; `root.go`: `newRootCommand` | New CLI ingestion command/flags/reporting registered alongside existing commands; no existing command registration removed. Errors preserve confirmed/unknown publication flags. |
 | `cmd/memdolt/search.go`: `newSearchCommand`; `code.go`: `newCodeCommand` | File routing precedes `flags.runStore`; decision routing stays unchanged. Help discloses cached bounds, preserving refresh, whole-index removal and unsupported-schema inspection. Code execution/scoring is unchanged apart from reached schema checks. |
 | `internal/mcpserver/tools.go`: `registerTools`, `searchOutputSchema`, `Toolset.search` | Existing search registration gains description/output union and early file routing. The SDK's existing jsonschema-go dependency derives both real branches instead of incorrectly requiring both at once. Inputs, other registrations, Backend/IPC interfaces, authentication and note queues remain. |
@@ -207,7 +222,11 @@ The test-symbol inventory is:
   `TestGitFramingPreservesDelimitersAndRefusesMalformedObservations` and
   `TestGitHistoryOwnerAliasesAndV1NameCollisionsRefuse` exercise the named new
   boundaries. `TestGitHistoryRejectsForeignSQLitePrefixLookalikes` adds the
-  review-correction ownership/preservation regression above. Existing
+  first review-correction ownership/preservation regression above. New
+  `TestFileHistoryIndexedSelectionPreservesFallbackAndGuards` checks missing,
+  v1 and v2 cache selection, unindexed directory/default-denied filename text,
+  locator membership and explicit/indexed path refusal. The existing busy/foreign
+  controls now also require refusal for unindexed implicit candidates. Existing
   `TestIndexStatusRebuildRemovalAndForeignFilePreservation`
   retains its source/removal checks with the new unsupported-version refusal.
 - `internal/search/search_test.go`: existing
@@ -217,7 +236,10 @@ The test-symbol inventory is:
 - `cmd/memdolt/git_history_test.go`: new `gitHistoryCLIFixture`,
   `TestGitIngestCLIHumanJSONWithoutDoltOrOwner` and
   `TestFileHistoryCLIAndActualMCPLiveOwnerPreserveMemoryAndQueuedNotes` add real
-  CLI/serve evidence. Existing
+  CLI/serve evidence. The second correction extends the latter with actual
+  direct/owner CLI and MCP unindexed-directory decision equivalence, before and
+  after ingestion, plus explicit directory-file refusal; queued-note, owner and
+  native-memory preservation assertions remain. Existing
   `TestSearchCLIProvidesStableDecisionJSONAndClearRefusals` preserves decision
   assertions and replaces the file-refusal expectation with cached emptiness.
 - `internal/mcpserver/git_history_test.go`: new

@@ -266,6 +266,9 @@ func TestGitHistoryBusyForeignSchemaAndFinalizationControls(t *testing.T) {
 	if _, err := ReadFileHistory(ctx, root, "source.go", 10); !errors.Is(err, ErrBusy) {
 		t.Fatalf("busy search=%v", err)
 	}
+	if _, err := ReadIndexedFileHistory(ctx, root, "unindexed/path", 10); !errors.Is(err, ErrBusy) {
+		t.Fatalf("busy cache allowed decision fallback: %v", err)
+	}
 	if err := r.close(); err != nil {
 		t.Fatal(err)
 	}
@@ -286,6 +289,9 @@ func TestGitHistoryBusyForeignSchemaAndFinalizationControls(t *testing.T) {
 			}
 			if _, err := ReadFileHistory(ctx, other, "a.txt", 10); err == nil {
 				t.Fatal("foreign/unsupported cache was searched")
+			}
+			if _, err := ReadIndexedFileHistory(ctx, other, "unindexed/path", 10); err == nil {
+				t.Fatal("foreign/unsupported cache allowed decision fallback")
 			}
 			after, err := os.ReadFile(filepath.Join(other, ".memdolt", indexName))
 			if err != nil || !bytes.Equal(before, after) {
@@ -378,6 +384,52 @@ func TestGitHistoryOwnerAliasesAndV1NameCollisionsRefuse(t *testing.T) {
 	}
 	if got := gitTableRows(t, other, "code_chunks"); len(got) != 1 {
 		t.Fatal("refused migration changed source chunks")
+	}
+}
+
+func TestFileHistoryIndexedSelectionPreservesFallbackAndGuards(t *testing.T) {
+	ctx := context.Background()
+	root := testRepo(t, map[string]string{"source.go": "package a\nfunc Source() {}\n"})
+	commitGitFixture(t, root, "Fixture", "2026-09-01T00:00:00Z", "First")
+	if err := os.MkdirAll(filepath.Join(root, "internal", "codeindex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []int{0, 2, 1} {
+		if version == 2 {
+			if _, err := Refresh(ctx, root, fakeInference{}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := IngestGit(ctx, root, nil); err != nil {
+				t.Fatal(err)
+			}
+		} else if version == 1 {
+			execIndex(t, root, "DROP TABLE git_commit_files; DROP TABLE git_files; DROP TABLE git_commits; DROP TABLE git_ingestions; UPDATE index_meta SET value='1' WHERE key='schema_version'")
+		}
+		for _, path := range []string{"internal/codeindex", ".env"} {
+			if got, err := ReadIndexedFileHistory(ctx, root, path, 10); err != nil || got.Indexed || len(got.Results) != 0 {
+				t.Fatalf("v%d unindexed candidate selected file semantics: %+v %v", version, got, err)
+			}
+			if _, err := ReadFileHistory(ctx, root, path, 10); err == nil || strings.Contains(err.Error(), path) {
+				t.Fatalf("v%d explicit protected path returned or echoed: %v", version, err)
+			}
+		}
+		got, err := ReadIndexedFileHistory(ctx, root, "source.go", 10)
+		wantHits := 0
+		if version == 2 {
+			wantHits = 1
+		}
+		if err != nil || got.Indexed != (version != 0) || len(got.Results) != wantHits {
+			t.Fatalf("v%d indexed selection=%+v %v", version, got, err)
+		}
+		if version != 0 {
+			writeTest(t, root, ".memdolt/config.toml", "[deny_list]\npatterns=['source[.]go']\n")
+			for _, read := range []func(context.Context, string, string, int) (FileHistory, error){ReadFileHistory, ReadIndexedFileHistory} {
+				if _, err := read(ctx, root, "source.go", 10); err == nil || strings.Contains(err.Error(), "source.go") {
+					t.Fatalf("v%d indexed protected path returned or echoed: %v", version, err)
+				}
+			}
+			writeTest(t, root, ".memdolt/config.toml", "")
+		}
 	}
 }
 

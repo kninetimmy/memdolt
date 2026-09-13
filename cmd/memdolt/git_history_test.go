@@ -76,7 +76,20 @@ func TestGitIngestCLIHumanJSONWithoutDoltOrOwner(t *testing.T) {
 func TestFileHistoryCLIAndActualMCPLiveOwnerPreserveMemoryAndQueuedNotes(t *testing.T) {
 	base := initStore(t)
 	gitHistoryCLIFixture(t, base)
+	if err := os.MkdirAll(filepath.Join(base, "internal", "codeindex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runMemdolt(t, "decision", "add", "Choose internal/codeindex for navigation", "--rationale", "Keep path-looking decisions searchable", "--dir", base)
 	runMemdolt(t, "decision", "add", "History source.go choice", "--rationale", "Decision search remains available", "--dir", base)
+	directoryDecision := decodeJSON[search.Response](t, runMemdolt(t, "search", "decision:internal/codeindex", "--dir", base, "--json"))
+	if len(directoryDecision.Results) != 1 || directoryDecision.Coverage != nil {
+		t.Fatalf("directory decision=%+v", directoryDecision)
+	}
+	directoryFallback := directoryDecision
+	directoryFallback.Matcher = "fts:decision-fallback"
+	if got := decodeJSON[search.Response](t, runMemdolt(t, "search", "internal/codeindex", "--dir", base, "--json")); !reflect.DeepEqual(got, directoryFallback) {
+		t.Fatalf("unindexed directory did not retain direct decision fallback: %+v", got)
+	}
 	decisionBefore := runMemdolt(t, "search", "decision:source.go", "--dir", base, "--json")
 	plainBefore := runMemdolt(t, "search", "unindexed.choice", "--dir", base, "--json")
 	before := interopRepoSnapshot(t, base)
@@ -116,7 +129,26 @@ func TestFileHistoryCLIAndActualMCPLiveOwnerPreserveMemoryAndQueuedNotes(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	runMemdolt(t, "ingest-git", "--dir", base, "--json")
+	for _, cached := range []bool{false, true} {
+		if cached {
+			runMemdolt(t, "ingest-git", "--dir", base, "--json")
+		}
+		for query, want := range map[string]search.Response{"internal/codeindex": directoryFallback, "decision:internal/codeindex": directoryDecision} {
+			if got := decodeJSON[search.Response](t, runMemdolt(t, "search", query, "--dir", base, "--json")); !reflect.DeepEqual(got, want) {
+				t.Fatalf("directory CLI search cached=%t: %+v", cached, got)
+			}
+			if got := call(query); !reflect.DeepEqual(got, want) {
+				t.Fatalf("directory MCP search cached=%t: %+v", cached, got)
+			}
+		}
+		if text := runMemdoltErr(t, "search", "file:internal/codeindex", "--dir", base); !strings.Contains(text, "file-history path is denied or protected") {
+			t.Fatalf("explicit directory CLI search cached=%t: %s", cached, text)
+		}
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "search", Arguments: map[string]any{"query": "file:internal/codeindex"}})
+		if err != nil || !result.IsError {
+			t.Fatalf("explicit directory MCP search cached=%t: %+v %v", cached, result, err)
+		}
+	}
 	cli := decodeJSON[search.Response](t, runMemdolt(t, "search", "file:雪 source.go", "--dir", base, "--json"))
 	if got := call("file:雪 source.go"); !reflect.DeepEqual(got, cli) {
 		t.Fatalf("actual MCP and CLI disagree: MCP=%+v CLI=%+v", got, cli)

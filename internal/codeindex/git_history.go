@@ -75,7 +75,18 @@ func (r *repository) historyPathAllowed(path string) (bool, error) {
 // ReadFileHistory reads only the guarded cache and current path identities. It
 // never runs Git, reads source bodies, migrates the index, or opens a model/Dolt.
 // Missing/v1 history is empty; Indexed also recognizes locator-only paths.
-func ReadFileHistory(ctx context.Context, start, path string, limit int) (result FileHistory, err error) {
+func ReadFileHistory(ctx context.Context, start, path string, limit int) (FileHistory, error) {
+	return readFileHistory(ctx, start, path, limit, false)
+}
+
+// ReadIndexedFileHistory selects file semantics only for a cached Git/locator
+// path. An unindexed candidate skips source-path inspection and history reads;
+// cache ownership, locking and finalization errors still refuse selection.
+func ReadIndexedFileHistory(ctx context.Context, start, path string, limit int) (FileHistory, error) {
+	return readFileHistory(ctx, start, path, limit, true)
+}
+
+func readFileHistory(ctx context.Context, start, path string, limit int, indexedOnly bool) (result FileHistory, err error) {
 	result.Results = []FileHistoryHit{}
 	result.Coverage = HistoryCoverage{Cached: true, Limit: min(limit, MaxFileHistoryLimit)}
 	if start == "" {
@@ -89,8 +100,10 @@ func ReadFileHistory(ctx context.Context, start, path string, limit int) (result
 		return result, err
 	}
 	defer func() { err = errors.Join(err, r.close()) }()
-	if ok, err := r.historyPathAllowed(path); err != nil || !ok {
-		return result, errors.Join(errors.New("file-history path is denied or protected"), err)
+	if !indexedOnly {
+		if ok, err := r.historyPathAllowed(path); err != nil || !ok {
+			return result, errors.Join(errors.New("file-history path is denied or protected"), err)
+		}
 	}
 	if r.metadata == nil {
 		return result, nil
@@ -121,14 +134,24 @@ func ReadFileHistory(ctx context.Context, start, path string, limit int) (result
 	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM indexed_files WHERE path=?)", path).Scan(&result.Indexed); err != nil {
 		return result, err
 	}
+	if *v == schemaVersion {
+		var known bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM git_files WHERE path=?)", path).Scan(&known); err != nil {
+			return result, err
+		}
+		result.Indexed = result.Indexed || known
+	}
+	if indexedOnly {
+		if !result.Indexed {
+			return result, tx.Commit()
+		}
+		if ok, err := r.historyPathAllowed(path); err != nil || !ok {
+			return result, errors.Join(errors.New("file-history path is denied or protected"), err)
+		}
+	}
 	if *v == 1 {
 		return result, tx.Commit()
 	}
-	var known bool
-	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM git_files WHERE path=?)", path).Scan(&known); err != nil {
-		return result, err
-	}
-	result.Indexed = result.Indexed || known
 	result.Coverage, err = r.historyCoverage(ctx, tx, result.Coverage)
 	if err != nil {
 		return result, err

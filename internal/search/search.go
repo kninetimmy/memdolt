@@ -101,7 +101,11 @@ func TryFile(ctx context.Context, root string, query Query) (Response, bool, err
 	if query.Path == "" {
 		return Response{}, false, nil
 	}
-	history, err := codeindex.ReadFileHistory(ctx, root, query.Path, query.Limit)
+	read := codeindex.ReadFileHistory
+	if query.Matcher != "exact:file-history" {
+		read = codeindex.ReadIndexedFileHistory
+	}
+	history, err := read(ctx, root, query.Path, query.Limit)
 	if err != nil {
 		return Response{}, true, err
 	}
