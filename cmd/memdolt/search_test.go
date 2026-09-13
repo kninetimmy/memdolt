@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -88,11 +90,18 @@ func TestSearchCLIProvidesStableDecisionJSONAndClearRefusals(t *testing.T) {
 	for _, args := range [][]string{
 		{"search", "", "--dir", missing},
 		{"search", "decision: !!!", "--dir", missing},
+		{"search", ".-", "--dir", missing},
+		{"search", ".☃", "--dir", missing},
+		{"search", "☃", "--dir", missing},
+		{"search", "decision:.-", "--dir", missing},
 		{"search", "file:", "--dir", missing},
 	} {
 		if err := runMemdoltErr(t, args...); strings.Contains(err, "memdolt init") {
 			t.Errorf("invalid search %q reached store SQL before refusal: %s", args[1], err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(missing, ".memdolt")); !os.IsNotExist(err) {
+		t.Fatalf("invalid search initialized repository metadata: %v", err)
 	}
 	file := decodeJSON[searchpkg.Response](t, runMemdolt(t, "search", "file:src/main.go", "--dir", missing, "--json"))
 	if file.Matcher != "exact:file-history" || len(file.Results) != 0 || file.Coverage == nil || !file.Coverage.Cached {

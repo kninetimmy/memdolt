@@ -17,10 +17,15 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func gitHistoryCLIFixture(t *testing.T, base string) {
+func gitHistoryCLIFixture(t *testing.T, base string, paths ...string) {
 	t.Helper()
-	writeTestFile(t, filepath.Join(base, "雪 source.go"), "package a\nfunc HistoryFixture() {}\n")
-	for _, args := range [][]string{{"init", "--quiet"}, {"add", "--", "雪 source.go"}, {"-c", "user.name=History Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "History subject"}} {
+	if len(paths) == 0 {
+		paths = []string{"雪 source.go"}
+	}
+	for _, path := range paths {
+		writeTestFile(t, filepath.Join(base, path), "package a\nfunc HistoryFixture() {}\n")
+	}
+	for _, args := range [][]string{{"init", "--quiet"}, append([]string{"add", "--"}, paths...), {"-c", "user.name=History Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "History subject"}} {
 		if out, err := exec.Command("git", append([]string{"-C", base}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("fixture Git=%s %v", out, err)
 		}
@@ -75,7 +80,7 @@ func TestGitIngestCLIHumanJSONWithoutDoltOrOwner(t *testing.T) {
 
 func TestFileHistoryCLIAndActualMCPLiveOwnerPreserveMemoryAndQueuedNotes(t *testing.T) {
 	base := initStore(t)
-	gitHistoryCLIFixture(t, base)
+	gitHistoryCLIFixture(t, base, "雪 source.go", ".-", ".☃")
 	if err := os.MkdirAll(filepath.Join(base, "internal", "codeindex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +153,36 @@ func TestFileHistoryCLIAndActualMCPLiveOwnerPreserveMemoryAndQueuedNotes(t *test
 		if err != nil || !result.IsError {
 			t.Fatalf("explicit directory MCP search cached=%t: %+v %v", cached, result, err)
 		}
+	}
+	for _, path := range []string{".-", ".☃"} {
+		want := decodeJSON[search.Response](t, runMemdolt(t, "search", "file:"+path, "--dir", base, "--json"))
+		if len(want.Results) != 1 || want.Results[0].Path != path || want.Results[0].ChangeType != "A" {
+			t.Fatalf("symbol-only path history=%+v", want)
+		}
+		for _, query := range []string{path, "file:" + path} {
+			if got := decodeJSON[search.Response](t, runMemdolt(t, "search", query, "--dir", base, "--json")); !reflect.DeepEqual(got, want) {
+				t.Fatalf("symbol-only CLI search=%+v", got)
+			}
+			if got := call(query); !reflect.DeepEqual(got, want) {
+				t.Fatalf("symbol-only MCP search=%+v", got)
+			}
+		}
+	}
+	for _, query := range []string{".+", "decision:.-"} {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "search", Arguments: map[string]any{"query": query}})
+		if err != nil || !result.IsError {
+			t.Fatalf("invalid symbol-only decision reached MCP backend: %+v %v", result, err)
+		}
+		visible, err := json.Marshal(result.Content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(visible), "searchable token") {
+			t.Fatalf("symbol-only decision returned the wrong MCP error: %s", visible)
+		}
+	}
+	if missing := call("file:.+"); len(missing.Results) != 0 || missing.Matcher != "exact:file-history" {
+		t.Fatalf("explicit missing symbol path=%+v", missing)
 	}
 	cli := decodeJSON[search.Response](t, runMemdolt(t, "search", "file:雪 source.go", "--dir", base, "--json"))
 	if got := call("file:雪 source.go"); !reflect.DeepEqual(got, cli) {

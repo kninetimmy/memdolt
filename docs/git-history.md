@@ -131,6 +131,19 @@ of silently falling back. Membership and selected history share one snapshot.
 This selection change binds `TryFile` and its CLI/MCP callers; ingestion and
 the other code-index readers retain their prior behavior.
 
+Before #174's third review correction, `Parse` applied the decision-token check
+before identifying implicit file candidates, refusing indexed paths such as
+`.-` and `.☃`. After correction, valid path-looking candidates reach `TryFile`
+first; selected cached paths need no letter or number. An unindexed candidate
+must still pass the same decision-token check before CLI store selection or the
+MCP decision backend. Explicit decision prefixes and ordinary non-path queries
+retain that refusal in `Parse`. `Run` also checks before backend SQL if a caller
+omits file selection. These three seams reuse `validateDecisionText`; this does
+not add a policy to arbitrary `Store.SearchDecisions` calls. UTF-8/NUL, empty,
+limit and explicit-path validation remain; unsafe implicit paths retain ordinary
+decision fallback when their text is valid. The existing `/`, `\` or `.` marker
+rule is unchanged: a bare symbol name without one still requires `file:`.
+
 These calls read only cache metadata and current path identities. They do not
 run Git, read current source bodies, provision a model, refresh/ingest history,
 open Dolt or contact its owner. The ordinary `serve` startup still owns Dolt;
@@ -202,7 +215,7 @@ and checks exact source/vector rows plus byte-for-byte complete-cache retention.
 | `NormalizeHistoryPath`, `historyPathAllowed`, `ReadFileHistory`, `ReadIndexedFileHistory`, `readFileHistory`, `historyCoverage`, `fileHistoryRows` | New query normalization, metadata-only path protection, guarded snapshot, current deny filtering and author-instant ordering. The second correction extracts the shared reader and adds indexed-only selection before file-path checks; the explicit entry keeps its existing checks and outputs. Both entries retain cache ownership/lock/finalization refusal. No implicit refresh, Git process, model, source content or memory owner access. |
 | `internal/codeindex/schema.go`: `schemaVersion`, `historyDDL`, `checkOwnedSchema`, `bootstrap`, `needsRebuild` | v2 extends v1 in place. Owned definitions/counts are validated; foreign name collisions and unsupported versions refuse. `Refresh` and refreshing `Locate` reach the new bootstrap; `Remove` reaches the stricter ownership check. `Status`/no-refresh `Locate` retain their existing read paths and source v1 compatibility; neither acquires every new ingestion check. Existing header/path/locking and rollback/meta helpers remain. |
 | Reused `ResolveRoot`, `openRepository`, `verifyMetadata`, `acquire`, `close`, `validateSourcePath`, `openRegular`, `openSource`, `readConfig`, `defaultDenied`, `openDB`, `checkIndexFiles`, `storedVersion`, `rollback`, `layout.CheckOwnerSource`, `denylist.Compile`/`List.Check` | Their existing implementations and source/document/locator callers remain unchanged. Git operations now use their root/config/identity/lock/schema/deny boundaries. Historical paths may be absent; a successful current-file open closes without calling `readSource`. These are named helper guarantees, not a policy for every filesystem or SQLite operation. |
-| `internal/search/search.go`: `Query`, `Response`, `Hit`, `Parse`, `TryFile`, `Run`, `Lines` | Before, Parse refused file queries and Response held only decision hits. Now path candidates route before memory access; Results carries either typed branch and optional coverage. The second correction makes TryFile select the indexed-only reader for implicit candidates, preserving unindexed-directory decision fallback. Parse's UTF-8/NUL check binds all search requests. `DecisionHit` fields, `Store.SearchDecisions`, ranking and decision formatting stay intact. Run refuses misrouted explicit file requests; it remains the decision executor, not a cache reader. |
+| `internal/search/search.go`: `Query`, `Response`, `Hit`, `Parse`, `validateDecisionText`, `TryFile`, `Run`, `Lines` | Before, Parse refused file queries and Response held only decision hits. Now path candidates route before memory access; Results carries either typed branch and optional coverage. The second correction makes TryFile select the indexed-only reader for implicit candidates, preserving unindexed-directory decision fallback. The third defers decision-token validation for valid file candidates until selection; Parse, TryFile and Run share that validator, preserving pre-store/backend refusal for invalid ordinary decisions. Parse's UTF-8/NUL check binds all search requests. `DecisionHit` fields, `Store.SearchDecisions`, ranking and decision formatting stay intact. Run refuses misrouted explicit file requests; it remains the decision executor, not a cache reader. |
 | `cmd/memdolt/ingest_git.go`: `newIngestGitCommand`; `root.go`: `newRootCommand` | New CLI ingestion command/flags/reporting registered alongside existing commands; no existing command registration removed. Errors preserve confirmed/unknown publication flags. |
 | `cmd/memdolt/search.go`: `newSearchCommand`; `code.go`: `newCodeCommand` | File routing precedes `flags.runStore`; decision routing stays unchanged. Help discloses cached bounds, preserving refresh, whole-index removal and unsupported-schema inspection. Code execution/scoring is unchanged apart from reached schema checks. |
 | `internal/mcpserver/tools.go`: `registerTools`, `searchOutputSchema`, `Toolset.search` | Existing search registration gains description/output union and early file routing. The SDK's existing jsonschema-go dependency derives both real branches instead of incorrectly requiring both at once. Inputs, other registrations, Backend/IPC interfaces, authentication and note queues remain. |
@@ -232,16 +245,25 @@ The test-symbol inventory is:
 - `internal/search/search_test.go`: existing
   `TestParseDecisionFallbackPrefixesAndRefusals` replaces the deferred-file
   expectation; new `TestFileHistorySearchParsingPreservesPathsAndDecisionPriority`
-  exercises explicit paths, delimiters and prefix priority.
+  exercises explicit paths, delimiters and prefix priority. The third correction
+  extends parser refusals and adds
+  `TestFileHistorySymbolCandidatesValidateDecisionsAfterSelection` for punctuation
+  and Unicode-symbol candidates, unindexed pre-store/backend refusal, invalid
+  path fallback and cache-error precedence.
 - `cmd/memdolt/git_history_test.go`: new `gitHistoryCLIFixture`,
   `TestGitIngestCLIHumanJSONWithoutDoltOrOwner` and
   `TestFileHistoryCLIAndActualMCPLiveOwnerPreserveMemoryAndQueuedNotes` add real
   CLI/serve evidence. The second correction extends the latter with actual
   direct/owner CLI and MCP unindexed-directory decision equivalence, before and
   after ingestion, plus explicit directory-file refusal; queued-note, owner and
-  native-memory preservation assertions remain. Existing
+  native-memory preservation assertions remain. The third correction lets the
+  fixture accept explicit filenames and extends the same actual CLI/MCP test
+  with `.-`/`.☃` explicit/implicit equivalence and ordinary decision refusal.
+  Existing fixture defaults and other callers remain. Existing
   `TestSearchCLIProvidesStableDecisionJSONAndClearRefusals` preserves decision
-  assertions and replaces the file-refusal expectation with cached emptiness.
+  assertions and replaces the file-refusal expectation with cached emptiness;
+  it now also verifies unindexed symbol/explicit-decision refusals create no
+  repository metadata.
 - `internal/mcpserver/git_history_test.go`: new
   `TestFileHistoryMCPUsesCacheWithoutDoltGitModelsOrSourceBodies` checks both
   transports and missing-root refusal. Existing

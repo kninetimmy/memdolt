@@ -85,14 +85,23 @@ func Parse(raw string, limit int) (Query, error) {
 			break
 		}
 	}
-	if !strings.ContainsFunc(text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
-		return Query{}, errors.New("search query must include at least one searchable token")
-	}
 	query := Query{Text: text, Matcher: matcher, Limit: limit}
 	if matcher == "fts:decision-fallback" && strings.ContainsAny(pathQuery, "/\\.") {
 		query.Path, _ = codeindex.NormalizeHistoryPath(pathQuery)
 	}
+	if query.Path == "" {
+		if err := validateDecisionText(text); err != nil {
+			return Query{}, err
+		}
+	}
 	return query, nil
+}
+
+func validateDecisionText(text string) error {
+	if !strings.ContainsFunc(text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
+		return errors.New("search query must include at least one searchable token")
+	}
+	return nil
 }
 
 // TryFile precedes any memory-store selection. Explicit decision queries skip
@@ -110,6 +119,9 @@ func TryFile(ctx context.Context, root string, query Query) (Response, bool, err
 		return Response{}, true, err
 	}
 	if query.Matcher != "exact:file-history" && !history.Indexed {
+		if err := validateDecisionText(query.Text); err != nil {
+			return Response{}, true, err
+		}
 		return Response{}, false, nil
 	}
 	results := make([]Hit, len(history.Results))
@@ -128,6 +140,9 @@ type Store interface {
 func Run(ctx context.Context, st Store, query Query) (Response, error) {
 	if query.Matcher == "exact:file-history" {
 		return Response{}, errors.New("file-history search must select the code cache before opening memory")
+	}
+	if err := validateDecisionText(query.Text); err != nil {
+		return Response{}, err
 	}
 	hits, err := st.SearchDecisions(ctx, query.Text, query.Limit)
 	if err != nil {
