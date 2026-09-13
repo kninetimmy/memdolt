@@ -298,8 +298,14 @@ func TestIndexStatusRebuildRemovalAndForeignFilePreservation(t *testing.T) {
 	if _, err := Locate(ctx, root, nil, Options{Query: "A", NoRefresh: true}); err == nil {
 		t.Fatal("no-refresh rebuilt an incompatible schema")
 	}
-	if s, err := Refresh(ctx, root, nil); err != nil || s.NewFiles != 1 {
-		t.Fatalf("rebuild=%+v %v", s, err)
+	if _, err := Refresh(ctx, root, nil); err == nil {
+		t.Fatal("unsupported schema was replaced")
+	}
+	// Restore this test's deliberately corrupted version marker. Only a known
+	// schema may be removed; an unsupported cache is retained for inspection.
+	execIndex(t, root, "UPDATE index_meta SET value='2' WHERE key='schema_version'")
+	if s, err := Refresh(ctx, root, nil); err != nil || s.UnchangedFiles != 1 {
+		t.Fatalf("preserved index=%+v %v", s, err)
 	}
 	if result, err := Remove(ctx, root); err != nil || !result.Removed {
 		t.Fatalf("remove=%+v %v", result, err)

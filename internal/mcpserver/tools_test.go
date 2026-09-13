@@ -121,7 +121,7 @@ func TestM3ToolsSchemasSuccessAndRefusals(t *testing.T) {
 	acceptProposal(t, st, stagedDecision.ID)
 	callOK(t, client, "list_decisions", map[string]any{"status": "active"})
 	callOK(t, client, "search", map[string]any{"query": "Dolt-backed", "limit": 5})
-	callError(t, client, "search", map[string]any{"query": "file:README.md"}, "M5")
+	callOK(t, client, "search", map[string]any{"query": "file:README.md"})
 
 	stagedSupersede := callAs[stagedProposalOutput](t, client, "propose_supersede", map[string]any{
 		"superseded_id": stagedFact.RowID, "key": "build.command", "value": "go test -race ./... is the race lane",

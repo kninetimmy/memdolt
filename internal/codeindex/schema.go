@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 const applicationID = 0x4d444349 // MDCI; an unrelated SQLite file is never disposable.
 
 const schemaDDL = `CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -46,6 +46,15 @@ CREATE TRIGGER code_chunks_fts_au AFTER UPDATE ON code_chunks BEGIN
  INSERT INTO code_chunks_fts(code_chunks_fts, rowid, symbol, embed_text) VALUES ('delete', old.id, old.symbol, old.embed_text);
  INSERT INTO code_chunks_fts(rowid, symbol, embed_text) VALUES (new.id, new.symbol, new.embed_text);
 END;`
+
+// History paths have their own lifetime: refreshing tracked source may delete
+// indexed_files and its chunks/vectors, but must retain deleted-file history.
+var historyDDL = []string{
+	`CREATE TABLE git_commits (sha TEXT PRIMARY KEY, author TEXT NOT NULL, authored_at TEXT NOT NULL, authored_unix INTEGER NOT NULL, subject TEXT NOT NULL)`,
+	`CREATE TABLE git_files (path TEXT PRIMARY KEY)`,
+	`CREATE TABLE git_commit_files (path TEXT NOT NULL REFERENCES git_files(path), commit_sha TEXT NOT NULL REFERENCES git_commits(sha), change_type TEXT NOT NULL, PRIMARY KEY(path, commit_sha))`,
+	`CREATE TABLE git_ingestions (head TEXT NOT NULL, since_commit TEXT NOT NULL, shallow INTEGER NOT NULL, observed_at TEXT NOT NULL, PRIMARY KEY(head, since_commit))`,
+}
 
 func (r *repository) indexPath() string { return filepath.Join(r.base, layout.DirName, indexName) }
 
@@ -200,30 +209,71 @@ func storedVersion(ctx context.Context, db *sql.DB) (*int, error) {
 
 // Do not delete a file which has acquired unrelated tables or triggers.
 func checkOwnedSchema(ctx context.Context, db *sql.DB) (err error) {
-	rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+	v, err := storedVersion(ctx, db)
+	if err != nil {
+		return err
+	}
+	if v == nil || *v != 1 && *v != schemaVersion {
+		return errors.New("unsupported code-index schema; retained for inspection with a compatible memdolt version")
+	}
+	expected := map[string]string{}
+	for _, ddl := range strings.Split(schemaDDL, "\nCREATE ") {
+		if !strings.HasPrefix(ddl, "CREATE ") {
+			ddl = "CREATE " + ddl
+		}
+		fields := strings.Fields(ddl)
+		name := fields[2]
+		if fields[1] == "VIRTUAL" {
+			name = fields[3]
+		}
+		expected[name] = strings.TrimSuffix(ddl, ";")
+	}
+	baseObjects := len(expected)
+	for _, ddl := range historyDDL {
+		expected[strings.Fields(ddl)[2]] = ddl
+	}
+	// GLOB keeps '_' literal; LIKE would also hide foreign sqlitex_* objects.
+	rows, err := db.QueryContext(ctx, "SELECT name,type,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'")
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, rows.Close()) }()
+	ownedObjects, shadows := 0, 0
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var name, kind, ddl string
+		if err := rows.Scan(&name, &kind, &ddl); err != nil {
 			return err
 		}
-		switch name {
-		case "index_meta", "indexed_files", "code_chunks", "code_embeddings", "idx_code_chunks_file", "code_chunks_fts",
-			"code_chunks_fts_data", "code_chunks_fts_idx", "code_chunks_fts_docsize", "code_chunks_fts_config",
-			"code_chunks_fts_ai", "code_chunks_fts_ad", "code_chunks_fts_au":
-		default:
+		if name == "code_chunks_fts_data" || name == "code_chunks_fts_idx" || name == "code_chunks_fts_docsize" || name == "code_chunks_fts_config" {
+			if kind != "table" {
+				return errors.New("code index contains an unrelated FTS object; retained for inspection")
+			}
+			shadows++
+			continue
+		}
+		want, ok := expected[name]
+		if !ok || *v == 1 && strings.HasPrefix(name, "git_") || strings.Join(strings.Fields(ddl), " ") != strings.Join(strings.Fields(want), " ") {
 			return errors.New("code index contains unrelated schema objects; retained for inspection")
+		}
+		ownedObjects++
+	}
+	if v != nil {
+		want := baseObjects
+		if *v == schemaVersion {
+			want += len(historyDDL)
+		}
+		if ownedObjects != want || shadows != 4 {
+			return errors.New("code index has incomplete owned schema; retained for inspection")
 		}
 	}
 	return rows.Err()
 }
 
 func bootstrap(ctx context.Context, db *sql.DB, created bool) (err error) {
-	if err := checkOwnedSchema(ctx, db); err != nil {
-		return err
+	if !created {
+		if err := checkOwnedSchema(ctx, db); err != nil {
+			return err
+		}
 	}
 	v, err := storedVersion(ctx, db)
 	if err != nil {
@@ -232,25 +282,28 @@ func bootstrap(ctx context.Context, db *sql.DB, created bool) (err error) {
 	if v != nil && *v == schemaVersion {
 		return nil
 	}
+	if !created && (v == nil || *v != 1) {
+		return errors.New("unsupported code-index schema; retained for inspection with a compatible memdolt version")
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer rollback(tx, &err)
-	if !created {
-		if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS code_chunks_fts;
-DROP TABLE IF EXISTS code_embeddings; DROP TABLE IF EXISTS code_chunks;
-DROP TABLE IF EXISTS indexed_files; DROP TABLE IF EXISTS index_meta;`); err != nil {
+	if created {
+		if _, err := tx.ExecContext(ctx, schemaDDL); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, schemaDDL); err != nil {
-		return err
+	for _, ddl := range historyDDL {
+		if _, err := tx.ExecContext(ctx, ddl); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA application_id=%d", applicationID)); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO index_meta(key,value) VALUES ('schema_version',?)", strconv.Itoa(schemaVersion)); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO index_meta(key,value) VALUES ('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", strconv.Itoa(schemaVersion)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -281,8 +334,8 @@ func setMeta(ctx context.Context, tx *sql.Tx, key string, value *string) error {
 }
 
 func needsRebuild(version *int) error {
-	if version == nil || *version != schemaVersion {
-		return errors.New("code index schema is incompatible; run `memdolt code index` to rebuild")
+	if version == nil || *version != 1 && *version != schemaVersion {
+		return errors.New("unsupported code-index schema; retained for inspection with a compatible memdolt version")
 	}
 	return nil
 }

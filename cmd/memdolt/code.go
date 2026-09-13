@@ -14,6 +14,7 @@ func newCodeCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "code", Short: "Manage the local tracked-source index, separate from memory embeddings",
 		Long: "Code indexing uses only .memdolt/code_index.sqlite and git-tracked source.\n" +
 			"It never opens Dolt or routes to its owner, and never changes recall, exports or sync.\n" +
+			"Refresh preserves explicitly ingested Git history; code rm removes the whole cache, including history.\n" +
 			"Grammars: Rust, C#, Java, TypeScript/TSX, JavaScript, Python and Go.\n" +
 			"Secret paths, owner-credential aliases, linked and denied sources are excluded."}
 	cmd.PersistentFlags().StringVar(&dir, "dir", ".", "repository directory")
@@ -47,14 +48,14 @@ func newCodeCommand() *cobra.Command {
 			lines := []string{fmt.Sprintf("code index at %s: exists=%t, mode=%s, %d files, %d chunks, %d vectors (%d missing/invalid)",
 				report.Path, report.Exists, report.Mode, report.FilesTotal, report.ChunksTotal, report.EmbeddingsTotal, report.InvalidEmbeddings)}
 			if report.NeedsRebuild {
-				lines = append(lines, "incompatible schema; run `memdolt code index`")
+				lines = append(lines, "unsupported schema; retained for inspection with a compatible memdolt version")
 			}
 			if report.HeadStale {
 				lines = append(lines, "indexed HEAD differs; HEAD is reporting metadata, not file freshness")
 			}
 			return emit(cmd, report, lines)
 		}})
-	cmd.AddCommand(&cobra.Command{Use: "rm", Short: "Remove only the recognized disposable code index", Args: cobra.NoArgs,
+	cmd.AddCommand(&cobra.Command{Use: "rm", Short: "Remove the recognized code index, including cached Git history", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			result, err := codeindex.Remove(cmd.Context(), dir)
 			if err != nil && !result.Removed {

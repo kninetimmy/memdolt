@@ -6,6 +6,12 @@ It works in a Git repository without initializing memdolt memory or contacting
 the Dolt owner. `memdolt index status/rebuild` still manages memory embeddings
 in the separate `.memdolt/embeddings.sqlite`.
 
+Before #174 this store contained only source chunks/vectors and `search file:`
+refused. After it, explicit `ingest-git` adds cached committed metadata and
+CLI/MCP search reads exact cached file history. Locator refresh keeps its
+source/scoring contract and preserves that history even after a path is deleted.
+See [Git-history commands, limits and complete scope](git-history.md).
+
 ```sh
 memdolt code status --dir <repository> --json
 memdolt code index --dir <repository> --json
@@ -147,9 +153,12 @@ checks guard managed paths; SQLite still opens a checked filesystem pathname.
 The operation lock coordinates memdolt, not foreign filesystem/SQLite writers;
 identity checks do not provide a filesystem compare-and-swap against changes in
 the final check/open or check/remove interval. A recognized application ID is
-required before opening an existing index for writes. Rebuild resets only known
-derived schema; removal refuses linked files, hard-link aliases, unknown
-occupants or unrelated schema. It never recursively deletes a directory.
+required before opening an existing index for writes. Before #174 rebuild reset
+known derived schema; afterward v1 upgrades to v2 in place, and unsupported
+versions or foreign definitions refuse without replacement. Source reads still
+accept v1 without migration. Removal refuses linked files, hard-link aliases,
+unknown occupants or unrelated schema; recognized removal deletes the whole
+cache, including Git history. It never recursively deletes a directory.
 
 The shared BGE/ms-marco pipeline still verifies every model/native artifact
 before initialization, retains NFD compensation and releases native sessions.
@@ -170,3 +179,7 @@ Protected Ubuntu CI runs the exact locator command alongside the unchanged
 memory-retrieval/scale gate, reusing only verified cached models. This subset
 does not implement Git-ingested history/`search file:`, global memory, public
 memory commands, remaining M5 parity, or a full-M5 acceptance claim.
+Before #174 the Git-history exclusion above remained current. After it, the
+explicit ingestion/cache-only search in the linked guide ships; that earlier
+sentence retains #138's before-state. No locator corpus, threshold, model or
+scoring changes accompany the new history cache.
