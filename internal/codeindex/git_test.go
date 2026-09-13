@@ -395,14 +395,15 @@ func TestFileHistoryIndexedSelectionPreservesFallbackAndGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, version := range []int{0, 2, 1} {
-		if version == 2 {
+		switch version {
+		case 2:
 			if _, err := Refresh(ctx, root, fakeInference{}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := IngestGit(ctx, root, nil); err != nil {
 				t.Fatal(err)
 			}
-		} else if version == 1 {
+		case 1:
 			execIndex(t, root, "DROP TABLE git_commit_files; DROP TABLE git_files; DROP TABLE git_commits; DROP TABLE git_ingestions; UPDATE index_meta SET value='1' WHERE key='schema_version'")
 		}
 		for _, path := range []string{"internal/codeindex", ".env"} {
