@@ -358,7 +358,7 @@ hub acceptance or complete memhub parity.
 | Area | Delivered | Remaining boundary |
 | --- | --- | --- |
 | Foundations and M0–M3 | Local Dolt, ownership/IPC, reviewed writes, retrieval gates, 23 MCP tools, host templates | M0's recorded GO has scoped limits. Live Claude acceptance was explicitly waived; deterministic compatibility and a real OpenCode provenance write supplied the replacement M3 evidence. Before #173 discovery had 22 tools; native `history` adds one. |
-| M4: cross-machine memory | Clone, remotes, status/diff, push/pull, compatible merges, human conflict choices, Linux hub artifacts, isolated native ingress tests, repository identity and local/clone topology, explicit doctor compatibility diagnostics | Before #163 topology/project identity remained pending; they now ship. Physical two-client/private-network acceptance remains. Remote native release requires inspection on the hub. Live SQL-to-hub storage is unsupported. |
+| M4: cross-machine memory | Clone, remotes, status/diff, push/pull, compatible merges, human conflict choices, Linux hub artifacts, isolated native ingress tests, repository identity and local/clone topology, explicit doctor compatibility diagnostics; exact 1.88.1 physical fixture gate passed | Before #163 topology/project identity remained pending; they now ship. Before #177 this said "Physical two-client/private-network acceptance remains." The fixture pass and remaining boundaries are recorded below. Remote native release requires inspection on the hub. Live SQL-to-hub storage is unsupported. |
 | M5: memory workflows | Documents, code locator and golden gates, rendering, human fact/decision commands, global replicas with combined recall, terminal global proposal acceptance, JSON import/export, native memory history, cached Git file history | Before #161 global-target proposal acceptance refused; it now ships through terminal human review. Before #173 top-level history remained deferred; repository fact/decision/state/arch history now ships. Before #174 Git/file-history ingestion remained deferred; explicit local ingestion and cached file search now ship. Audit-md, top-level status/stats, remaining wrap-up policy, and the full parity audit remain. |
 | M6: operations | Scoped local, selected hub and remote health checks; deployment runbook | Backups and restore drill, backup-age/disk-trend checks, retention/GC, upgrades, gated token accounting, and local transcript archives remain planned. |
 
@@ -366,6 +366,15 @@ Before #167, this status listed client version-skew acceptance and `doctor --hub
 as pending. Doctor now checks the embedded release and explicitly selected hub
 or remote evidence against the exact measured **1.88.1** baseline. This delivers
 diagnostics, not physical two-client acceptance or the planned backup/disk checks.
+
+After #177, the [2026-09-19 Mac/Windows/Pi fixture](docs/spikes/m4-acceptance.md)
+passes the exact embedded **1.88.1-to-native-1.88.1**, schema-4 physical
+round-trip/counts/hashes/offline-reopen gate. Task 42/full M4 remain open:
+production managed deployment and native grant acceptance, real-host MCP
+conflict dialogs, physical external-host ingress and broader version compatibility
+are unverified. Optional live SQL remains optional; M5/M6 gates are unchanged.
+This evidence update changes no runtime or generated deployment artifact bytes.
+Required CI checks remain unchanged; hub-ingress is advisory.
 
 The maintainer still uses memhub; migration is optional and has not been
 performed. Read the [milestones and product authority](docs/prd/memdolt-prd.md),
@@ -577,9 +586,14 @@ independent remotesapi listener. Binding SQL alone is insufficient.
 
 Follow the [hub deployment runbook](docs/hub-deployment.md) for verified
 native binaries, generation flags, credentials, permissions, startup, and
-`hub status --config <hub.json>`. Isolated Linux enforcement tests have
-shipped; a real two-client deployment and physical off-network acceptance
-remain to be completed.
+`hub status --config <hub.json>`. Before #177, this section said "a real
+two-client deployment and physical off-network acceptance remain to be
+completed." The separate native Pi fixture now passes the exact-version
+two-client gate; production managed deployment and physical external-host
+ingress acceptance remain open. See the runbook's corrected
+[stopped native-seed procedure](docs/hub-deployment.md#seed-an-existing-memdolt-history):
+an independently initialized empty database has unrelated history and refused
+the fixture's initial push. Existing runtime and generated bundles are unchanged.
 
 Ordinary `memdolt doctor --dir <repository>` stays offline and reports the
 embedded Dolt release from the pinned dependency. Explicit
