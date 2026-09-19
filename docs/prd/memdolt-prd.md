@@ -3648,6 +3648,25 @@ hub acceptance gate remain separate.
 | **M5 — Parity long tail** | docs ingestion, code index + locate + eval, render, global store, import-from-memhub including session-note provenance, audit md, ingest-git. | Parity matrix (§12) fully dispositioned; locate golden gate green. |
 | **M6 — Ops polish** | backups + doctor --hub, gc/retention, upgrade machinery with safe wrapper resync, token accounting (gated), validated unredacted OpenCode transcripts, README/status discipline. | Quarterly-drill-style restore test documented and executed once. |
 
+**M4 physical fixture evidence (2026-09-19, issue #177).** Before this record,
+the #147/#163/#167 subsets below left the physical gate pending. After the
+Mac/Windows/Pi test of `937db3caead136abd7c70901184caa17906dcf39`, the exact
+embedded 1.88.1-to-native-1.88.1 schema-4 fixture passed the §16
+round-trip/counts/hashes/plain-reopen gate. The [M4 acceptance report](../spikes/m4-acceptance.md)
+records the original receipts, final two-parent main, complete row comparison,
+fresh deterministic checks and a disposition for every M4 scope item and §6.3
+conflict class. The [hub runbook](../hub-deployment.md#seed-an-existing-memdolt-history)
+preserves and corrects its prior seed guidance after the no-common-ancestor
+refusal: authentication bootstrap and independent native genesis do not seed an
+existing history; the fixture used a stopped native copy before client clones.
+Task 42/full M4 stay open. Production managed deployment and native grant
+acceptance, real-host MCP conflict dialogs, physical external-host ingress and
+broader version compatibility remain unverified. Optional live SQL stays
+optional; the gate wording, §6.3 policy and M5/M6 gates are unchanged. This is
+documentation/evidence only: no runtime, schema, dependency, generated artifact,
+CI or installed-service change. Required CI checks remain required and
+hub-ingress advisory; the report inventories every changed document/element.
+
 **M4 diagnostic subset (issue #167):** before this slice doctor lacked embedded
 release, selected hub and selected remote diagnostics. After it, §13.1's explicit
 checks and isolated CLI/native Linux rig cover that subset. The exact baseline

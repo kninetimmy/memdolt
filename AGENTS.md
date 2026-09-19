@@ -19,6 +19,20 @@ relevant sections directly — prefer it over re-reading the whole document.
 
 ## Build / test / run
 
+**M4 physical fixture evidence (issue #177).** Before this record, the
+#147/#163/#167 subsets below left physical two-client acceptance pending.
+After the 2026-09-19 Mac/Windows/Pi fixture, the exact embedded 1.88.1-to-native
+1.88.1 schema-4 round-trip/counts/hashes/plain-reopen gate passed. The
+[acceptance report](docs/spikes/m4-acceptance.md) links selected original receipts,
+fresh deterministic checks, every M4 scope/conflict disposition and the complete
+documentation-only changed-element inventory. The [hub runbook](docs/hub-deployment.md#seed-an-existing-memdolt-history)
+retains and corrects the unrelated-genesis seed guidance after the observed
+no-common-ancestor refusal. Task 42/full M4 remain open: production managed
+deployment and native grant acceptance, real-host MCP conflict dialogs, physical
+external-host ingress and broader version compatibility are unverified. Optional
+live SQL remains optional; M5/M6 gates, all runtime mechanisms, generated artifact
+bytes and required CI checks remain unchanged; hub-ingress is advisory.
+
 **Cached Git file history (issue #174).** Before this slice `search file:`
 refused and the derived index held source/vector rows only. After it,
 `ingest-git [--since <commit-ish>] --dir <repository> [--json]` explicitly

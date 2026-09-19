@@ -140,11 +140,66 @@ Keep client statement logging and shell tracing disabled for credential entry.
 Verify users and grants using `SHOW GRANTS`, then stop the bootstrap server and
 make `.doltcfg/privileges.db` private (0600), owned by the dedicated account.
 
-The example SQL database `memory` is an ordinary native Dolt database. Creating
-it does not invent a memdolt schema/history: seed an initialized memory database
-through the existing approved clone/push workflow when needed. Existing databases
-can be used directly, with their ordinary schema, commits and refs. Hub deployment
+Before issue #177, this paragraph said: "The example SQL database `memory` is an
+ordinary native Dolt database. Creating it does not invent a memdolt
+schema/history: seed an initialized memory database through the existing approved
+clone/push workflow when needed." That guidance conflated authentication
+bootstrap, independent database creation and seeding existing history. The
+2026-09-19 fixture's first push into an independently created empty database
+refused with `no common ancestor`; its error required inspecting the remote
+because completion was unconfirmed. Inspection found the original main unchanged.
+An empty native database already has history: it is not a fast-forward target
+for an unrelated memdolt seed.
+
+After #177, bootstrap accounts/privileges independently of the database history.
+The generated `CREATE DATABASE memory` example creates an independent native
+database; it does not seed an existing memdolt history. Use the procedure below
+for that history. Existing related histories retain ordinary clone/push/pull
+behavior; unrelated histories must not be forced together. Hub deployment still
 does no inference, model download, schema migration or format conversion.
+
+### Seed an existing memdolt history
+
+The [physical fixture receipts](spikes/m4-acceptance.md#1-physical-evidence-and-provenance)
+record the successful stopped-source/stopped-destination native copy before
+either client cloned. This is an operator procedure, not a new `hub init` action
+or acceptance of production managed deployment:
+
+1. Inspect the source repository's canonical native database directory
+   (`.memdolt/dolt/memory`), committed project identity, schema, main hash, refs
+   and clean working/staged state. Record the expected identity/schema/head.
+   Inspect the intended destination and any existing database, privileges,
+   service ownership and data/config paths. Confirm exact native 1.88.1 for this
+   measured procedure; no broader version compatibility is implied.
+2. Stop every source memdolt/MCP/native owner and confirm it has closed the
+   database. Stop the destination native server and confirm it is stopped too.
+   Keep both stopped throughout the copy; never copy an active database.
+3. Select a **new, absent database destination** under the inspected hub data
+   directory, with canonical paths and no links/escapes. Preserve existing data.
+   The fixture preserved its independent empty database separately while stopped
+   before placing the seed at the now-absent destination. An existing deployment
+   requires its own inspected, explicitly approved preservation plan; do not
+   overwrite or delete an existing database to make this procedure fit.
+4. Copy only the complete closed native database directory, including its `.dolt`
+   history. Do not copy the enclosing client `.memdolt` directory, `server.pid`
+   owner credentials, derived/vector/code caches, client config or client native
+   privilege/global configuration. Keep the hub's `.doltcfg/privileges.db` and
+   SQL identities separate. Set the copied data's ownership to the dedicated
+   hub account and retain private directory permissions. Retain the source.
+5. Start the destination only with its reviewed authentication and private
+   ingress boundary in place. Through trusted native SQL, verify committed
+   `meta.schema_version`, `meta.project_id`, `meta.project_origin`,
+   `DOLT_HASHOF('main')`, expected refs/rows and empty `dolt_status` against the
+   source record. Stop and inspect any mismatch; do not initialize, migrate or
+   convert the copy to conceal it. Use fresh client repository directories for
+   `memdolt clone`, verify identity/schema/head again with local status, then use
+   ordinary push/pull for subsequent related history.
+
+The fixture's native database name `m4_acceptance` and its reported derived
+`hubDatabase` identity label were distinct; existing remote URLs select the
+actual database. Do not infer that copying or cloning renames a native database.
+This procedure does not recommend force push, active copying or credential
+copying, and does not change any transfer or filesystem guard.
 
 Native authentication is SQL users/grants, independent of the Linux service user:
 
@@ -268,10 +323,22 @@ protection, native startup/status, wrong version and bounded missing-address
 failure. It does not install/enable units under the runner's PID 1 or change its
 host firewall/accounts/services. Ordinary and golden gates remain unchanged.
 
-This is isolated deployment evidence. The physical Pi/Linux hub, two real clients,
-tailnet/off-network probes, project topology/identity, backup/retention and the
-complete M4 acceptance gate remain separately tracked. The user's live hub has
-not been installed, changed or accepted by this delivery.
+At #147 this was isolated deployment evidence: the physical Pi/Linux hub, two
+real clients, tailnet/off-network probes, project topology/identity,
+backup/retention and the complete M4 acceptance gate remained separately tracked.
+That delivery did not install, change or accept the user's live hub.
+
+After #177, the [2026-09-19 physical fixture](spikes/m4-acceptance.md) passes the
+exact embedded **1.88.1-to-native-1.88.1**, schema-4 two-client
+round-trip/counts/hashes/plain-reopen gate. The separate Pi fixture preserved the
+production service/data/accounts; its namespace/veth denial probes do not prove
+physical external-host ingress denial. Task 42/full M4 remain open: production
+managed deployment and native grant acceptance, real-host MCP conflict dialogs,
+physical external-host ingress and broader version compatibility are unverified.
+Optional live SQL stays optional; M5/M6 gates are unchanged. The report inventories
+every #177 document/element and the fresh checks. Required CI checks remain
+unchanged; the hub-ingress job is advisory. All generated bundle bytes, including
+`SETUP.md`, are preserved; its existing runbook link reaches this correction.
 
 ## Doctor compatibility (issue #167)
 
@@ -356,9 +423,11 @@ formats against checksum-verified native 1.88.1, then an explicitly identified
 test executable reporting 1.88.2. It requires observed release/check failures,
 not just a nonzero process exit. The native startup, namespace-only firewall,
 read-only mounts, no external network and all previous assertions remain.
-This adds no physical two-client/private-network acceptance. Pi/Linux and two
-real clients must still perform the PRD §16 counts/hashes/reopen gate. M6's
-backup age, disk headroom/trend and restore drill remain separate.
+At #167 this added no physical two-client/private-network acceptance; Pi/Linux
+and two real clients still had to perform the PRD §16 counts/hashes/reopen gate.
+The #177 fixture above now supplies that exact-version evidence independently
+of doctor. Doctor's remote-release observation limits still hold. M6's backup
+age, disk headroom/trend and restore drill remain separate.
 
 The complete #167 changed-element inventory is:
 
